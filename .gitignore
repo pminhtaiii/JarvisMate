@@ -9,4 +9,5 @@ context/.active-task-*.tmp
 dist/
 docs/verification/
 fixtures/
+/sample/
 .tmp-ci-checks/

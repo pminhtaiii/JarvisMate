@@ -14,6 +14,14 @@ Read [benchmark rules](benchmark.md) for the score and submission contract. A lo
 
 For each evaluation, record the code revision, dataset split and sample selection, model/component versions, seed and decoding settings, exact command, exit status, elapsed time, and scoring result. Record state-hash matches, tool-call F1, empty-gold accuracy, schema-rejected calls, and timeout count when the evaluator supplies them. Keep traces bounded and free of user secrets or hidden environment files.
 
+Per-sample traces are required under [ADR 009](../docs/adr/009-require-execution-traces-from-first-baseline.md). Record whether the request came from a supplied training transcript or ASR, the request text used, available tool names, ordered planner action outputs, validation outcomes, actual tool calls and observed results, timing, stopping reason, errors, and the authoritative call log and final state hash when available. Compare the executed path as well as the final state, using training references for evaluation only, never as planner input.
+
+Store these explicitly enabled dataset-debug traces under ignored `.agent-work/lifemate-runs/`, separate from submission rows and routine logs. Bound and sanitize trace payloads, mark truncation or redaction explicitly, and preserve exact authoritative call arguments in the submission result. Do not read hidden environment files to enrich a trace. A successful final state alone must not hide extra, invalid, or incorrect calls.
+
+Baseline-validation runs explicitly enable the detailed dataset-debug payloads above. Metadata-only operational traces must mark omitted payloads and do not satisfy the baseline's detailed evidence requirement.
+
+The initial development batch stops on its first execution failure, preserves completed results and the failure trace, and exits nonzero under [ADR 010](../docs/adr/010-stop-development-batch-on-execution-failure.md). Distinguish failures from valid empty call lists, and never present an incomplete run as submission-ready. An observable error response from a tool is evidence for the planner; it is not automatically a worker crash or batch failure.
+
 A correct transcript alone does not prove a correct tool plan. A valid call list alone does not prove the requested app state. A submitted hash alone does not prove reproducibility; verify replay with the same split-matched environment. Before submission, check the offline Docker run, total model-size and context limits, the 30-second per-sample budget, deterministic reruns, and one JSONL row per sample.
 
 For implementation changes, run the narrowest meaningful behavioral tests first and the applicable integrated check before claiming completion. Reviewers compare the changed behavior with the task's issue/PR and [code standards](code_standard.md), and report only checks actually run.

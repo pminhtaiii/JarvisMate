@@ -7,7 +7,7 @@ This page records accepted technology directions and open choices. No listed mod
 - Use Python for model inference.
 - Compare multilingual Whisper-small with VinAI PhoWhisper-small for offline ASR. Replace the original Wispr Flow proposal because its internet-dependent transcription does not fit final offline inference. The winning ASR model and inference runtime remain open.
 - Use Qwen3-4B-Instruct-2507 as the first planner experiment, with context capped at 16,384 tokens. This is a candidate, not a measured winner or final commitment.
-- Use plan-then-execute with selective replanning as the baseline planning architecture; model decisions occur at unresolved dependencies or when observations invalidate remaining work. See [architecture](architecture.md) and [ADR 006](../docs/adr/006-plan-execute-with-selective-replanning.md). Performance remains unmeasured.
+- Use structured ReAct for the first runnable baseline, with deterministic validation and execution between planner decisions. Prioritize runnable output before latency optimization; performance remains unmeasured and the competition deadline still applies. See [architecture](architecture.md) and [ADR 007](../docs/adr/007-react-first-runnable-baseline.md), which supersedes ADR 006.
 - First build and measure an end-to-end baseline with pretrained models; defer fine-tuning until baseline failures have been analyzed. Later tuning may use supplied training data, preserving an untouched validation subset and comparing with the same model before training. The target component, tuning method, and split design remain open. Compare planning on supplied training transcripts with planning on ASR transcripts to distinguish speech and planning errors. See [ADR 005](../docs/adr/005-measure-baseline-before-fine-tuning.md).
 - Use a teammate's RTX 5070 machine as a shared private development inference server, with separate training windows. GPU variant, VRAM, availability, and access setup remain unverified. The final pipeline must still execute inside the offline submission container.
 
@@ -21,7 +21,7 @@ Delegate one complete sample to Python. Python owns ASR, the planning loop, tool
 
 A thin development HTTP service accepts teammates' requests and queues them into the harness. This external access layer is separate from the internal process protocol and is not required by the final offline runner.
 
-Process one sample at a time per GPU worker initially; queue development requests. Record worker crashes and sample timeouts as failures, distinct from valid empty tool-call results, and do not automatically rerun the failed sample. Restarting a worker for subsequent samples is permitted. Report execution time separately from development queue wait; verify organizer timing requirements before submission. See [ADR 003](../docs/adr/003-sequential-execution-without-automatic-sample-retries.md).
+Process one sample at a time per GPU worker initially; queue development requests. Record worker crashes and sample timeouts as failures, distinct from valid empty tool-call results, and do not automatically rerun the failed sample. The initial development batch stops at its first execution failure, preserving traces and completed results and exiting nonzero; restarting a worker does not automatically resume that batch. Report execution time separately from development queue wait; verify organizer timing requirements before submission. See [ADR 003](../docs/adr/003-sequential-execution-without-automatic-sample-retries.md) and [ADR 010](../docs/adr/010-stop-development-batch-on-execution-failure.md).
 
 ## Remaining failure details
 
@@ -40,3 +40,7 @@ Late-response handling, recovery of completed results, and final submission hand
 - [ADR 004: Shared development GPU and training windows](../docs/adr/004-share-development-gpu-with-separate-training-windows.md)
 - [ADR 005: Measure a baseline before fine-tuning](../docs/adr/005-measure-baseline-before-fine-tuning.md)
 - [ADR 006: Plan, execute, and selectively replan](../docs/adr/006-plan-execute-with-selective-replanning.md)
+- [ADR 007: Structured ReAct for the first runnable baseline](../docs/adr/007-react-first-runnable-baseline.md) (supersedes ADR 006)
+- [ADR 008: One general planner for the MVP](../docs/adr/008-single-general-planner-for-mvp.md)
+- [ADR 009: Execution traces from the first baseline](../docs/adr/009-require-execution-traces-from-first-baseline.md)
+- [ADR 010: Stop the development batch on execution failure](../docs/adr/010-stop-development-batch-on-execution-failure.md)

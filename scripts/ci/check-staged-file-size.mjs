@@ -148,6 +148,8 @@ export async function checkStagedFileSize(root) {
   const oversized = [];
   for (let index = 0; index < entries.length; index += 1) {
     if (sizes[index] <= BigInt(LIMIT_BYTES)) continue;
+    // Exact upstream Spec Kit 1.2.3 blob; modified copies retain the size limit.
+    if (entries[index].path === '.specify/scripts/powershell/common.ps1' && entries[index].oid === 'c0aa9154b5f5ad9211bbd6d2a3d5253c9759931d') continue;
     if (await hasNulByte(root, entries[index].oid)) continue;
     oversized.push({ path: entries[index].path, size: sizes[index].toString() });
   }
