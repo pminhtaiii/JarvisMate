@@ -2,7 +2,11 @@
 
 **Input**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md),
 [data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md).
-**Status**: All implementation tasks are open. Planning checks do not complete them.
+**Status**: Baseline source/tests are authored; all 27 acceptance tasks remain open
+until their stated checks run. The user explicitly deferred execution to the receiving
+teammate. See [validation.md](validation.md) for per-task authored coverage and
+[python/README.md](../../python/README.md) for handoff commands. Code presence and a
+branch push do not establish passing tests, actual model runs or feature completion.
 
 Tests are explicitly required by FR-017. Use focused behavioral cases rather than
 tests mirroring implementation. `[P]` means disjoint file work after listed prerequisites;
@@ -115,6 +119,12 @@ unchanged execution contracts; real ASR/planner runs are a separate externally g
    separately; do not mark the real baseline complete or fabricate validation output.
 5. TypeScript/HTTP/UI, final Docker/full-split compliance, specialist agents,
    fine-tuning, custom scorer aggregation, and latency optimization are later work.
+
+The [project roadmap](../../context/roadmap.md) sequences follow-on Train Validation,
+error analysis, and conditional [Train-to-SFT planning](../../docs/design/train-to-sft.md).
+The 27 tasks here remain the baseline implementation ledger; no training task or
+completion claim is added by that documentation. Real execution acceptance stays
+open until a teammate with the required resources records its evidence.
 
 ## Requirement Coverage
 

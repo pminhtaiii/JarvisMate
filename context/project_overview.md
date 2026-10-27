@@ -14,6 +14,21 @@ The immediate engineering goal is to make one end-to-end path runnable and obser
 
 The first deliverable is a small runnable pipeline that produces the competition-required prediction artifact, with an initial submission targeted for 27 October 2026. A small integrated run is the first checkpoint; a submission file must cover every sample in the target split. This is a target, not evidence of a completed run or submission. Dataset access and working inference remain prerequisites.
 
+## Development sequence
+
+The [Python baseline source and tests](../python/README.md) are authored for handoff,
+with execution explicitly deferred to the receiving teammate. No measured baseline
+or submission is established; see the [validation record](../specs/001-python-sample-pipeline/validation.md).
+
+Follow **Baseline -> Evaluation on Train Validation -> Error Analysis -> Fine-tuning
+if needed** in the [roadmap](roadmap.md). Establish the pretrained transcript/audio
+baseline first, freeze a grouped fit/validation partition of Train, and attribute
+errors before deciding whether training is justified. The
+[planner SFT design](../docs/design/train-to-sft.md) specifies how Train gold
+call/result prefixes can supervise the next action without leaking future results.
+It is documentation for conditional later work; no training is implemented or scheduled
+by this update. Real-model validation is handed off to a teammate with suitable compute.
+
 ## Team and open decisions
 
 Prioritize the competition pipeline and offline submission before a phone or browser voice interface. Benchmark-provided audio is the initial input. Model experiments, fine-tuning direction, development compute, and the accepted hybrid boundary are recorded in the [technology stack](tech_stack.md).

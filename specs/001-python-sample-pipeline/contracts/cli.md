@@ -1,6 +1,7 @@
 # Python CLI contract
 
-These commands are planned; no Python implementation exists yet.
+These commands have authored implementations in `python/src/lifemate/cli.py`.
+They have not been installed or executed here; follow the [handoff](../validation.md).
 
 ## Entry point
 

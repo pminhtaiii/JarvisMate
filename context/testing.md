@@ -2,6 +2,15 @@
 
 Read [benchmark rules](benchmark.md) for the score and submission contract. A local passing test establishes only the cases it exercised; distinguish harness checks, sample scores, and organizer results.
 
+## Baseline handoff status
+
+The [Python README](../python/README.md) documents the authored implementation and
+`unittest` commands for controlled tests and the separately enabled supplied-runtime
+smoke. At the user's request these tests, model loading and inference have **not**
+been executed on the authoring machine. Follow the
+[validation handoff](../specs/001-python-sample-pipeline/validation.md) and record actual
+outcomes before checking off baseline tasks or claiming tested behavior.
+
 ## Development loop
 
 1. Choose a small, real request path through audio, planning, and tool execution. Record the sample IDs and the behavior being tested before changing code.
@@ -9,6 +18,23 @@ Read [benchmark rules](benchmark.md) for the score and submission contract. A lo
 3. Test deterministic boundaries separately: audio input handling, tool-schema selection and arguments, unavailable app and missing-information cases, execution results, call logging, and JSONL serialization.
 4. Run the integrated slice through the split-matched `zaic_tools` environment with one `ToolEnv` per sample. Read app data only through its calls. Use `env.get_tool_calls()` and `env.get_state_hash()` for output.
 5. Report sample-level failures before aggregate scores. Separate speech errors, intent/parameter errors, invalid or extra calls, wrong final state, out-of-scope mistakes, timeouts, and non-reproducible output.
+
+## Train Validation and error analysis
+
+Use the [roadmap](roadmap.md) for the frozen source-sample/conversation-group split,
+paired transcript/audio evaluation, error taxonomy, and conditional tuning gate.
+Freeze groups before any trajectory-to-step expansion. Validation references may be
+inspected by evaluation/model selection, but are excluded from optimizer updates,
+SFT fit rows, augmentation and prompt/retrieval example banks. Disclose repeated
+validation-guided selection; it is development validation, not the private test score.
+
+Separate teacher-forced next-action diagnostics from closed-loop runs. Closed-loop
+validation uses actual predicted calls and environment observations; supplied gold
+prefixes are never fed to the evaluated inference agent. Keep baseline/tuned comparisons
+on identical IDs, runtime, prompt, ASR and decoding configuration and report incomplete
+coverage or unavailable metrics explicitly. `label.final_state` is not the full state
+from which to construct a gold hash. The [SFT design](../docs/design/train-to-sft.md)
+defines future exporter/loss-mask/leakage checks; none has been implemented by this update.
 
 ## Evidence to record
 

@@ -3,7 +3,8 @@
 **Feature**: `001-python-sample-pipeline` | **Date**: 2026-10-27 | **Spec**: [spec.md](spec.md)
 **Git branch**: `feat/docs-lifemate-stack` (preserved). Spec Kit reports the feature
 identifier as BRANCH; that does not mean a Git branch was created.
-**Status**: Planned; implementation and model runs are not complete.
+**Status**: Source/tests authored; install, tests and real-model acceptance are unexecuted.
+See [validation.md](validation.md) for the receiving-machine handoff.
 
 ## Summary
 
@@ -83,7 +84,7 @@ specs/001-python-sample-pipeline/
   analysis.md
 ```
 
-### Source Code (to implement)
+### Source Code (authored; execution validation pending)
 
 ```text
 python/
@@ -94,6 +95,7 @@ python/
     __main__.py
     cli.py
     contracts.py
+    jsonio.py
     dataset.py
     runtime.py
     agent.py
@@ -101,6 +103,7 @@ python/
     prompting.py
     adapters/planner.py
     adapters/asr.py
+    adapters/common.py
   tests/
     test_dataset.py
     test_runtime.py
@@ -185,6 +188,14 @@ competition-ready full submission.
 3. Audio adapter checks, then the same real samples in audio mode with a selected ASR.
 4. Record evidence and update affected context. Full-split/Docker compliance and
    TypeScript/HTTP integration are later features.
+
+## Follow-on roadmap
+
+This feature delivers the pretrained sample baseline. The project-wide sequence is
+[Baseline -> Train Validation -> Error Analysis -> conditional Fine-tuning](../../context/roadmap.md).
+The [Train-to-SFT design](../../docs/design/train-to-sft.md) plans next-action
+supervision from Train gold prefixes as a separate later feature. This link does
+not add an exporter/trainer to feature 001 or complete any implementation task.
 
 ## Complexity Tracking
 

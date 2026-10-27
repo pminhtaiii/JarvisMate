@@ -1,6 +1,11 @@
 # LifeMate technology stack
 
-This page records accepted technology directions and open choices. No listed model, server, or benchmark pipeline has been implemented or measured by this design discussion. See [architecture](architecture.md) for capability and trust boundaries and [benchmark rules](benchmark.md) for submission constraints.
+This page records accepted technology directions and open choices. The
+[Python baseline](../python/README.md) and controlled/opt-in tests are authored;
+no installation, test run, real inference, score or timing has been measured here.
+The author defers execution to the receiving teammate. See the
+[handoff](../specs/001-python-sample-pipeline/validation.md), [architecture](architecture.md)
+and [benchmark rules](benchmark.md).
 
 ## Accepted directions
 
@@ -8,7 +13,7 @@ This page records accepted technology directions and open choices. No listed mod
 - Compare multilingual Whisper-small with VinAI PhoWhisper-small for offline ASR. Replace the original Wispr Flow proposal because its internet-dependent transcription does not fit final offline inference. The winning ASR model and inference runtime remain open.
 - Use Qwen3-4B-Instruct-2507 as the first planner experiment, with context capped at 16,384 tokens. This is a candidate, not a measured winner or final commitment.
 - Use structured ReAct for the first runnable baseline, with deterministic validation and execution between planner decisions. Prioritize runnable output before latency optimization; performance remains unmeasured and the competition deadline still applies. See [architecture](architecture.md) and [ADR 007](../docs/adr/007-react-first-runnable-baseline.md), which supersedes ADR 006.
-- First build and measure an end-to-end baseline with pretrained models; defer fine-tuning until baseline failures have been analyzed. Later tuning may use supplied training data, preserving an untouched validation subset and comparing with the same model before training. The target component, tuning method, and split design remain open. Compare planning on supplied training transcripts with planning on ASR transcripts to distinguish speech and planning errors. See [ADR 005](../docs/adr/005-measure-baseline-before-fine-tuning.md).
+- Follow the [roadmap](roadmap.md): pretrained baseline, evaluation on a frozen grouped Train fit/validation partition, error analysis, then fine-tuning only if justified. Compare supplied-transcript and ASR paths to separate planner from speech errors. The conditional [planner SFT design](../docs/design/train-to-sft.md) uses gold call/result prefixes to supervise the next action with target-only loss; validation records never enter fitting. Training method, hyperparameters, dependency choices, and the decision to train remain gated by measured errors and compute. See [ADR 005](../docs/adr/005-measure-baseline-before-fine-tuning.md).
 - Use a teammate's RTX 5070 machine as a shared private development inference server, with separate training windows. GPU variant, VRAM, availability, and access setup remain unverified. The final pipeline must still execute inside the offline submission container.
 
 ## Accepted hybrid boundary
@@ -30,7 +35,19 @@ Process one sample at a time per GPU worker initially; queue development request
 - The accepted whole-sample boundary avoids individual tool-call replies crossing runtimes. Decide whether recovery of a completed sample result while a worker survives is needed; worker death fails the current sample without automatic rerun. An in-memory response cache would not survive worker death or make execution and durable recording atomic.
 - Do not assume a sample can be restarted with another `ToolEnv`; the supplied rules require exactly one per sample. Any recovery policy must respect that requirement and the sample deadline.
 
-Late-response handling, recovery of completed results, and final submission handling of failures remain open. No execution or recovery guarantees have been implemented.
+The Python source implements selected-batch fail-fast handling and partial artifacts,
+pending tests. Late-response recovery, hard process supervision, final submission
+failure policy and cross-process transport remain open; no measured execution or
+recovery guarantee is claimed.
+
+## Authored baseline dependencies
+
+Python 3.11+ core/tests use the standard library. The optional inference extra pins
+PyTorch 2.9.0, Transformers 4.57.1 and NumPy 2.3.4 as candidates to validate on the
+receiving host. Local Qwen3 and Whisper/PhoWhisper adapters disable downloads/remote
+code, reuse weights and configure deterministic generation. Pins and settings do not
+establish compatibility, model eligibility, accuracy, reproducibility or A30 latency.
+No new Node dependencies or training libraries are added.
 
 ## Decision rationale
 

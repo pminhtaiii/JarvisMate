@@ -11,3 +11,8 @@ docs/verification/
 fixtures/
 /sample/
 .tmp-ci-checks/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
