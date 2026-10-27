@@ -1,0 +1,12 @@
+.env
+node_modules/
+.agent-work/
+.agent-test-tmp/
+.playwright-mcp/
+.scratch/agent-work.lock
+context/.active-task.lock
+context/.active-task-*.tmp
+dist/
+docs/verification/
+fixtures/
+.tmp-ci-checks/
