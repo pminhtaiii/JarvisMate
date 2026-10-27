@@ -77,13 +77,15 @@ update; do not claim evidence was saved when storage prevented it.
 
 ## Output lifecycle
 
-1. Preflight selection, create a fresh run manifest, and load models. Failure summary
-   is still visible if directory creation itself fails.
+1. Create a fresh run manifest, preflight selection, then load models. Record preflight
+   and model-load failures in the manifest before any sample trace or environment is
+   created. Failure summary is still visible if directory/manifest creation itself fails.
 2. Open each sample trace before preparing that sample. A completed sample must have
    a terminal trace event, then append/flush its authoritative prediction row to
    `predictions.partial.jsonl`, then update completion progress in the manifest.
-3. On any failure, stop; keep partial rows and traces. Failed-sample log/hash, when
-   retrievable, are diagnostic trace data only.
+3. On any failure, stop; keep completed rows and available failure evidence. A failure
+   trace may be unavailable before sample execution or after storage/process failure.
+   Failed-sample log/hash, when retrievable, are diagnostic evidence only.
 4. Once all selected samples succeed, validate exact row count/order/IDs/schema,
    atomically rename the partial file to `predictions.jsonl`, then mark the manifest
    completed. A publication/manifest failure returns nonzero; require the completed

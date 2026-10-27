@@ -43,10 +43,20 @@ catalog, and `tools/test` runtime; it is not necessary for the initial training 
 
 Requires Python 3.11+. The existing root Node tooling remains separate.
 
+PowerShell:
+
 ```powershell
 python -m venv .agent-work/python-venv
 & ./.agent-work/python-venv/Scripts/python.exe -m pip install -e ./python
 & ./.agent-work/python-venv/Scripts/python.exe -m unittest discover -s python/tests -p 'test_*.py'
+```
+
+POSIX shell (Linux/macOS):
+
+```sh
+python3 -m venv .agent-work/python-venv
+.agent-work/python-venv/bin/python -m pip install -e ./python
+.agent-work/python-venv/bin/python -m unittest discover -s python/tests -p 'test_*.py'
 ```
 
 Default tests require no weights or GPU. Real-data checks skip with an explicit reason
@@ -111,11 +121,16 @@ success, and deadline compliance as distinct outcomes.
 ## 6. Failure and evidence checks
 
 - Inject an unrecoverable second-sample failure: third sample never opens; exit is
-  nonzero; first row remains in partial output; failure trace and failed manifest remain.
-- Test an unavailable tool and invalid arguments: validation feedback is traced before
-  dispatch; actual attempted environment calls still appear in its authoritative log.
+  nonzero; first row and available failure evidence remain with a failed manifest.
+- Test preflight input failures: the manifest records the defect before any sample
+  trace, model invocation, or environment; no failure trace is required at this stage.
+- Test malformed or unavailable actions: validation feedback is traced before dispatch
+  and no environment call occurs. Well-formed, allowed calls with schema-invalid arguments
+  reach ToolEnv.call, appear in submitted tool_calls, and return correction feedback.
 - Test missing information and unsupported requests: both produce legitimate outcomes,
   distinct from execution failure; previous actions are preserved when asking for info.
+  Only success with waiting_for_user:true ends the sample as needs_info; success with
+  the field false or absent continues planning within the remaining bounds.
 - Test exhausted bounds, missing weights, context overflow, and trace/output I/O failure.
 - Assert exact output keys, selected IDs/order/count, hashes from the environment,
   one environment per sample, no label leakage, and no history replay.

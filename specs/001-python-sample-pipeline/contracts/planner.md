@@ -39,15 +39,19 @@ arbitrary text. Limit response bytes/tokens before parsing.
 2. Generate one action and increment decision count, including malformed responses.
 3. Invalid shape or unavailable name: emit validation rejection, feed bounded feedback
    to the planner, consume no env.call, and continue within the bound.
-4. For allowed calls, invoke `env.validate` and trace its result. Invalid arguments
-   return correction feedback without env.call. Do not invent missing values.
+4. For well-formed, allowed calls, delegate argument-schema validation to `ToolEnv.call`.
+   Schema-invalid arguments must reach the environment so it logs the attempted call;
+   do not gate dispatch on `env.validate` or invent missing values.
 5. Trace intent before dispatch, call `env.call`, and trace the returned observation.
-   Actual attempted calls are retained by the environment, including rejections.
+   Return schema-error feedback to the planner for correction within the decision bound.
+   Actual attempted calls, including schema rejections, remain in the environment's
+   authoritative log and submitted `tool_calls`.
 6. Nonterminal observations, including empty matches, `ok:false`, and `done:false`,
    return to the planner. An exception with uncertain execution is a sample failure,
    not a reason to dispatch the same call again.
 7. `finish` terminates. A successful `sys.ask_missing_info` result with
    `waiting_for_user:true` terminates as `needs_info`; no interactive reply is invented.
+   A successful result with that field false or absent returns to the planner.
 8. Obtain final log/hash once the terminal outcome is established. Finishing with no
    calls remains valid. Failed samples do not emit a prediction row.
 

@@ -32,10 +32,16 @@ weights/compute are available. A controlled run is not model evidence.
 2. **Given** an unsupported request, **when** the planner finishes without a tool,
    **then** the result contains an empty authoritative call list and a real hash.
 3. **Given** missing required information, **when** the planner calls
-   `sys.ask_missing_info`, **then** that call is recorded and the sample stops as a
-   valid missing-information outcome, including any earlier executed calls.
+   `sys.ask_missing_info` and it succeeds with `waiting_for_user:true`, **then** that
+   call is recorded and the sample stops as a valid missing-information outcome,
+   including any earlier executed calls. Success with the field false or absent
+   returns to the planner within the remaining bounds.
 4. **Given** labels and historical actions, **when** inference runs, **then** labels
    never enter planner inputs and history is not re-executed.
+5. **Given** a well-formed, allowed call with schema-invalid arguments, **when** it
+   reaches `ToolEnv.call`, **then** the attempted call remains in submitted `tool_calls`
+   and its error result supplies correction feedback. Malformed or unavailable
+   actions are rejected before dispatch and produce no environment call.
 
 ### User Story 2 - Run a selected subset and expose failures (Priority: P1)
 
@@ -45,7 +51,7 @@ clear outcome without silently losing samples or earlier work.
 **Why this priority**: The immediate target is the uploaded subset, not the complete dataset.
 
 **Independent Test**: Run a successful two-sample batch, then inject a failure
-in its second sample. Confirm persistence of the first result and failure trace,
+in its second sample. Confirm persistence of the first result and available failure evidence,
 a nonzero exit, and no processing of a third queued sample.
 
 **Acceptance Scenarios**:
@@ -55,8 +61,9 @@ a nonzero exit, and no processing of a third queued sample.
 2. **Given** an execution failure, **when** it occurs, **then** the batch stops,
    preserves completed rows and failure evidence, and publishes no complete result.
 3. **Given** missing selected assets, duplicate IDs, malformed records, or unsafe
-   paths, **when** preflight runs, **then** it reports the defect before opening an
-   environment or invoking a model; selected IDs are never silently skipped.
+   paths, **when** preflight runs, **then** it records the defect in the run manifest
+   before creating sample traces, opening an environment, or invoking a model;
+   selected IDs are never silently skipped.
 4. **Given** a subset run, **when** it completes, **then** its manifest labels it a
    subset result rather than a full competition submission.
 
@@ -114,11 +121,15 @@ GPU-free tests verify adapter behavior with controlled ASR output.
   Access app data through tool calls, never hidden-file reads/copies/parsing or
   `get_state()` as planner context. Require a valid catalog before environment creation.
 - **FR-007**: Use one general planner in a bounded structured ReAct loop. Validate
-  action shape, eligibility, and arguments deterministically with the organizer's
-  schema validator before dispatch; feed observations into subsequent decisions.
+  action shape and eligibility before dispatch. Send well-formed, allowed calls,
+  including schema-invalid arguments, through `ToolEnv.call` for deterministic
+  organizer schema validation, attempted-call logging, and correction feedback.
 - **FR-008**: Distinguish finish, missing-information, valid empty outcome, and failure.
-  Invalid proposals are traced and may be corrected within the action bound before
-  execution. Every actual environment call, including rejected calls, remains logged.
+  Malformed or unavailable actions are traced and may be corrected before dispatch;
+  schema errors return from the environment for correction within the action bound.
+  Every actual environment call, including rejected calls, remains logged and submitted.
+  A missing-information call ends the sample only on success with `waiting_for_user:true`;
+  success without that condition returns to the planner.
 - **FR-009**: Never automatically retry uncertain executions or recreate failed
   sample environments. Historical actions remain context only.
 - **FR-010**: Emit rows with exactly `id`, `tool_calls` (`name`, `arguments`), and

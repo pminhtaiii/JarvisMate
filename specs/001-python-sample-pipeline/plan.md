@@ -78,6 +78,7 @@ specs/001-python-sample-pipeline/
   contracts/artifacts.md
   quickstart.md
   tasks.md
+  validation.md
   checklists/requirements.md
   analysis.md
 ```
@@ -121,6 +122,7 @@ plugin registry or framework is needed.
 1. Parse explicit split, data root, runtime directory, input mode, selected IDs, bounds,
    and run directory. Resolve all paths and refuse reuse of a run directory.
 2. Preflight the selected records and catalog before any model load or ToolEnv creation.
+   Record input failures in the run manifest before sample traces or environments exist.
    Require the catalog at the exact path used by ToolEnv; the supplied runtime silently
    relaxes schema checks if it is missing. Validate selected asset paths with existence
    checks only for environment state; never open hidden files in our code. A contained
@@ -140,12 +142,16 @@ plugin registry or framework is needed.
 6. After request preparation succeeds, create exactly one ToolEnv for that sample,
    then begin planning. The planner sees only declared tools plus the system tool.
 7. Enforce the planner action contract, context cap, step bound (default 16 model
-   decisions), and remaining deadline. Reject invalid proposals before env.call;
+   decisions), and remaining deadline. Reject malformed or unavailable actions before env.call;
    return bounded validation feedback for correction within the same step budget.
-8. Write call-intent trace before dispatch; execute only schema-valid, allowed calls.
+8. Write call-intent trace before dispatch; send well-formed, allowed calls to ToolEnv.call
+   even when their arguments violate the tool schema. The environment validates and logs
+   the attempt for submitted tool_calls; return schema-error feedback to the planner.
    Record the returned result as an observation; `done:false` may require another
    decision. Exceptions with uncertain effects fail the sample without retry.
-9. Finish on explicit finish or after a successful missing-information call. Retrieve
+9. Finish on explicit finish or after a successful `sys.ask_missing_info` call whose
+   result has `waiting_for_user:true`. Other results, including success without that
+   condition, return to the planner within the remaining bounds. Retrieve
    authoritative calls/hash, finish the trace, flush the result row, update the manifest.
    No extra model call is required solely to compose a closing message.
 10. On failure, stop before the next sample; preserve earlier rows and available failed

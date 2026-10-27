@@ -62,8 +62,10 @@ traces mark payload omissions and do not satisfy baseline-validation evidence.
 Data-bearing payloads stay out of routine stdout/stderr.
 
 On success, stdout summary identifies run manifest and completed prediction path.
-On the first failure, stop before the next sample, retain partial results, and identify
-the failure trace. Exit codes: `0` complete selected run/preflight; `2` invalid arguments
+On the first failure, stop before the next sample, retain completed results, and identify
+available failure evidence. Record run preflight failures in the manifest before sample
+traces or environments exist; report storage failures if no manifest can be written.
+Exit codes: `0` complete selected run/preflight; `2` invalid arguments
 or input/preflight; `1` model/execution/artifact failure. No automatic resume or rerun.
 Unhandled hard process death may prevent a structured summary; partial artifacts
 remain incomplete and are not promoted on the next invocation.

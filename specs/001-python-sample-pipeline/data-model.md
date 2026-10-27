@@ -53,11 +53,13 @@ per response. Every response counts toward max_steps, even if rejected.
 
 - `step`: one-based model decision index.
 - `kind`: `validation_rejection` or `tool_result`.
-- Validation rejection: machine category plus bounded organizer/schema feedback;
-  no env.call took place.
+- Validation rejection: malformed action or unavailable tool category plus bounded
+  feedback; no env.call took place.
 - Tool result: dispatched `name/arguments` and exact returned result for in-memory
-  reasoning. Traces may bound/redact payloads; never substitute the trace copy as the
-  authoritative in-memory observation.
+  reasoning, including schema-error correction feedback. A well-formed, allowed call
+  with schema-invalid arguments reaches ToolEnv.call and remains in submitted tool_calls.
+  Traces may bound/redact payloads; never substitute the trace copy as the authoritative
+  in-memory observation.
 
 ## SampleOutcome
 
@@ -67,6 +69,8 @@ per response. Every response counts toward max_steps, even if rejected.
 - Failure: `error_code`, bounded message, stage, last known step, and optional
   diagnostic environment log/hash if still safely obtainable. No successful row.
 - `completed` with no calls is valid, not an exception. `needs_info` preserves prior calls.
+  It requires a successful `sys.ask_missing_info` result with `waiting_for_user:true`;
+  success with that field false or absent remains a nonterminal observation.
 
 State transitions:
 
@@ -75,12 +79,13 @@ selected -> preflighted -> preparing_request -> environment_open -> planning
 planning -> validation_rejection -> planning
 planning -> dispatch -> observation -> planning
 planning -> completed
-dispatch(sys.ask_missing_info) -> needs_info
+dispatch(sys.ask_missing_info) -> observation(success with waiting_for_user:true) -> needs_info
 any active stage -> failed -> batch_stopped
 ```
 
 Model loading is run-level; per-sample request preparation includes ASR and is timed.
-Preflight failure opens zero environments. After environment_open, the sample is
+Preflight failure is recorded in the run manifest before sample traces or environments
+are created. After environment_open, the sample is
 never reset/retried by the runner. A trace-storage failure follows the same stop rule.
 
 ## TraceEvent and RunManifest
