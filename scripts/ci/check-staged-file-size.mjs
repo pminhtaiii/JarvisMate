@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 const LIMIT_BYTES = 20_000;
 const LOCKFILES = new Set(['bun.lock', 'bun.lockb', 'npm-shrinkwrap.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
+// Pinned upstream imports only; modified or relocated copies retain the size limit.
+const UPSTREAM_BLOBS = new Map([
+  ['.specify/scripts/powershell/common.ps1', 'c0aa9154b5f5ad9211bbd6d2a3d5253c9759931d'],
+  ['tools/train_tools_catalog.json', 'b6decdaa5850298ab2e2ae0f3dcc8ba642479d50'],
+  ['tools/public_test_tools_catalog.json', '2a19f6d8d8d28d7813fff22335012a58e56732ad'],
+]);
 
 function formatNumber(value) {
   return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -148,8 +154,7 @@ export async function checkStagedFileSize(root) {
   const oversized = [];
   for (let index = 0; index < entries.length; index += 1) {
     if (sizes[index] <= BigInt(LIMIT_BYTES)) continue;
-    // Exact upstream Spec Kit 1.2.3 blob; modified copies retain the size limit.
-    if (entries[index].path === '.specify/scripts/powershell/common.ps1' && entries[index].oid === 'c0aa9154b5f5ad9211bbd6d2a3d5253c9759931d') continue;
+    if (UPSTREAM_BLOBS.get(entries[index].path) === entries[index].oid) continue;
     if (await hasNulByte(root, entries[index].oid)) continue;
     oversized.push({ path: entries[index].path, size: sizes[index].toString() });
   }
