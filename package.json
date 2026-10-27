@@ -1,0 +1,31 @@
+{
+  "name": "jarvismate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.5.1",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "onFail": "error"
+    }
+  },
+  "engines": {
+    "node": "^24.0.0"
+  },
+  "scripts": {
+    "prepare": "node scripts/agents/install-git-hooks.mjs",
+    "check:dependency-install": "node scripts/ci/check-dependency-install.mjs",
+    "check:staged-size": "node scripts/ci/check-staged-file-size.mjs",
+    "test:contributors": "node scripts/ci/run-contributor-tests.mjs",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "eslint": "10.12.0",
+    "globals": "17.13.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.2"
+  }
+}

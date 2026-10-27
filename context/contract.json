@@ -1,0 +1,17 @@
+{
+  "activeOnly": true,
+  "requiredDocuments": [
+    "AGENTS.md",
+    "GLOSSARY.md",
+    "context/README.md",
+    "context/project_overview.md",
+    "context/architecture.md",
+    "context/code_standard.md",
+    "context/testing.md",
+    "context/benchmark.md",
+    "context/team.md",
+    "docs/reference/lifemate-competition.md"
+  ],
+  "facts": {},
+  "authorizationReferences": []
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Build Spec"
+  short_description: "Implement local spec tasks with worker agents"
+policy:
+  allow_implicit_invocation: true

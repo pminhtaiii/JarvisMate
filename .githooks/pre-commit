@@ -1,0 +1,2 @@
+#!/bin/sh
+node scripts/ci/check-staged-file-size.mjs

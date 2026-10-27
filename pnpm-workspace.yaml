@@ -1,0 +1,2 @@
+# Keep local and CI installs on pnpm's default 24-hour release-age policy.
+minimumReleaseAge: 1440

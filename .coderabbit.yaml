@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  allow_author_approval: false
+  auto_review:
+    enabled: true
+    drafts: true
+    auto_incremental_review: true
+    base_branches:
+      - '^main$'
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - files: context/code_standard.md
+        applyTo: '**/*.{mjs,ts}'
