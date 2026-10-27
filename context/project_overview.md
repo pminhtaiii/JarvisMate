@@ -14,6 +14,8 @@ The immediate engineering goal is to make one end-to-end path runnable and obser
 
 ## Team and open decisions
 
+Prioritize the competition pipeline and offline submission before a phone or browser voice interface. Benchmark-provided audio is the initial input. Model experiments, fine-tuning direction, development compute, and the accepted hybrid boundary are recorded in the [technology stack](tech_stack.md).
+
 This is a five-person competition effort. Teammates own bounded components end to end, coordinate interfaces before dependent parallel work, and use GitHub issues and pull requests for shared scope, progress, review, and integration. See [team workflow](team.md).
 
 Still open: exact models, component assignments, frontend timing, and the MVP scenario. Record settled cross-component choices in the [context entry](README.md); keep task details in the relevant issue or PR. Do not present open choices as commitments.

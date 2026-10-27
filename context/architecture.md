@@ -6,11 +6,11 @@ Keep speech recognition, request/tool planning, and tool execution behind separa
 
 1. Receive the sample audio and its provided context, conversation history, installed-app list, and tool definitions.
 2. Run ASR to produce request text for planning.
-3. Create exactly one `ToolEnv` for the sample. Plan and execute calls through it using the request, sample context, installed-app tools, and results from earlier calls. Use `sys.ask_missing_info` when required information is missing, and produce no calls for unsupported requests.
-4. Continue planning only as needed after observed tool results; every attempted call goes through that same environment.
+3. Create exactly one `ToolEnv` for the sample. Produce a structured plan with explicit dependencies using the request, sample context, and installed-app tools. Deterministic code executes resolved steps through that environment and binds returned values only through explicit validated rules. Use `sys.ask_missing_info` when required information is missing, and produce no calls for unsupported requests.
+4. Pause for selective replanning when a required decision remains unresolved or observed results invalidate the remaining plan. Give the planner completed calls and observed results; revise remaining work without blindly repeating completed effects. Bound the loop and preserve the no-automatic-retry policy for uncertain executions. Every attempted call goes through the same environment; completing a plan requires no extra model pass solely for a closing message. See [ADR 006](../docs/adr/006-plan-execute-with-selective-replanning.md) for the trade-off.
 5. Submit the environment's recorded tool-call log and final `state_hash`.
 
-This outline follows the [benchmark](benchmark.md) and [glossary](../GLOSSARY.md). Exact model, framework, and implementation stack are undecided.
+This outline follows the [benchmark](benchmark.md) and [glossary](../GLOSSARY.md). Accepted model experiments and open implementation choices are recorded in the [technology stack](tech_stack.md).
 
 ## Trust and data boundaries
 
@@ -25,6 +25,6 @@ Optimize for correct final state and matched calls together. Exact state-hash mi
 
 ## Provisional contracts
 
-The module boundaries above are agreed, but detailed interfaces and orchestration contracts remain provisional. Keep ASR, planning, and execution replaceable; agree exact input/output contracts with component owners before implementation depends on them. Model choice, component ownership, frontend timing, and the MVP scenario remain open in the [project context](README.md). No specific model, framework, service, or runtime stack is established here.
+The module boundaries above are agreed, but detailed interfaces and orchestration contracts remain provisional. Keep ASR, planning, and execution replaceable; agree exact input/output contracts with component owners before implementation depends on them. TypeScript owns the outer harness; Python owns each sample's complete execution loop and single `ToolEnv`. See the [technology stack](tech_stack.md) for model experiments, runtime choices, and unresolved failure behavior. Component ownership and the MVP scenario remain open in the [project context](README.md).
 
 The [team workflow](team.md) defines ownership and shared coordination. Track interface discussions and progress in GitHub issues or pull requests, and update concise project context when a settled choice affects other components.
