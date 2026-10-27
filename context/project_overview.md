@@ -12,6 +12,8 @@ Measure success by benchmark scoring: exact final `state_hash` match gates the n
 
 The immediate engineering goal is to make one end-to-end path runnable and observable, then measure it. The intended benchmark covers Vietnamese audio, user context and history, installed apps and schemas, and a simulated environment. Submission constraints and exact scoring details are in the [benchmark page](benchmark.md).
 
+The first deliverable is a small runnable pipeline that produces the competition-required prediction artifact, with an initial submission targeted for 27 October 2026. A small integrated run is the first checkpoint; a submission file must cover every sample in the target split. This is a target, not evidence of a completed run or submission. Dataset access and working inference remain prerequisites.
+
 ## Team and open decisions
 
 Prioritize the competition pipeline and offline submission before a phone or browser voice interface. Benchmark-provided audio is the initial input. Model experiments, fine-tuning direction, development compute, and the accepted hybrid boundary are recorded in the [technology stack](tech_stack.md).

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-007
 ---
 
 # Plan first, execute resolved steps, and replan selectively

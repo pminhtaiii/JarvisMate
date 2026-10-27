@@ -8,4 +8,6 @@ Initially process one sample at a time per GPU worker, queueing development requ
 
 ## Open details
 
+[ADR 010](010-stop-development-batch-on-execution-failure.md) narrows the initial development behavior: stop the batch on its first execution failure. Permission to start a fresh worker does not mean automatically continuing that failed batch.
+
 The protocol, late-response handling, recovery of an already completed result, and submission behavior for failed samples remain to be designed. Do not fabricate an empty successful result or state hash for a failure. Organizer timing and failure-output requirements must be checked against final runner instructions; this decision is not an implemented recovery guarantee.

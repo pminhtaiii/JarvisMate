@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -80,6 +80,28 @@ test('known generated outputs, lockfiles, and binary blobs are skipped without e
   assert.match(result.stderr, /src\/contracts\/authored\.ts/);
   for (const path of skipped) assert.doesNotMatch(result.stderr, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(result.stderr, /binary\.dat/);
+});
+
+test('the unchanged Spec Kit 1.2.3 helper is allowed but edits and other paths remain checked', async (t) => {
+  const { root, git, check } = await repository(t);
+  const relativePath = '.specify/scripts/powershell/common.ps1';
+  const upstream = (await readFile(join(repoRoot, relativePath), 'utf8')).replace(/\r\n/g, '\n');
+  await mkdir(join(root, '.specify/scripts/powershell'), { recursive: true });
+  await writeFile(join(root, relativePath), upstream);
+  git('add', '--', relativePath);
+  assert.equal(check().status, 0, 'the pinned upstream helper is unchanged');
+
+  await writeFile(join(root, relativePath), `${upstream}\n# local modification\n`);
+  git('add', '--', relativePath);
+  assert.equal(check().status, 1, 'changes to the helper remain subject to the size limit');
+
+  await writeFile(join(root, relativePath), upstream);
+  await writeFile(join(root, 'other-helper.ps1'), upstream);
+  git('add', '--', relativePath, 'other-helper.ps1');
+  const result = check();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /other-helper\.ps1/);
+  assert.doesNotMatch(result.stderr, /"\.specify\/scripts\/powershell\/common\.ps1"/);
 });
 
 test('top-level tests and specs are exempt by normalized path while implementation files remain checked', async (t) => {

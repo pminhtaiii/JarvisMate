@@ -9,3 +9,7 @@ LifeMate is the active project. Read [context/README.md](context/README.md) for 
 - Keep context concise. Update the affected page instead of copying facts into several files. State measured results with their dataset and command; do not turn a planned capability into a completion claim.
 
 The inherited slop-loop context pages and helper scripts are reference material. Use them as examples when useful; they do not define LifeMate requirements or authorize LifeMate implementation.
+
+<!-- SPECKIT START -->
+For the runnable Python pipeline, read [specs/001-python-sample-pipeline/plan.md](specs/001-python-sample-pipeline/plan.md) and its linked spec, contracts, and tasks.
+<!-- SPECKIT END -->
