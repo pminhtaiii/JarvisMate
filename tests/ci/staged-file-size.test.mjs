@@ -104,6 +104,34 @@ test('the unchanged Spec Kit 1.2.3 helper is allowed but edits and other paths r
   assert.doesNotMatch(result.stderr, /"\.specify\/scripts\/powershell\/common\.ps1"/);
 });
 
+test('the supplied competition catalogs are allowed only at their original paths and revisions', async (t) => {
+  const { root, git, check } = await repository(t);
+  const paths = ['tools/train_tools_catalog.json', 'tools/public_test_tools_catalog.json'];
+  const originals = new Map();
+  await mkdir(join(root, 'tools'), { recursive: true });
+  for (const path of paths) {
+    const content = (await readFile(join(repoRoot, path), 'utf8')).replace(/\r\n/g, '\n');
+    originals.set(path, content);
+    await writeFile(join(root, path), content);
+    git('add', '--', path);
+  }
+  assert.equal(check().status, 0, 'both original catalogs are accepted');
+
+  for (const path of paths) {
+    await writeFile(join(root, path), `${originals.get(path)}\n`);
+    git('add', '--', path);
+    assert.equal(check().status, 1, `edits to ${path} remain checked`);
+    await writeFile(join(root, path), originals.get(path));
+    git('add', '--', path);
+  }
+
+  await writeFile(join(root, 'other-catalog.json'), originals.get(paths[0]));
+  git('add', '--', 'other-catalog.json');
+  const result = check();
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /other-catalog\.json/);
+});
+
 test('top-level tests and specs are exempt by normalized path while implementation files remain checked', async (t) => {
   const { root, git, check } = await repository(t);
   const paths = ['TESTS/foo.test.ts', 'SPECS/foo/spec.md', 'src/foo.ts', 'nested/tests/foo.test.ts'];
