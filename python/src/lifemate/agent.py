@@ -1,8 +1,11 @@
 """Bounded single-sample execution. No model decisions are executed as code."""
 from __future__ import annotations
 
+from contextlib import ExitStack
+import json
 import time
 
+from .adapters.common import inference_session
 from .contracts import (ASR, Deadline, EnvironmentFactory, JSON, Limits,
                         PipelineError, Planner, SampleInput, SampleOutcome, TraceSink)
 from .dataset import prepare_request
@@ -41,77 +44,116 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
     env, steps, stage = None, 0, "request"
     timings = {"request": 0.0, "planner": 0.0, "tools": 0.0}
     try:
-        trace.emit("sample_started", input_mode=sample.mode)
-        started = clock()
-        prepared = prepare_request(sample, asr, deadline)
-        timings["request"] = clock() - started
-        trace.emit("request_prepared", payload={"request": prepared["request"], "history": prepared["history"]},
-                   available_tools=[t["name"] for t in sample.tools])
-        deadline.remaining()
-        stage = "environment"
-        env = environment_factory(split, sample.id, data_root)
-        deadline.remaining()
-        allowed = {t["name"] for t in sample.tools}
-        observations: list[JSON] = []
-        status, reason = "completed", "finish"
-        for steps in range(1, limits.max_steps + 1):
-            stage = "planner"
+        with ExitStack() as model_sessions:
+            trace.emit("sample_started", input_mode=sample.mode)
+            if hasattr(planner, "start_sample"):
+                planner.start_sample(sample.id)
             started = clock()
-            raw = planner.next_action(planner_input(prepared, observations), deadline.remaining())
-            timings["planner"] += clock() - started
+            with inference_session(asr):
+                prepared = prepare_request(sample, asr, deadline)
+            timings["request"] = clock() - started
+            trace.emit("request_prepared", payload={"request": prepared["request"], "history": prepared["history"]},
+                       available_tools=[t["name"] for t in sample.tools])
             deadline.remaining()
-            # Bound raw output before even debug tracing it.
-            if not isinstance(raw, str) or len(raw.encode("utf-8")) > limits.response_bytes:
-                raise PipelineError("PLANNER_ERROR", "Planner output is not bounded text", stage)
-            trace.emit("planner_action", step=steps, payload={"response": raw})
-            try:
-                action = parse_action(raw, limits.response_bytes)
-                if action["action"] == "call" and action["name"] not in allowed:
-                    raise ValueError("Tool unavailable in this sample")
-            except (ValueError, TypeError, UnicodeError, RecursionError):
-                feedback = {"step": steps, "kind": "validation_rejection",
-                            "message": "Return one strict call/finish JSON using only available tool names."}
-                trace.emit("validation_result", step=steps, accepted=False,
-                           scope="action_shape_and_eligibility", payload=feedback)
-                observations.append(feedback)
-                continue
-            trace.emit("validation_result", step=steps, accepted=True, action=action["action"],
-                       scope="action_shape_and_eligibility",
-                       arguments_schema="delegated_to_env.call" if action["action"] == "call" else "not_applicable")
-            if action["action"] == "finish":
-                break
-            stage = "dispatch"
-            trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
+            model_sessions.enter_context(inference_session(planner))
             deadline.remaining()
-            started = clock()
-            # Arguments, including schema-invalid ones, reach the authoritative logger.
-            try:
-                result = env.call(action["name"], action["arguments"])
-            except Exception as exc:
-                raise PipelineError("EXECUTION_UNCERTAIN", "Tool execution raised; do not retry", stage) from exc
-            timings["tools"] += clock() - started
-            if not isinstance(result, dict):
-                raise PipelineError("EXECUTION_UNCERTAIN", "Invalid tool response; do not retry", stage)
-            dumps(result)
-            trace.emit("tool_call_result", step=steps, name=action["name"], payload=result)
+            stage = "environment"
+            env = environment_factory(split, sample.id, data_root)
             deadline.remaining()
-            observations.append({"step": steps, "kind": "tool_result", "name": action["name"],
-                                 "arguments": action["arguments"], "result": result})
-            if (action["name"] == "sys.ask_missing_info" and result.get("ok") is True
-                    and result.get("waiting_for_user") is True):
-                status, reason = "needs_info", "waiting_for_user"
-                break
-        else:
-            raise PipelineError("STEP_LIMIT", "Planner decision budget exhausted", "planner")
-        stage = "collection"
-        deadline.remaining()
-        result = authoritative(env, sample.id)
-        deadline.remaining()
-        trace.emit("sample_finished", step=steps, status=status, stop_reason=reason,
-                   payload=result, timings=timings)
-        deadline.remaining()
-        return SampleOutcome(sample.id, status, deadline.elapsed(), steps, reason,
-                             result=result, timings=timings)
+            allowed = {t["name"] for t in sample.tools}
+            observations: list[JSON] = []
+            last_rejected, repeated_rejections = None, 0
+            last_failure, repeated_failures = None, 0
+            status, reason = "completed", "finish"
+            for steps in range(1, limits.max_steps + 1):
+                stage = "planner"
+                started = clock()
+                try:
+                    raw = planner.next_action(planner_input(prepared, observations), deadline.remaining())
+                finally:
+                    for detail in getattr(planner, "last_decision_details", ()):
+                        trace.emit("planner_selection", step=steps, payload=detail)
+                timings["planner"] += clock() - started
+                deadline.remaining()
+                # Bound raw output before even debug tracing it.
+                if not isinstance(raw, str) or len(raw.encode("utf-8")) > limits.response_bytes:
+                    raise PipelineError("PLANNER_ERROR", "Planner output is not bounded text", stage)
+                trace.emit("planner_action", step=steps, payload={"response": raw})
+                unavailable = False
+                try:
+                    action = parse_action(raw, limits.response_bytes)
+                    if action["action"] == "call" and action["name"] not in allowed:
+                        unavailable = True
+                        raise ValueError("Tool unavailable in this sample")
+                except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+                    reason = (f"Invalid JSON: {exc.msg}." if isinstance(exc, json.JSONDecodeError)
+                              else "Invalid action shape or unavailable tool name.")
+                    if unavailable:
+                        reason = ("The top-level name is not in available_tools. Copy an exact name from "
+                                  "available_tools into the top-level name field. Put that tool's parameters "
+                                  "directly in arguments, without nesting another name/arguments call.")
+                    feedback = {"step": steps, "kind": "validation_rejection",
+                                "code": "UNAVAILABLE_TOOL" if unavailable else "INVALID_ACTION",
+                                "message": reason + " No tool was executed. Correct the previous response; "
+                                "return exactly one call/finish JSON object, with balanced braces and no extra text.",
+                                "rejected_response": raw[:4096], "response_truncated": len(raw) > 4096}
+                    trace.emit("validation_result", step=steps, accepted=False,
+                               scope="action_shape_and_eligibility", payload=feedback)
+                    observations.append(feedback)
+                    repeated_rejections = repeated_rejections + 1 if raw == last_rejected else 1
+                    last_rejected = raw
+                    if repeated_rejections >= 3:
+                        raise PipelineError("PLANNER_FORMAT", "Planner repeated the same invalid action three times", "planner")
+                    continue
+                last_rejected, repeated_rejections = None, 0
+                trace.emit("validation_result", step=steps, accepted=True, action=action["action"],
+                           scope="action_shape_and_eligibility",
+                           arguments_schema="delegated_to_env.call" if action["action"] == "call" else "not_applicable")
+                if action["action"] == "finish":
+                    break
+                stage = "dispatch"
+                trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
+                deadline.remaining()
+                started = clock()
+                # Arguments, including schema-invalid ones, reach the authoritative logger.
+                try:
+                    result = env.call(action["name"], action["arguments"])
+                except Exception as exc:
+                    raise PipelineError("EXECUTION_UNCERTAIN", "Tool execution raised; do not retry", stage) from exc
+                timings["tools"] += clock() - started
+                if not isinstance(result, dict):
+                    raise PipelineError("EXECUTION_UNCERTAIN", "Invalid tool response; do not retry", stage)
+                dumps(result)
+                trace.emit("tool_call_result", step=steps, name=action["name"], payload=result)
+                deadline.remaining()
+                observations.append({"step": steps, "kind": "tool_result", "name": action["name"],
+                                     "arguments": action["arguments"], "result": result})
+                # Schema errors with the same cause are not progress, even if the model
+                # changes an irrelevant optional parameter. Every dispatched call stays logged.
+                failure = ((action["name"], dumps(result)) if result.get("ok") is False else
+                           (action["name"], dumps(action["arguments"]), dumps(result))
+                           if result.get("done") is False else None)
+                repeated_failures = repeated_failures + 1 if failure is not None and failure == last_failure else 1
+                last_failure = failure
+                if failure is not None and repeated_failures >= 3:
+                    raise PipelineError("NO_PROGRESS", "Three consecutive tool failures without progress", "planner")
+                if (action["name"] == "sys.ask_missing_info" and result.get("ok") is True
+                        and result.get("waiting_for_user") is True):
+                    status, reason = "needs_info", "waiting_for_user"
+                    break
+            else:
+                raise PipelineError("STEP_LIMIT", "Planner decision budget exhausted", "planner")
+            stage = "collection"
+            deadline.remaining()
+            result = authoritative(env, sample.id)
+            deadline.remaining()
+            model_sessions.close()
+            deadline.remaining()
+            trace.emit("sample_finished", step=steps, status=status, stop_reason=reason,
+                       payload=result, timings=timings)
+            deadline.remaining()
+            return SampleOutcome(sample.id, status, deadline.elapsed(), steps, reason,
+                                 result=result, timings=timings)
     except Exception as exc:
         error = exc if isinstance(exc, PipelineError) else PipelineError(
             "EXECUTION_UNCERTAIN" if stage in {"environment", "dispatch", "collection"} else "PLANNER_ERROR",

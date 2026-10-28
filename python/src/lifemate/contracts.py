@@ -10,8 +10,8 @@ from typing import Any, Callable, Literal, Protocol
 JSON = dict[str, Any]
 ERROR_CODES = frozenset({
     "INPUT_INVALID", "ASSET_MISSING", "CATALOG_INVALID", "MODEL_UNAVAILABLE",
-    "CONTEXT_LIMIT", "STEP_LIMIT", "TIME_LIMIT", "PLANNER_ERROR",
-    "EXECUTION_UNCERTAIN", "TRACE_IO", "OUTPUT_IO",
+    "CONTEXT_LIMIT", "STEP_LIMIT", "TIME_LIMIT", "PLANNER_ERROR", "PLANNER_FORMAT", "OUTPUT_LIMIT",
+    "EXECUTION_UNCERTAIN", "TRACE_IO", "OUTPUT_IO", "INTERRUPTED", "NO_PROGRESS",
 })
 
 
@@ -61,19 +61,28 @@ class RunConfig:
     trace_payloads: bool = False
     limits: Limits = field(default_factory=Limits)
     seed: int = 20261027
+    resume_from: Path | None = None
+    continue_on_error: bool = False
+    allow_mixed_resume: bool = False
+    selection_filter: bool = False
+    model_offload: bool = False
 
     def __post_init__(self):
         if not isinstance(self.data_root, Path) or not isinstance(self.runtime_dir, Path):
             raise PipelineError("INPUT_INVALID", "Data/runtime directories must be paths")
         if any(p is not None and not isinstance(p, Path)
-               for p in (self.run_dir, self.planner_model, self.asr_model)):
+               for p in (self.run_dir, self.planner_model, self.asr_model, self.resume_from)):
             raise PipelineError("INPUT_INVALID", "Model/output paths must be paths")
         if not isinstance(self.limits, Limits) or type(self.seed) is not int or not 0 <= self.seed < 2**32:
             raise PipelineError("INPUT_INVALID", "Invalid limits or seed")
         if (not isinstance(self.selected_ids, tuple)
                 or any(not isinstance(value, str) or not value for value in self.selected_ids)
-                or type(self.select_all) is not bool or type(self.trace_payloads) is not bool):
+                or type(self.select_all) is not bool or type(self.trace_payloads) is not bool
+                or type(self.continue_on_error) is not bool or type(self.allow_mixed_resume) is not bool
+                or type(self.selection_filter) is not bool or type(self.model_offload) is not bool):
             raise PipelineError("INPUT_INVALID", "Invalid selection/trace configuration")
+        if self.allow_mixed_resume and self.resume_from is None:
+            raise PipelineError("INPUT_INVALID", "--allow-mixed-resume requires --resume-from")
         if not isinstance(self.split, str) or self.split not in {"train", "public_test"}:
             raise PipelineError("INPUT_INVALID", "Unsupported dataset split")
         if not isinstance(self.input_mode, str) or self.input_mode not in {"transcript", "audio"}:
@@ -82,6 +91,8 @@ class RunConfig:
             raise PipelineError("INPUT_INVALID", "Transcript mode is Train-only")
         if not isinstance(self.device, str) or self.device not in {"cpu", "cuda"}:
             raise PipelineError("INPUT_INVALID", "Device must be cpu or cuda")
+        if self.model_offload and (self.device != "cuda" or self.input_mode != "audio"):
+            raise PipelineError("INPUT_INVALID", "--model-offload requires CUDA audio mode")
         if bool(self.selected_ids) == self.select_all:
             raise PipelineError("INPUT_INVALID", "Select explicit IDs or --all, exclusively")
         if len(set(self.selected_ids)) != len(self.selected_ids):

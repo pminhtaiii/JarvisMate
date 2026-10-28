@@ -6,24 +6,28 @@ import wave
 
 from ..contracts import Limits, PipelineError
 from ..dataset import wav_info
-from .common import dependencies, metadata, model_directory, parameter_count, stopping_criteria
+from .common import ModelResidency, dependencies, metadata, model_directory, parameter_count, stopping_criteria
 
 
-class LocalASR:
-    def __init__(self, path, device: str, limits: Limits, seed: int = 20261027):
+class LocalASR(ModelResidency):
+    def __init__(self, path, device: str, limits: Limits, seed: int = 20261027, *, cpu_offload=False):
         path = model_directory(path)
         torch, hf, np = dependencies(device, seed)
         self.torch, self.hf, self.np, self.device = torch, hf, np, device
+        self.cpu_offload = cpu_offload and device == "cuda"
         self.dtype = torch.float32 if device == "cpu" else torch.float16
         try:
             self.processor = hf.WhisperProcessor.from_pretrained(path, local_files_only=True, trust_remote_code=False)
             self.model = hf.WhisperForConditionalGeneration.from_pretrained(
                 path, local_files_only=True, trust_remote_code=False,
-                torch_dtype=self.dtype, attn_implementation="eager", weights_only=True).to(device)
+                dtype=self.dtype, attn_implementation="eager", weights_only=True).to("cpu" if self.cpu_offload else device)
             self.model.eval()
-            count = parameter_count(self.model, 1_000_000_000)
+            # Only the combined deployed-system budget is specified by the brief.
+            # CLI checks ASR + planner together before executing any sample.
+            count = parameter_count(self.model, 6_000_000_000)
             self.metadata = metadata(path, count, device, self.dtype, seed) | {
-                "adapter": "whisper-vietnamese", "language": "vi", "task": "transcribe"}
+                "adapter": "whisper-vietnamese", "language": "vi", "task": "transcribe",
+                "cpu_offload": self.cpu_offload}
         except PipelineError:
             raise
         except Exception as exc:

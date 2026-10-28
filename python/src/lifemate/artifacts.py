@@ -155,6 +155,7 @@ class RunStore:
         self.final_path = self.directory / "predictions.jsonl"
         self.run_id = uuid.uuid4().hex
         self.payloads = config.trace_payloads
+        self.config = config
         self.manifest = {
             "schema_version": SCHEMA_VERSION, "run_id": self.run_id,
             "status": "running", "started_at": utc_now(), "ended_at": None,
@@ -165,12 +166,15 @@ class RunStore:
             "python": platform.python_version(), "package_version": __version__,
             "prompt_version": PROMPT_VERSION, "prompt_sha256": PROMPT_HASH,
             "seed": config.seed, "device": config.device,
+            "selection_filter": config.selection_filter,
+            "model_offload": config.model_offload,
             "limits": vars(config.limits), "benchmark_deadline_configured": config.limits.timeout <= 30,
             "trace_payloads": config.trace_payloads,
             "trace_event_bytes": 65_536, "trace_sample_bytes": 8 * 1024 * 1024,
             "command": "run", "argv": list(__import__("sys").argv[1:]),
             "data_root": str(config.data_root.resolve()), "runtime_dir": str(config.runtime_dir.resolve()),
             "model_initialization_seconds": None, "samples": [],
+            "continue_on_error": config.continue_on_error, "failures": [],
         }
         try:
             self.directory.parent.mkdir(parents=True, exist_ok=True)
@@ -188,7 +192,10 @@ class RunStore:
         atomic_json(self.manifest_path, self.manifest)
 
     def selected(self, metadata: JSON, runtime_metadata: JSON) -> None:
+        from .provenance import execution_identity
+
         self.manifest.update(metadata)
+        self.manifest["execution_identity"] = execution_identity(self.config)
         self.manifest["not_started_ids"] = list(metadata["selected_ids"])
         self.manifest["runtime"] = runtime_metadata
         self.save()
@@ -197,12 +204,52 @@ class RunStore:
         return Trace(self.directory / "traces" / f"{safe_id(sample_id)}.jsonl",
                      self.run_id, sample_id, payloads=self.payloads)
 
+    def restore(self, source: Path) -> None:
+        """Import committed results into this fresh run; never reopen completed environments."""
+        from .checkpoint import read_checkpoint
+
+        if (self.manifest["completed_ids"] or self.manifest["samples"] or "resume" in self.manifest
+                or self.partial_path.stat().st_size):
+            raise PipelineError("INPUT_INVALID", "Resume import requires an empty new run", "resume")
+        rows, previous, provenance = read_checkpoint(source, self.manifest,
+                                                     allow_mixed=self.config.allow_mixed_resume)
+        atomic_json(self.directory / "resume-source-manifest.json", previous)
+        completed = [row["id"] for row in rows]
+        records = {s["id"]: s for s in previous["samples"]}
+        imported = []
+        for sample_id in completed:
+            record = dict(records.get(sample_id, {"id": sample_id, "status": "completed",
+                                                  "timing_unavailable": True}))
+            record.setdefault("source_run_id", previous["run_id"])
+            record.setdefault("trace_path", str(source.resolve() / "traces" / f"{sample_id}.jsonl"))
+            imported.append(record)
+        # Provenance must survive a crash during the row import, too. Completion is
+        # committed only by the subsequent newline-terminated, fsynced journal rows.
+        self.manifest.update(resume=provenance, samples=imported)
+        self.save()
+
+        try:
+            with self.partial_path.open("w", encoding="utf-8", newline="\n") as stream:
+                sync_write(stream, "".join(dumps(row) + "\n" for row in rows))
+        except OSError as exc:
+            raise PipelineError("OUTPUT_IO", "Cannot import resume predictions", "resume") from exc
+        self.manifest.update(completed_ids=completed,
+                             not_started_ids=[i for i in self.manifest["selected_ids"] if i not in completed])
+        self.save()
+
+    def verify_code_snapshot(self) -> None:
+        from .provenance import code_identity
+
+        if code_identity() != self.manifest["execution_identity"]["code"]:
+            raise PipelineError("INPUT_INVALID", "Pipeline code changed during this run; restart with a fixed version",
+                                "configuration")
+
     def append(self, outcome) -> None:
         if outcome.result is None or outcome.status == "failed":
             raise PipelineError("OUTPUT_IO", "Failure cannot become a prediction", "output")
         validate_prediction(outcome.result)
-        expected = self.manifest["selected_ids"][len(self.manifest["completed_ids"])]
-        if outcome.id != expected or outcome.result["id"] != expected:
+        if (outcome.id not in self.manifest["not_started_ids"]
+                or outcome.id in self.manifest["completed_ids"] or outcome.result["id"] != outcome.id):
             raise PipelineError("OUTPUT_IO", "Prediction order/identity mismatch", "output")
         try:
             with self.partial_path.open("a", encoding="utf-8", newline="\n") as stream:
@@ -216,12 +263,18 @@ class RunStore:
                                          "timings": outcome.timings, "stop_reason": outcome.stop_reason})
         self.save()
 
+    def sample_failed(self, error: JSON, sample_id: str) -> None:
+        if sample_id not in self.manifest["failed_ids"]:
+            self.manifest["failed_ids"].append(sample_id)
+            self.manifest["failures"].append({"id": sample_id, "error": sanitize(error)})
+        if sample_id in self.manifest["not_started_ids"]:
+            self.manifest["not_started_ids"].remove(sample_id)
+        self.save()
+
     def fail(self, error: JSON, sample_id: str | None = None) -> None:
         self.manifest.update(status="failed", ended_at=utc_now(), error=sanitize(error))
         if sample_id is not None:
-            self.manifest["failed_ids"] = [sample_id]
-            if sample_id in self.manifest["not_started_ids"]:
-                self.manifest["not_started_ids"].remove(sample_id)
+            self.sample_failed(error, sample_id)
         self.save()
 
     def finish(self) -> None:
@@ -230,11 +283,23 @@ class RunStore:
             for row in rows:
                 validate_prediction(row)
             ids = [row["id"] for row in rows]
-            if not ids or ids != self.manifest["selected_ids"] or ids != self.manifest["completed_ids"]:
+            if (not ids or len(set(ids)) != len(ids) or self.manifest["failed_ids"]
+                    or set(ids) != set(self.manifest["selected_ids"])
+                    or ids != self.manifest["completed_ids"]):
                 raise PipelineError("OUTPUT_IO", "Cannot publish incomplete selection", "output")
+            # Resume/continue journals can have holes; publish exactly in dataset order.
+            by_id = {row["id"]: row for row in rows}
+            ordered = self.partial_path.with_suffix(".ordered.tmp")
+            try:
+                with ordered.open("x", encoding="utf-8", newline="\n") as stream:
+                    sync_write(stream, "".join(dumps(by_id[i]) + "\n" for i in self.manifest["selected_ids"]))
+                os.replace(ordered, self.partial_path)
+            finally:
+                ordered.unlink(missing_ok=True)
             os.replace(self.partial_path, self.final_path)
             self.manifest.update(status="completed", ended_at=utc_now(),
-                                 prediction_path=str(self.final_path), not_started_ids=[])
+                                 prediction_path=str(self.final_path), not_started_ids=[],
+                                 completed_ids=list(self.manifest["selected_ids"]))
             self.save()
         except PipelineError:
             raise
