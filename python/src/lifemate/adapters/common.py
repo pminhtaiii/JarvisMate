@@ -22,6 +22,10 @@ class ModelResidency:
             return
         try:
             self.model.to(self.device)
+        except Exception as exc:
+            raise PipelineError("MODEL_UNAVAILABLE", "Cannot transfer the offloaded model to its device",
+                                "model_load") from exc
+        try:
             yield
         finally:
             self.model.to("cpu")

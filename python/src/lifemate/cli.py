@@ -128,6 +128,7 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
                 asr = (asr_factory(config.asr_model, config.device, config.limits, config.seed,
                                   **({"cpu_offload": True} if config.model_offload else {}))
                        if config.input_mode == "audio" else None)
+            store.verify_execution_snapshot()
             total_params = planner.metadata["parameter_count"] + (asr.metadata["parameter_count"] if asr else 0)
             if planner.metadata["parameter_count"] >= 5_000_000_000 or total_params >= 6_000_000_000:
                 raise PipelineError("MODEL_UNAVAILABLE", "Deployed model parameter budget exceeded", "model_load")

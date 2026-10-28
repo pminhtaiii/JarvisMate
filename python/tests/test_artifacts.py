@@ -91,6 +91,26 @@ class ArtifactTests(unittest.TestCase):
         self.assertFalse(store.final_path.exists())
         self.assertEqual(store.manifest["not_started_ids"], ["train_0003"])
 
+    def test_ordered_journal_is_published_without_rewriting(self):
+        store = self.store()
+        store.append(self.outcome())
+        inode = store.partial_path.stat().st_ino
+        # An ordered journal must publish even if the rewrite path is unavailable.
+        ordered = store.partial_path.with_suffix(".ordered.tmp")
+        ordered.write_text("unrelated marker", encoding="utf-8")
+        store.finish()
+        self.assertEqual(store.final_path.stat().st_ino, inode)
+        self.assertEqual(ordered.read_text(encoding="utf-8"), "unrelated marker")
+
+    def test_journal_with_resumed_holes_is_published_in_selected_order(self):
+        store = self.store(["train_0001", "train_0002", "train_0003"])
+        for sample_id in ("train_0001", "train_0003", "train_0002"):
+            store.append(self.outcome(sample_id))
+        store.finish()
+        rows = [json.loads(line) for line in store.final_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([row["id"] for row in rows], store.manifest["selected_ids"])
+        self.assertEqual(store.manifest["status"], "completed")
+
     def test_incomplete_selection_and_publication_failure_do_not_complete(self):
         store = self.store(["train_0001", "train_0002"])
         store.append(self.outcome())

@@ -237,6 +237,13 @@ class RunStore:
                              not_started_ids=[i for i in self.manifest["selected_ids"] if i not in completed])
         self.save()
 
+    def verify_execution_snapshot(self) -> None:
+        from .provenance import execution_identity
+
+        if execution_identity(self.config) != self.manifest["execution_identity"]:
+            raise PipelineError("INPUT_INVALID", "Execution identity changed during model loading; restart with fixed inputs",
+                                "configuration")
+
     def verify_code_snapshot(self) -> None:
         from .provenance import code_identity
 
@@ -275,6 +282,7 @@ class RunStore:
         self.manifest.update(status="failed", ended_at=utc_now(), error=sanitize(error))
         if sample_id is not None:
             self.sample_failed(error, sample_id)
+            return
         self.save()
 
     def finish(self) -> None:
@@ -287,15 +295,16 @@ class RunStore:
                     or set(ids) != set(self.manifest["selected_ids"])
                     or ids != self.manifest["completed_ids"]):
                 raise PipelineError("OUTPUT_IO", "Cannot publish incomplete selection", "output")
-            # Resume/continue journals can have holes; publish exactly in dataset order.
-            by_id = {row["id"]: row for row in rows}
-            ordered = self.partial_path.with_suffix(".ordered.tmp")
-            try:
-                with ordered.open("x", encoding="utf-8", newline="\n") as stream:
-                    sync_write(stream, "".join(dumps(by_id[i]) + "\n" for i in self.manifest["selected_ids"]))
-                os.replace(ordered, self.partial_path)
-            finally:
-                ordered.unlink(missing_ok=True)
+            if ids != self.manifest["selected_ids"]:
+                # Resume/continue journals can have holes; publish exactly in dataset order.
+                by_id = {row["id"]: row for row in rows}
+                ordered = self.partial_path.with_suffix(".ordered.tmp")
+                try:
+                    with ordered.open("x", encoding="utf-8", newline="\n") as stream:
+                        sync_write(stream, "".join(dumps(by_id[i]) + "\n" for i in self.manifest["selected_ids"]))
+                    os.replace(ordered, self.partial_path)
+                finally:
+                    ordered.unlink(missing_ok=True)
             os.replace(self.partial_path, self.final_path)
             self.manifest.update(status="completed", ended_at=utc_now(),
                                  prediction_path=str(self.final_path), not_started_ids=[],

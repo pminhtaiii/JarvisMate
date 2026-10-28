@@ -46,7 +46,10 @@ def read_checkpoint(source: Path, current: JSON, *, allow_mixed: bool = False) -
                 reject(f"Resume source differs from current {key}")
         differences = [key for key in ("execution_identity", "prompt_sha256", "prompt_version", "limits", "seed", "device", "selection_filter", "model_offload")
                        if key not in previous or previous[key] != current.get(key)]
-        if previous.get("resume", {}).get("development_composite"):
+        resume = previous.get("resume", {})
+        if not isinstance(resume, dict):
+            reject("Invalid resume provenance in source manifest")
+        if resume.get("development_composite"):
             differences.append("source_is_development_composite")
         if differences and not allow_mixed:
             reject("Resume version/configuration differs or is unknown; use a matching run or explicit --allow-mixed-resume")
@@ -68,7 +71,10 @@ def read_checkpoint(source: Path, current: JSON, *, allow_mixed: bool = False) -
         selected = set(current["selected_ids"])
         for line in raw[:end].splitlines():
             row = loads(line.decode("utf-8"))
-            validate_prediction(row)
+            try:
+                validate_prediction(row)
+            except PipelineError as exc:
+                raise PipelineError("INPUT_INVALID", "Invalid prediction in resume journal", "resume") from exc
             if row["id"] not in selected or row["id"] in seen:
                 reject("Resume predictions contain duplicate or unselected IDs")
             rows.append(row)

@@ -25,7 +25,7 @@ def execution_identity(config) -> dict:
                                             for p in files}}
 
     packages = {}
-    for name in ("torch", "transformers", "numpy", "lm-format-enforcer", "pydantic", "interegular"):
+    for name in ("torch", "transformers", "tokenizers", "numpy", "lm-format-enforcer", "pydantic", "interegular"):
         try:
             packages[name] = version(name)
         except PackageNotFoundError:

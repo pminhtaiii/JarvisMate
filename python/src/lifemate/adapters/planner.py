@@ -87,7 +87,7 @@ class LocalPlanner(ModelResidency):
         if not self.selection_filter:
             return raw
         value = copy.deepcopy(planner_input)
-        for _ in range(2):
+        for attempt in range(2):
             action = parse_action(raw, self.limits.response_bytes)
             if action["action"] == "finish":
                 return raw
@@ -125,7 +125,8 @@ class LocalPlanner(ModelResidency):
                 "rejected_response": raw, "message": "No tool was executed. Proposed ID does not satisfy "
                 "the request-derived filters. Choose a permitted remaining ID, or finish if work is complete.",
                 "filters": response["filters"], "eligible_ids": ids})
-            raw = self._action(value, remaining_seconds - (time.monotonic() - started))
+            if attempt == 0:
+                raw = self._action(value, remaining_seconds - (time.monotonic() - started))
         raise PipelineError("NO_PROGRESS", "Selection correction budget exhausted", "planner")
 
     def _select(self, value, selection, remaining_seconds):

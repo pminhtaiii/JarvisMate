@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from lifemate.adapters.asr import LocalASR
-from lifemate.adapters.common import dependencies, model_directory, stopping_criteria
+from lifemate.adapters.common import ModelResidency, dependencies, model_directory, stopping_criteria
 from lifemate.adapters.planner import LocalPlanner
 from lifemate.contracts import Limits, PipelineError
 from support import Fixture
@@ -25,6 +25,35 @@ class Array:
 
     def __truediv__(self, _):
         return self
+
+
+class ModelResidencyTests(unittest.TestCase):
+    def test_transfer_failure_preserves_cause_and_skips_inference(self):
+        adapter = ModelResidency()
+        adapter.cpu_offload, adapter.device = True, "cuda"
+        adapter.model, adapter.torch = MagicMock(), MagicMock()
+        failure = RuntimeError("device unavailable")
+        adapter.model.to.side_effect = failure
+        with self.assertRaises(PipelineError) as caught:
+            with adapter.inference_session():
+                self.fail("Inference must not start after a transfer failure")
+        self.assertEqual(caught.exception.code, "MODEL_UNAVAILABLE")
+        self.assertIs(caught.exception.__cause__, failure)
+
+    def test_successful_session_and_inference_failure_both_offload(self):
+        for failure in (None, PipelineError("PLANNER_FORMAT", "invalid action", "planner")):
+            with self.subTest(failure=failure):
+                adapter = ModelResidency()
+                adapter.cpu_offload, adapter.device = True, "cuda"
+                adapter.model, adapter.torch = MagicMock(), MagicMock()
+                try:
+                    with adapter.inference_session():
+                        if failure:
+                            raise failure
+                except PipelineError as exc:
+                    self.assertIs(exc, failure)
+                self.assertEqual([c.args[0] for c in adapter.model.to.call_args_list], ["cuda", "cpu"])
+                adapter.torch.cuda.empty_cache.assert_called_once()
 
 
 class AdapterTests(unittest.TestCase):
@@ -62,7 +91,8 @@ class AdapterTests(unittest.TestCase):
 
     def load(self, limits=None):
         with patch("lifemate.adapters.planner.dependencies", return_value=(self.torch, self.hf, self.np)), \
-             patch("lifemate.adapters.planner.metadata", return_value=self.metadata):
+             patch("lifemate.adapters.planner.metadata", return_value=self.metadata), \
+             patch("lifemate.adapters.planner.ActionConstraint"):
             return LocalPlanner(self.weights, "cpu", limits or Limits())
 
     def test_local_only_load_and_greedy_generation_reuse(self):
