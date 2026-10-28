@@ -1,6 +1,7 @@
 # Baseline implementation handoff
 
-**Date**: 2026-10-27. **Delivery branch**: `baseline` (explicit user request; no PR).
+**Initial delivery**: 2026-10-27. **Ledger clarification**: 2026-10-28.
+**Delivery branch**: `baseline`. **Review**: [Draft PR #5](https://github.com/pminhtaiii/JarvisMate/pull/5).
 **Evidence level**: source authored and statically inspected only.
 
 The user requested implementation followed by a branch push, with execution deferred
@@ -23,9 +24,12 @@ There is no model-accuracy, runtime, reproducibility or acceptance-pass claim.
 | T026 | This handoff record and test suite | Run focused suite and available opt-in checks, recording actual outcomes |
 | T027 | README/context/spec status updates | Final consistency and measured-evidence refresh after receiving-machine validation |
 
-All 27 task checkboxes remain open: implementation presence is recorded here, while
-the ledger's stated acceptance includes checks not run at the user's direction.
-Preserve existing task IDs and record actual completion after the receiver verifies them.
+The [task ledger](tasks.md) now checks the 23 source/test-authoring/documentation
+deliverables: T001-T016, T018-T020, T022-T024 and T027. This records implementation
+delivery, not passing verification. T017, T021, T025 and T026 remain open because
+they require execution. Package/foundation and controlled-integration checkpoints
+are also unverified, explicitly listed as NOT RUN in the ledger and covered by T026.
+Keep source delivery separate from acceptance evidence when reporting progress.
 
 ## Receiving-machine sequence
 
@@ -43,7 +47,7 @@ Preserve existing task IDs and record actual completion after the receiver verif
    the default 30-second constraint still needs A30 evidence.
 7. Inspect traces, exact prediction fields, failed/incomplete coverage and paired
    transcript/audio paths. Gold Train references belong only in separate evaluation.
-8. Update this file and task checkboxes only with observed evidence. Continue to
+8. Update this file and the remaining execution checkboxes only with observed evidence. Continue to
    frozen Train Validation/error analysis per the [roadmap](../../context/roadmap.md).
 
 ## Known limits requiring verification

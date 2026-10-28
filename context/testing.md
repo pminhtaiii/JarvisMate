@@ -9,7 +9,9 @@ The [Python README](../python/README.md) documents the authored implementation a
 smoke. At the user's request these tests, model loading and inference have **not**
 been executed on the authoring machine. Follow the
 [validation handoff](../specs/001-python-sample-pipeline/validation.md) and record actual
-outcomes before checking off baseline tasks or claiming tested behavior.
+outcomes before checking off execution tasks/gates or claiming tested behavior.
+Implementation-authoring checkboxes record delivered source/tests/docs only; the
+ledger separately lists the unrun acceptance gates, including controlled checks.
 
 ## Development loop
 

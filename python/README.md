@@ -191,6 +191,6 @@ offline/replay validation, A30 timing and full-split coverage checks.
 
 Record receiving-machine commands, outcomes, package/model identities and evidence in
 [validation.md](../specs/001-python-sample-pipeline/validation.md). The
-[task ledger](../specs/001-python-sample-pipeline/tasks.md) stays unchecked until its
-acceptance checks actually pass. Follow the [roadmap](../context/roadmap.md) for Train
+[task ledger](../specs/001-python-sample-pipeline/tasks.md) distinguishes delivered
+implementation from unexecuted acceptance gates. Follow the [roadmap](../context/roadmap.md) for Train
 Validation/error analysis; conditional SFT remains design-only.

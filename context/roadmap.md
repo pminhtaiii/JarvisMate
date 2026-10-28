@@ -157,7 +157,7 @@ results do not replace the frozen Train Validation comparison or authorize test 
 
 | Stage | Planned artifact | Current evidence |
 |---|---|---|
-| Baseline | Python package, controlled tests, real-model manifests/traces | Source/tests authored; unexecuted acceptance tasks remain open; see [handoff](../specs/001-python-sample-pipeline/validation.md) |
+| Baseline | Python package, controlled tests, real-model manifests/traces | 23 authoring deliverables checked; 4 execution tasks and all runtime checkpoints unverified; see [handoff](../specs/001-python-sample-pipeline/validation.md) |
 | Train Validation | Frozen sample/group manifest, per-sample results and comparison report | Planned; no partition or scores created |
 | Error analysis | Error register and recorded tune/no-tune decision | Planned; requires baseline evidence |
 | Conditional SFT | Export audit, fit/development files, training/checkpoint manifest, validation comparison | Design only; no exporter, dataset, trainer, or tuned checkpoint created |
