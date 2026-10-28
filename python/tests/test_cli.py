@@ -2,8 +2,9 @@ import contextlib
 import io
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from lifemate.adapters.common import ModelResidency
 from lifemate.cli import main
 from lifemate.contracts import PipelineError
 from lifemate.runtime import load_runtime
@@ -134,6 +135,43 @@ class CLITests(unittest.TestCase):
             self.assertEqual(self.execute(self.arguments()), 1)
         self.assertEqual(self.opened, [])
         self.assertEqual((self.fx.config().run_dir / "predictions.partial.jsonl").read_text(), "")
+
+    def test_model_file_change_during_loading_prevents_execution(self):
+        weights = self.fx.root / "weights"
+        weights.mkdir()
+        snapshot = weights / "config.json"
+        snapshot.write_text('{}', encoding="utf-8")
+
+        def load_changed_model(*args):
+            snapshot.write_text('{"changed": true}', encoding="utf-8")
+            return self.planner
+
+        with patch.object(self, "load_planner", side_effect=load_changed_model):
+            self.assertEqual(self.execute(self.arguments()), 2)
+        self.assertEqual(json.loads(self.stdout.getvalue())["error"]["code"], "INPUT_INVALID")
+        self.assertEqual(self.opened, [])
+        self.assertEqual((self.fx.config().run_dir / "predictions.partial.jsonl").read_text(), "")
+
+    def test_offload_transfer_failure_stops_continue_on_error_batch(self):
+        class OffloadedPlanner(ModelResidency, ControlledPlanner):
+            pass
+
+        self.planner = OffloadedPlanner([FINISH, FINISH])
+        self.planner.cpu_offload, self.planner.device = True, "cuda"
+        self.planner.model, self.planner.torch = MagicMock(), MagicMock()
+        failure = RuntimeError("transfer failed")
+
+        def transfer(device):
+            if device == "cuda":
+                raise failure
+
+        self.planner.model.to.side_effect = transfer
+        args = self.arguments(ids=["train_0001", "train_0002"]) + ["--continue-on-error"]
+        self.assertEqual(self.execute(args), 1)
+        summary = json.loads(self.stdout.getvalue())
+        self.assertEqual(summary["error"]["code"], "MODEL_UNAVAILABLE")
+        self.assertEqual(summary["failed_ids"], ["train_0001"])
+        self.assertEqual(self.opened, [])
 
     def test_trace_failure_prevents_tool_call_and_success_publication(self):
         self.planner = ControlledPlanner([call("contacts.search"), FINISH])

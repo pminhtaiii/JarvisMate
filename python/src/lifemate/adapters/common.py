@@ -5,10 +5,36 @@ import importlib.metadata
 import os
 import random
 import time
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from ..contracts import PipelineError
 from ..jsonio import digest
+
+
+class ModelResidency:
+    """Optional whole-model CPU storage between per-sample inference phases."""
+
+    @contextmanager
+    def inference_session(self):
+        if not self.cpu_offload:
+            yield
+            return
+        try:
+            self.model.to(self.device)
+        except Exception as exc:
+            raise PipelineError("MODEL_UNAVAILABLE", "Cannot transfer the offloaded model to its device",
+                                "model_load") from exc
+        try:
+            yield
+        finally:
+            self.model.to("cpu")
+            self.torch.cuda.empty_cache()
+
+
+def inference_session(adapter):
+    # Controlled/custom adapters need only the ordinary capability protocol.
+    return adapter.inference_session() if hasattr(adapter, "inference_session") else nullcontext()
 
 
 def model_directory(path: Path | None) -> Path:
