@@ -1,7 +1,8 @@
 # Data model
 
-These are proposed Python/dataclass and JSON contracts, not new glossary terms or
-persisted database entities. Validate all external JSON before constructing them.
+These Python/dataclass and JSON contracts guide the authored baseline source under
+`python/src/lifemate/`; execution verification is pending. They are not persisted
+database entities. Validate all external JSON before constructing them.
 
 ## RunConfig
 

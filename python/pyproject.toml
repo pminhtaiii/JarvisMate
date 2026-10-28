@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvismate-lifemate"
+version = "0.1.0"
+description = "Offline, observable LifeMate sample runner"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+inference = ["torch==2.9.0", "transformers==4.57.1", "numpy==2.3.4"]
+
+[project.scripts]
+lifemate = "lifemate.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

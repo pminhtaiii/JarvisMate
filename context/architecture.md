@@ -2,6 +2,10 @@
 
 ## Agreed outline
 
+The [Python baseline source](../python/README.md) now implements the CLI/library
+boundaries described below. It has not been installed, tested or executed here;
+receiving-machine acceptance is tracked in the [handoff](../specs/001-python-sample-pipeline/validation.md).
+
 Keep speech recognition, request/tool planning, and tool execution behind separate interfaces. The MVP path is:
 
 Use one general planner for the MVP, with only the current sample's available tools exposed; cross-domain requests remain within its sample loop. See [ADR 008](../docs/adr/008-single-general-planner-for-mvp.md) for the decision and trade-off with domain specialists.
@@ -29,10 +33,31 @@ The initial pipeline uses the organizer's simulated environment; real-service in
 
 Optimize for correct final state and matched calls together. Exact state-hash mismatch zeroes a non-empty-gold sample's score; extra or rejected calls reduce precision, and missed gold calls reduce recall. Empty-gold samples require an empty call list. These rules favor constrained tool selection, schema-valid arguments, and preserving the required call sequence for state changes. See the [benchmark reference](benchmark.md) for formulas and qualifications.
 
+## Development and training boundaries
+
+The [roadmap](roadmap.md) places Train Validation and error analysis after the
+pretrained baseline. Conditional [planner SFT](../docs/design/train-to-sft.md) is an
+offline development path: a separate exporter may read Train gold labels to construct
+strictly previous call/result observations and next-action targets. It does not read
+environment files, change `ToolEnv`, or expose labels/future observations to inference.
+
+A tuned checkpoint must implement the same planner interface and call/finish grammar.
+ASR remains replaceable; the Python loop still controls validation, eligibility,
+bounds, dispatch and authoritative output. Training/export/evaluation remain separate
+from the inference sample loop and eventual TypeScript worker protocol. No training
+implementation or runtime result is established by this design.
+
 ## Provisional contracts
 
 Build the Python worker with a direct command-line entry point before connecting the TypeScript harness. First verify the training-transcript path, keeping labels out of planner inputs, then connect ASR for the audio path. These are implementation checkpoints, not substitutes for audio-input submission evaluation.
 
-The module boundaries above are agreed, but detailed interfaces and orchestration contracts remain provisional. Keep ASR, planning, and execution replaceable; agree exact input/output contracts with component owners before implementation depends on them. TypeScript owns the outer harness; Python owns each sample's complete execution loop and single `ToolEnv`. See the [technology stack](tech_stack.md) for model experiments, runtime choices, and unresolved failure behavior. Component ownership and the MVP scenario remain open in the [project context](README.md).
+The Python CLI/library contracts are authored in `python/src/lifemate/`: contracts,
+dataset, runtime, prompting, agent, artifacts, CLI and separate local model adapters.
+They await behavioral validation. TypeScript still owns the eventual outer harness;
+its transport is deferred. Python owns each complete sample and single `ToolEnv`.
+ASR/planner instances are reused across the selected sequential batch. The CLI uses
+cooperative deadlines and stops on the first failure; hard process supervision and
+final-container failure formatting remain later work. See [technology stack](tech_stack.md)
+and the [handoff](../specs/001-python-sample-pipeline/validation.md).
 
 The [team workflow](team.md) defines ownership and shared coordination. Track interface discussions and progress in GitHub issues or pull requests, and update concise project context when a settled choice affects other components.

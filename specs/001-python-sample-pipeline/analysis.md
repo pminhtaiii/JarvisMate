@@ -3,6 +3,9 @@
 **Date**: 2026-10-27. Scope: planning artifacts only; no Python pipeline or model
 inference has been implemented or verified by this report.
 
+This is a historical planning snapshot. For current implementation-delivery and
+execution-gate status, read [tasks.md](tasks.md) and [validation.md](validation.md).
+
 ## Workflow provenance
 
 - Initialized official Spec Kit 1.2.3 shared scaffolding with the `none` integration

@@ -1,7 +1,9 @@
 # Quickstart validation guide
 
-**Status**: Proposed commands for the implementation. No `lifemate` CLI exists yet;
-these are acceptance steps, not evidence of already working inference.
+**Status**: Acceptance commands for the authored `lifemate` CLI, not yet executed.
+The [Python README](../../python/README.md) gives the current receiving-machine setup,
+including the complete ZIP data-root alternative to `sample/`. See
+[validation.md](validation.md) for unrun checks and handoff responsibilities.
 
 ## 1. Prepare the local subset layout
 

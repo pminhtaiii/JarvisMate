@@ -3,7 +3,7 @@
 **Feature**: `001-python-sample-pipeline`
 **Git branch at planning**: `feat/docs-lifemate-stack` (unchanged; no branch created)
 **Created**: 2026-10-27
-**Status**: Ready for implementation review; implementation not started
+**Status**: Baseline source/tests authored; execution acceptance deferred to receiving teammate
 **Input**: Build the Python pipeline on a few supplied competition samples first,
 using one general planner, structured ReAct, organizer tools, required traces,
 stop-on-failure behavior, and competition-shaped JSONL results. Start from training

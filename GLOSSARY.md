@@ -24,6 +24,19 @@ The value returned by `ToolEnv.get_state_hash()` after a sample's calls. It repr
 ## Missing-information call
 `sys.ask_missing_info`, the meta tool used when required arguments are unavailable. It is scored as a tool call.
 
+## Train Validation
+
+A frozen held-out partition of the supplied Train data used for development evaluation,
+error analysis, and model selection. It is excluded from fitting and derived SFT fit
+examples; it is not public/private test. See the [roadmap](context/roadmap.md).
+
+## Supervised fine-tuning (SFT)
+
+Conditional planner training on supplied Train gold trajectories: a request, context,
+available tools, and previous call/result observations supervise one next action.
+The [data design](docs/design/train-to-sft.md) keeps future observations out of inputs
+and trains the action completion, while the runtime retains execution control.
+
 ## Component owner
 A teammate responsible for a bounded part of the solution end to end: its implementation, tests, integration, and any UI needed for that part. Exact ownership assignments are tracked in GitHub issues and PRs.
 
