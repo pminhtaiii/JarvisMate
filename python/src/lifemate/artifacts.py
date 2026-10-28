@@ -17,10 +17,10 @@ from .jsonio import dumps, loads, safe_id
 from .prompting import PROMPT_HASH, PROMPT_VERSION
 
 SCHEMA_VERSION = 1
-SECRET_KEY = re.compile(r"password|secret|api[_-]?key|authorization|access[_-]?token|^token$", re.I)
+SECRET_KEY = re.compile(r"password|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|^token$", re.I)
 BEARER = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.I)
 SECRET_TEXT = re.compile(
-    r'''((?:password|secret|api[_-]?key|access[_-]?token|authorization)["']?\s*[:=]\s*)["']?[^\s,;}"']+''', re.I)
+    r'''((?:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)["']?[^\s,;}"']+''', re.I)
 
 
 def utc_now() -> str:

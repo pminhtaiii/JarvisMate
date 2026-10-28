@@ -64,6 +64,27 @@ class ArtifactTests(unittest.TestCase):
         trace.close()
         self.assertNotIn("TOP_SECRET_VALUE", path.read_text(encoding="utf-8"))
 
+    def test_refresh_tokens_are_redacted_in_payload_keys_json_and_inline_text(self):
+        path = self.fx.root / "refresh.jsonl"
+        trace = Trace(path, "run", "train_0001", payloads=True)
+        self.addCleanup(trace.close)
+        for key in ("refresh_token", "refresh-token", "refreshToken", "REFRESH_TOKEN"):
+            with self.subTest(key=key):
+                trace.emit("tool_call_result", payload={
+                    "nested": [{key: "KEY_VALUE"}],
+                    "response": json.dumps({"arguments": {key: "JSON_VALUE"}}),
+                    "text": f'{key}=INLINE_VALUE; "{key}": "QUOTED_VALUE"',
+                    "status": "ok",
+                })
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        for row in rows:
+            self.assertTrue(row["payload_redacted"])
+            self.assertEqual(row["payload"]["status"], "ok")
+            self.assertIn("[REDACTED]", row["payload"]["text"])
+        raw = path.read_text(encoding="utf-8")
+        for secret in ("KEY_VALUE", "JSON_VALUE", "INLINE_VALUE", "QUOTED_VALUE"):
+            self.assertNotIn(secret, raw)
+
     def test_extra_prediction_fields_rejected(self):
         row = self.outcome().result | {"trace": "not a submission field"}
         with self.assertRaises(PipelineError):

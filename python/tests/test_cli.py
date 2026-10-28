@@ -110,6 +110,25 @@ class CLITests(unittest.TestCase):
         self.assertEqual(self.opened, [])
         self.assertEqual(json.loads((directory / "manifest.json").read_text(encoding="utf-8"))["status"], "failed")
 
+    def test_truncated_audio_fails_before_loading_models_or_creating_sample_traces(self):
+        target = self.fx.split / self.fx.rows[0]["audio"]
+        target.write_bytes(target.read_bytes()[:-1])
+        args = self.arguments()
+        args[args.index("transcript")] = "audio"
+        with patch("lifemate.cli.LocalASR") as asr_factory:
+            with contextlib.redirect_stdout(self.stdout), contextlib.redirect_stderr(self.stderr):
+                code = main(args, planner_factory=self.load_planner, asr_factory=asr_factory,
+                            runtime_loader=self.runtime)
+        self.assertEqual(code, 2)
+        self.assertEqual(self.model_loads, [])
+        asr_factory.assert_not_called()
+        self.assertEqual(self.opened, [])
+        directory = self.fx.config().run_dir
+        self.assertEqual(list((directory / "traces").iterdir()), [])
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(manifest["error"]["code"], "INPUT_INVALID")
+
     def test_model_load_failure_never_fabricates_result(self):
         with patch.object(self, "load_planner", side_effect=PipelineError("MODEL_UNAVAILABLE", "missing", "model_load")):
             self.assertEqual(self.execute(self.arguments()), 1)

@@ -1,8 +1,9 @@
 import unittest
+import wave
 
 from lifemate.agent import run_sample
 from lifemate.contracts import Deadline, Limits, PipelineError
-from lifemate.dataset import preflight, prepare_request
+from lifemate.dataset import preflight, prepare_request, wav_info
 from support import FINISH, ControlledASR, ControlledEnvironment, ControlledPlanner, Fixture, MemoryTrace, wav
 
 
@@ -48,6 +49,33 @@ class AudioTests(unittest.TestCase):
         target.unlink()
         with self.assertRaises(PipelineError):
             preflight(self.fx.config(input_mode="audio"))
+
+    def test_truncated_wav_payload_fails_preflight_for_current_and_history_audio(self):
+        self.history()
+        for value in (self.fx.rows[0]["audio"], self.fx.rows[0]["history"][0]["audio"]):
+            target = self.fx.split / value
+            original = target.read_bytes()
+            self.assertEqual(wav_info(target), {"frames": 160, "seconds": 0.01})
+            for missing in (1, 2, 320):
+                with self.subTest(audio=value, missing=missing):
+                    target.write_bytes(original[:-missing])
+                    with self.assertRaises(PipelineError) as caught:
+                        preflight(self.fx.config(input_mode="audio"))
+                    self.assertEqual(caught.exception.code, "INPUT_INVALID")
+            target.write_bytes(original)
+
+    def test_wav_duration_boundaries(self):
+        target = self.fx.split / self.fx.rows[0]["audio"]
+        for frames in (0, 1, 480000, 480001):
+            with self.subTest(frames=frames):
+                with wave.open(str(target), "wb") as stream:
+                    stream.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+                    stream.writeframes(b"\0\0" * frames)
+                if 0 < frames <= 480000:
+                    self.assertEqual(wav_info(target), {"frames": frames, "seconds": frames / 16000})
+                else:
+                    with self.assertRaises(PipelineError):
+                        wav_info(target)
 
     def test_asr_failure_has_no_transcript_fallback_or_environment(self):
         self.history()

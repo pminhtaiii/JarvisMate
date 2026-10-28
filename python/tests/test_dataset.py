@@ -48,7 +48,7 @@ class DatasetTests(unittest.TestCase):
                 preflight(self.fx.config())
 
     def test_unsafe_audio_paths_fail(self):
-        for value in ("../outside.wav", "/audio.wav", "C:/audio.wav", "audio/../../outside.wav",
+        for value in (".", "./", "../outside.wav", "/audio.wav", "C:/audio.wav", "audio/../../outside.wav",
                       "train_environment/train_0001/state.json"):
             self.fx.rows[0]["audio"] = value
             self.fx.write()

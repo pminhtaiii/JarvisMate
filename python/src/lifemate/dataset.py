@@ -69,9 +69,12 @@ def wav_info(path: Path) -> JSON:
             require(wav.getcomptype() == "NONE" and wav.getnchannels() == 1
                     and wav.getsampwidth() == 2 and wav.getframerate() == 16000,
                     "Audio must be mono 16-kHz 16-bit PCM WAV")
-            seconds = wav.getnframes() / 16000
+            frames = wav.getnframes()
+            seconds = frames / 16000
             require(0 < seconds <= 30, "Baseline supports nonempty WAVs up to 30 seconds")
-            return {"frames": wav.getnframes(), "seconds": seconds}
+            require(len(wav.readframes(frames)) == frames * wav.getnchannels() * wav.getsampwidth(),
+                    "Audio WAV payload is truncated")
+            return {"frames": frames, "seconds": seconds}
     except (OSError, EOFError, wave.Error) as exc:
         raise PipelineError("INPUT_INVALID", "Invalid/unreadable WAV") from exc
 
@@ -79,7 +82,7 @@ def wav_info(path: Path) -> JSON:
 def audio_path(base: Path, value, required: bool) -> Path:
     text(value, "audio path")
     parts = PurePosixPath(value)
-    require(parts.parts[0] == "audio" and parts.suffix.lower() == ".wav",
+    require(bool(parts.parts) and parts.parts[0] == "audio" and parts.suffix.lower() == ".wav",
             "Audio must reference a WAV under audio/")
     result = contained(base, value, must_exist=required)
     root = base.resolve() / "audio"
