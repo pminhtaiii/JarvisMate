@@ -9,6 +9,7 @@ from lifemate.adapters.common import ModelResidency, dependencies, model_directo
 from lifemate.adapters.planner import LocalPlanner
 from lifemate.contracts import Limits, PipelineError
 from lifemate.metrics import SpanRecorder
+from lifemate.prompt_profiles import PRECISE_V1_SYSTEM, resolve_profile
 from support import Fixture
 
 
@@ -90,11 +91,11 @@ class AdapterTests(unittest.TestCase):
         self.input = {"request": "Chào", "context": {}, "history": [],
                       "available_tools": [], "observations": []}
 
-    def load(self, limits=None):
+    def load(self, limits=None, **kwargs):
         with patch("lifemate.adapters.planner.dependencies", return_value=(self.torch, self.hf, self.np)), \
              patch("lifemate.adapters.planner.metadata", return_value=self.metadata), \
              patch("lifemate.adapters.planner.ActionConstraint"):
-            return LocalPlanner(self.weights, "cpu", limits or Limits())
+            return LocalPlanner(self.weights, "cpu", limits or Limits(), **kwargs)
 
     def test_local_only_load_and_greedy_generation_reuse(self):
         planner = self.load()
@@ -114,6 +115,41 @@ class AdapterTests(unittest.TestCase):
         planner = self.load(Limits(context_tokens=20, output_tokens=15))
         with self.assertRaises(PipelineError) as caught:
             planner.next_action(self.input, 30)
+        self.assertEqual(caught.exception.code, "CONTEXT_LIMIT")
+        self.model.generate.assert_not_called()
+
+    def test_default_profile_is_baseline_and_recorded_in_metadata(self):
+        planner = self.load()
+        self.assertEqual(planner.metadata["prompt_profile"]["profile"], "baseline")
+        self.assertIsNone(planner.metadata["example_overhead_tokens"])
+        self.assertIsNone(planner.metadata["few_shot_token_budget"])
+
+    def test_precise_v1_profile_changes_the_rendered_system_message(self):
+        captured = []
+        self.tokenizer.apply_chat_template.side_effect = lambda turns, **kw: (captured.append(turns), "rendered")[1]
+        planner = self.load(profile=resolve_profile("precise-v1"))
+        planner.next_action(self.input, 30)
+        self.assertEqual(captured[0][0]["content"], PRECISE_V1_SYSTEM)
+        self.assertEqual(planner.metadata["prompt_profile"]["profile"], "precise-v1")
+
+    def test_examples_add_measurable_token_overhead_and_are_recorded(self):
+        example = {"input": {"request": "Gửi tin", "context": {}, "history": [], "available_tools": [],
+                             "observations": []}, "target": {"action": "finish"}}
+        # A deterministic stand-in for real tokenization: render length tracks turn count.
+        self.tokenizer.apply_chat_template.side_effect = lambda turns, **kw: "x" * len(turns)
+        self.tokenizer.side_effect = lambda text, **kw: {"input_ids": Tensor(len(text))}
+        planner = self.load(examples=(example,), few_shot_token_budget=100)
+        self.assertEqual(planner.example_overhead_tokens, 2)  # two added demonstration turns
+        self.assertEqual(planner.metadata["example_overhead_tokens"], 2)
+        self.assertEqual(planner.metadata["few_shot_token_budget"], 100)
+
+    def test_examples_exceeding_the_few_shot_token_budget_raise_before_any_sample(self):
+        example = {"input": {"request": "Gửi tin", "context": {}, "history": [], "available_tools": [],
+                             "observations": []}, "target": {"action": "finish"}}
+        self.tokenizer.apply_chat_template.side_effect = lambda turns, **kw: "x" * len(turns)
+        self.tokenizer.side_effect = lambda text, **kw: {"input_ids": Tensor(len(text))}
+        with self.assertRaises(PipelineError) as caught:
+            self.load(examples=(example,), few_shot_token_budget=1)
         self.assertEqual(caught.exception.code, "CONTEXT_LIMIT")
         self.model.generate.assert_not_called()
 

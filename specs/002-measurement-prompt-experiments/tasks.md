@@ -46,11 +46,11 @@ or runtime benchmarks are executed by generating this list.
 **Goal**: Opt-in deterministic prompt factors with provenance and leakage checks.
 **Independent test**: Rendered messages, fit/group fixtures, budgets and checkpoint identity.
 
-- [ ] T013 [US3] Define baseline/precise-v1 profiles and fixed bundle/partition validation in `python/src/lifemate/prompt_profiles.py`; add offline source-prefix/target audit in `example_audit.py` per `contracts/prompts.md`, with fit/group/catalog checks and deterministic identity.
-- [ ] T014 [US3] Extend `python/src/lifemate/prompting.py` for resolved instructions and separately scoped fixed demonstrations; preserve exact baseline rendering and live top-level allowlist, and enforce added-token/full-context budgets in `adapters/planner.py`.
-- [ ] T015 [US3] Wire proposed run options and separate `audit-examples` command through `python/src/lifemate/cli.py`, `contracts.py`, and `adapters/planner.py`; reject invalid combinations/non-validation selections/overlaps before inference and record example overhead.
-- [ ] T016 [US3] Include effective profile/template/bundle/partition/budget identity in `python/src/lifemate/artifacts.py`, `provenance.py`, and `checkpoint.py`; test baseline legacy handling and strict/mixed resume behavior.
-- [ ] T017 [US3] Add `python/tests/test_prompt_profiles.py` and extend relevant CLI/prompt/checkpoint tests for exact baseline messages, scoped IDs, strict-prefix rejection, fit/validation group exclusion, frozen hashes, changed artifacts, deterministic order and overflow.
+- [x] T013 [US3] Define baseline/precise-v1 profiles and fixed bundle/partition validation in `python/src/lifemate/prompt_profiles.py`; add offline source-prefix/target audit in `example_audit.py` per `contracts/prompts.md`, with fit/group/catalog checks and deterministic identity.
+- [x] T014 [US3] Extend `python/src/lifemate/prompting.py` for resolved instructions and separately scoped fixed demonstrations; preserve exact baseline rendering and live top-level allowlist, and enforce added-token/full-context budgets in `adapters/planner.py`.
+- [x] T015 [US3] Wire proposed run options and separate `audit-examples` command through `python/src/lifemate/cli.py`, `contracts.py`, and `adapters/planner.py`; reject invalid combinations/non-validation selections/overlaps before inference and record example overhead.
+- [x] T016 [US3] Include effective profile/template/bundle/partition/budget identity in `python/src/lifemate/artifacts.py`, `provenance.py`, and `checkpoint.py`; test baseline legacy handling and strict/mixed resume behavior.
+- [x] T017 [US3] Add `python/tests/test_prompt_profiles.py` and extend relevant CLI/prompt/checkpoint tests for exact baseline messages, scoped IDs, strict-prefix rejection, fit/validation group exclusion, frozen hashes, changed artifacts, deterministic order and overflow.
 
 **Checkpoint**: US3 configuration/rendering is independently verifiable; model-quality
 claims still require US2 reports and actual held-out evaluation.

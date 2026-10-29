@@ -66,13 +66,30 @@ class RunConfig:
     allow_mixed_resume: bool = False
     selection_filter: bool = False
     model_offload: bool = False
+    prompt_profile: str = "baseline"
+    few_shot_bundle: Path | None = None
+    partition_manifest: Path | None = None
+    few_shot_token_budget: int | None = None
 
     def __post_init__(self):
         if not isinstance(self.data_root, Path) or not isinstance(self.runtime_dir, Path):
             raise PipelineError("INPUT_INVALID", "Data/runtime directories must be paths")
         if any(p is not None and not isinstance(p, Path)
-               for p in (self.run_dir, self.planner_model, self.asr_model, self.resume_from)):
+               for p in (self.run_dir, self.planner_model, self.asr_model, self.resume_from,
+                         self.few_shot_bundle, self.partition_manifest)):
             raise PipelineError("INPUT_INVALID", "Model/output paths must be paths")
+        if self.prompt_profile not in {"baseline", "precise-v1"}:
+            raise PipelineError("INPUT_INVALID", "Unsupported prompt profile")
+        if self.few_shot_bundle is None and self.partition_manifest is not None:
+            raise PipelineError("INPUT_INVALID", "--partition-manifest requires --few-shot-bundle")
+        if self.few_shot_bundle is not None and self.partition_manifest is None:
+            raise PipelineError("INPUT_INVALID", "--few-shot-bundle requires --partition-manifest")
+        if self.few_shot_bundle is None and self.few_shot_token_budget is not None:
+            raise PipelineError("INPUT_INVALID", "--few-shot-token-budget requires --few-shot-bundle")
+        if self.few_shot_bundle is not None and (
+                type(self.few_shot_token_budget) is not int
+                or not 0 < self.few_shot_token_budget <= 2048):
+            raise PipelineError("INPUT_INVALID", "--few-shot-token-budget must be a positive integer up to 2048")
         if not isinstance(self.limits, Limits) or type(self.seed) is not int or not 0 <= self.seed < 2**32:
             raise PipelineError("INPUT_INVALID", "Invalid limits or seed")
         if (not isinstance(self.selected_ids, tuple)

@@ -153,6 +153,11 @@ class ArtifactTests(unittest.TestCase):
         # A final filename alone must not establish successful publication.
         self.assertEqual(json.loads(store.manifest_path.read_text(encoding="utf-8"))["status"], "running")
 
+    def test_manifest_defaults_effective_prompt_to_null_not_missing(self):
+        store = self.store()
+        self.assertIn("effective_prompt", store.manifest)
+        self.assertIsNone(store.manifest["effective_prompt"])
+
     def test_manifest_carries_the_metrics_schema_version(self):
         store = self.store()
         self.assertEqual(store.manifest["metrics_schema_version"], METRICS_SCHEMA_VERSION)

@@ -43,6 +43,15 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(rows, [self.row])
         self.assertFalse(provenance["development_composite"])
 
+    def test_different_effective_prompt_requires_mixed_resume(self):
+        self.store.append(SampleOutcome("train_0001", "completed", 0.1, 1, "finish", result=self.row))
+        current = self.store.manifest | {"effective_prompt": {"profile": {"profile": "precise-v1"}}}
+        with self.assertRaises(PipelineError):
+            read_checkpoint(self.store.directory, current)
+        rows, _, provenance = read_checkpoint(self.store.directory, current, allow_mixed=True)
+        self.assertTrue(provenance["development_composite"])
+        self.assertIn("effective_prompt", provenance["configuration_differences"])
+
     def test_tokenizers_version_change_requires_recomputation(self):
         with patch("lifemate.provenance.version", return_value="old"):
             self.store.manifest["execution_identity"] = execution_identity(self.store.config)

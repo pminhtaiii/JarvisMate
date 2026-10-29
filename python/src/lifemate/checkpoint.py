@@ -44,7 +44,8 @@ def read_checkpoint(source: Path, current: JSON, *, allow_mixed: bool = False) -
                     "dataset_sha256", "catalog_sha256", "runtime"):
             if key not in previous or previous[key] != current[key]:
                 reject(f"Resume source differs from current {key}")
-        differences = [key for key in ("execution_identity", "prompt_sha256", "prompt_version", "limits", "seed", "device", "selection_filter", "model_offload")
+        differences = [key for key in ("execution_identity", "prompt_sha256", "prompt_version", "limits", "seed",
+                                       "device", "selection_filter", "model_offload", "effective_prompt")
                        if key not in previous or previous[key] != current.get(key)]
         resume = previous.get("resume", {})
         if not isinstance(resume, dict):

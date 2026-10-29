@@ -13,8 +13,13 @@ from .agent import run_sample
 from .artifacts import RunStore
 from .contracts import Limits, PipelineError, RunConfig
 from .dataset import preflight
-from .jsonio import dumps
+from .example_audit import audit_bundle, write_audited_bundle
+from .jsonio import digest, dumps, read_json
 from .metrics import Clock, SpanRecorder
+from .prompt_profiles import (
+    DEFAULT_FEW_SHOT_TOKEN_BUDGET, PROFILES, bundle_identity, load_partition_manifest, profile_identity,
+    reject_fit_in_selection, resolve_profile, validate_bundle,
+)
 from .reporting import (
     build_comparison, build_report, load_manifest, validate_comparison_output, write_comparison, write_report,
 )
@@ -59,6 +64,16 @@ def parser() -> Parser:
             child.add_argument("--sample-timeout-seconds", default=30.0, type=float)
             child.add_argument("--context-limit", default=16_384, type=int)
             child.add_argument("--max-new-tokens", default=512, type=int)
+            child.add_argument("--prompt-profile", default="baseline", choices=PROFILES)
+            child.add_argument("--few-shot-bundle", type=Path)
+            child.add_argument("--partition-manifest", type=Path)
+            child.add_argument("--few-shot-token-budget", type=int)
+    audit = sub.add_parser("audit-examples")
+    audit.add_argument("--bundle", required=True, type=Path)
+    audit.add_argument("--partition-manifest", required=True, type=Path)
+    audit.add_argument("--train-jsonl", required=True, type=Path)
+    audit.add_argument("--catalog", required=True, type=Path)
+    audit.add_argument("--output", required=True, type=Path)
     report = sub.add_parser("report")
     report.add_argument("--run-dir", required=True, type=Path)
     report.add_argument("--evaluation-file", type=Path)
@@ -89,7 +104,14 @@ def configuration(args) -> RunConfig:
         continue_on_error=args.continue_on_error if running else False,
         allow_mixed_resume=args.allow_mixed_resume if running else False,
         selection_filter=args.selection_filter if running else False,
-        model_offload=args.model_offload if running else False)
+        model_offload=args.model_offload if running else False,
+        prompt_profile=args.prompt_profile if running else "baseline",
+        few_shot_bundle=args.few_shot_bundle if running else None,
+        partition_manifest=args.partition_manifest if running else None,
+        few_shot_token_budget=((DEFAULT_FEW_SHOT_TOKEN_BUDGET if args.few_shot_token_budget is None
+                                else args.few_shot_token_budget)
+                               if running and args.few_shot_bundle is not None else
+                               (args.few_shot_token_budget if running else None)))
 
 
 def cmd_report(args) -> int:
@@ -135,6 +157,41 @@ def cmd_compare_runs(args) -> int:
         return 1
 
 
+def cmd_audit_examples(args) -> int:
+    """Offline bundle audit: parses Train labels, never used by inference itself."""
+    try:
+        audited = audit_bundle(args.bundle, args.partition_manifest, args.train_jsonl, args.catalog)
+        write_audited_bundle(args.output, audited)
+        print(dumps({"status": "completed", "output": str(args.output.resolve()),
+                     **bundle_identity(audited)}))
+        return 0
+    except PipelineError as exc:
+        print(dumps({"status": "failed", "error": exc.record()}))
+        return 1
+    except (OSError, ValueError, TypeError, RecursionError):
+        print(dumps({"status": "failed", "error": PipelineError(
+            "OUTPUT_IO", "Example audit failed", "audit").record()}))
+        return 1
+
+
+def resolve_prompt_configuration(config: RunConfig, dataset_metadata) -> dict:
+    """Resolve profile/bundle before any model load; reject invalid selections here."""
+    profile = resolve_profile(config.prompt_profile)
+    result = {"profile": profile, "examples": (), "identity": {
+        "profile": profile_identity(profile), "bundle": None, "few_shot_token_budget": None}}
+    if config.few_shot_bundle is None:
+        return result
+    partition_sha256 = digest(config.partition_manifest)
+    _, members = load_partition_manifest(config.partition_manifest)
+    bundle = read_json(config.few_shot_bundle)
+    validate_bundle(bundle, members, partition_sha256, dataset_metadata["catalog_sha256"])
+    reject_fit_in_selection(dataset_metadata["selected_ids"], members)
+    result["examples"] = tuple(bundle["examples"])
+    result["identity"]["bundle"] = bundle_identity(bundle) | {"partition_sha256": partition_sha256}
+    result["identity"]["few_shot_token_budget"] = config.few_shot_token_budget
+    return result
+
+
 def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
          runtime_loader=load_runtime, clock=time.monotonic) -> int:
     store, sample_id, attempt_start, recorder, agent_loop = None, None, None, None, None
@@ -145,6 +202,8 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
             return cmd_report(args)
         if args.command == "compare-runs":
             return cmd_compare_runs(args)
+        if args.command == "audit-examples":
+            return cmd_audit_examples(args)
         config = configuration(args)
         if args.command == "run":
             output = config.run_dir.resolve()
@@ -167,6 +226,9 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
             return 0
         print("[run] Fingerprinting code and local model files...", file=sys.stderr, flush=True)
         store.selected(dataset.metadata, factory.metadata)
+        prompt_config = resolve_prompt_configuration(config, dataset.metadata)
+        store.manifest["effective_prompt"] = prompt_config["identity"]
+        store.save()
         if config.resume_from is not None:
             store.restore(config.resume_from)
             if store.manifest["resume"]["development_composite"]:
@@ -185,10 +247,17 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
             with contextlib.redirect_stdout(sys.stderr):
                 planner = planner_factory(config.planner_model, config.device, config.limits, config.seed,
                     **({"selection_filter": True} if config.selection_filter else {}),
-                    **({"cpu_offload": True} if config.model_offload else {}))
+                    **({"cpu_offload": True} if config.model_offload else {}),
+                    **({"profile": prompt_config["profile"]} if config.prompt_profile != "baseline" else {}),
+                    **({"examples": prompt_config["examples"], "few_shot_token_budget": config.few_shot_token_budget}
+                       if prompt_config["examples"] else {}))
                 asr = (asr_factory(config.asr_model, config.device, config.limits, config.seed,
                                   **({"cpu_offload": True} if config.model_offload else {}))
                        if config.input_mode == "audio" else None)
+            if prompt_config["examples"]:
+                store.manifest["effective_prompt"]["example_overhead_tokens"] = getattr(
+                    planner, "example_overhead_tokens", None)
+                store.save()
             store.verify_execution_snapshot()
             total_params = planner.metadata["parameter_count"] + (asr.metadata["parameter_count"] if asr else 0)
             if planner.metadata["parameter_count"] >= 5_000_000_000 or total_params >= 6_000_000_000:

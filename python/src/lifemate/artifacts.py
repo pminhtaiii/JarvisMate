@@ -173,7 +173,7 @@ class RunStore:
             "selected_ids": [], "completed_ids": [], "failed_ids": [], "not_started_ids": [],
             "submission_ready": False, "code": code_provenance(),
             "python": platform.python_version(), "package_version": __version__,
-            "prompt_version": PROMPT_VERSION, "prompt_sha256": PROMPT_HASH,
+            "prompt_version": PROMPT_VERSION, "prompt_sha256": PROMPT_HASH, "effective_prompt": None,
             "seed": config.seed, "device": config.device,
             "selection_filter": config.selection_filter,
             "model_offload": config.model_offload,
