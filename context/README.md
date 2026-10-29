@@ -6,6 +6,7 @@ Start here and load only the page needed for the task. These pages describe the 
 |---|---|
 | Understand the goal and MVP boundary | [Project overview](project_overview.md) |
 | Follow baseline, Train Validation, error analysis, and conditional tuning | [Development roadmap](roadmap.md) |
+| Plan PhoWhisper-large ASR fine-tuning E0–E4 | [ASR fine-tuning specs](../asr/fine-tuned/README.md) (design only; fixed ASR seed-42 split) |
 | Design Train gold-to-SFT conversion | [Planner SFT data design](../docs/design/train-to-sft.md) |
 | Design or change component boundaries | [Architecture](architecture.md) |
 | Choose models, languages, or runtime tooling | [Technology stack](tech_stack.md) |

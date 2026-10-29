@@ -1,5 +1,10 @@
 # LifeMate Python baseline
 
+Pretrained ASR comparison has a separate CLI under
+[`asr/pretrained/`](../asr/pretrained/README.md), including Windows CPU setup,
+explicit model preparation, seed-42 grouped manifests and benchmark commands.
+It does not change the baseline CLI below.
+
 Implementation handoff for [feature 001](../specs/001-python-sample-pipeline/spec.md).
 **Source and tests are authored; installation, tests, real-runtime checks and model
 inference have not been run by the author, at the user's request.** The pinned optional
