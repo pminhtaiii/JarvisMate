@@ -11,5 +11,5 @@ LifeMate is the active project. Read [context/README.md](context/README.md) for 
 The inherited slop-loop context pages and helper scripts are reference material. Use them as examples when useful; they do not define LifeMate requirements or authorize LifeMate implementation.
 
 <!-- SPECKIT START -->
-For the runnable Python pipeline, read [specs/001-python-sample-pipeline/plan.md](specs/001-python-sample-pipeline/plan.md) and its linked spec, contracts, and tasks.
+For pipeline measurement or prompt experiments, read [specs/002-measurement-prompt-experiments/plan.md](specs/002-measurement-prompt-experiments/plan.md) and its linked spec, contracts, and tasks. The plan links to the runnable Python baseline contracts.
 <!-- SPECKIT END -->

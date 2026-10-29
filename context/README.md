@@ -7,6 +7,7 @@ Start here and load only the page needed for the task. These pages describe the 
 | Understand the goal and MVP boundary | [Project overview](project_overview.md) |
 | Follow baseline, Train Validation, error analysis, and conditional tuning | [Development roadmap](roadmap.md) |
 | Design Train gold-to-SFT conversion | [Planner SFT data design](../docs/design/train-to-sft.md) |
+| Plan pipeline measurement or prompt experiments | [Measurement and prompt plan](../specs/002-measurement-prompt-experiments/plan.md) |
 | Design or change component boundaries | [Architecture](architecture.md) |
 | Choose models, languages, or runtime tooling | [Technology stack](tech_stack.md) |
 | Implement or review code quality | [Code standards](code_standard.md) |
