@@ -15,6 +15,9 @@ from .contracts import Limits, PipelineError, RunConfig
 from .dataset import preflight
 from .jsonio import dumps
 from .metrics import Clock, SpanRecorder
+from .reporting import (
+    build_comparison, build_report, load_manifest, validate_comparison_output, write_comparison, write_report,
+)
 from .runtime import load_runtime
 
 
@@ -56,6 +59,16 @@ def parser() -> Parser:
             child.add_argument("--sample-timeout-seconds", default=30.0, type=float)
             child.add_argument("--context-limit", default=16_384, type=int)
             child.add_argument("--max-new-tokens", default=512, type=int)
+    report = sub.add_parser("report")
+    report.add_argument("--run-dir", required=True, type=Path)
+    report.add_argument("--evaluation-file", type=Path)
+    compare = sub.add_parser("compare-runs")
+    compare.add_argument("--baseline-run", required=True, type=Path)
+    compare.add_argument("--candidate-run", required=True, type=Path)
+    compare.add_argument("--factor", required=True, choices=("harness", "instructions", "few-shot"))
+    compare.add_argument("--baseline-evaluation", type=Path)
+    compare.add_argument("--candidate-evaluation", type=Path)
+    compare.add_argument("--output-dir", required=True, type=Path)
     return root
 
 
@@ -79,12 +92,59 @@ def configuration(args) -> RunConfig:
         model_offload=args.model_offload if running else False)
 
 
+def cmd_report(args) -> int:
+    """Offline report reader: never loads a model or creates a ToolEnv."""
+    run_dir = args.run_dir.resolve()
+    try:
+        report = build_report(run_dir, args.evaluation_file)
+        write_report(run_dir, report)
+        print(dumps({"status": "completed", "run_id": report["run_id"],
+                     "report_json": str(run_dir / "report.json"), "report_md": str(run_dir / "report.md")}))
+        return 0
+    except PipelineError as exc:
+        print(dumps({"status": "failed", "error": exc.record()}))
+        return 1
+    except (OSError, ValueError, TypeError, RecursionError):
+        print(dumps({"status": "failed", "error": PipelineError(
+            "OUTPUT_IO", "Report generation failed", "report").record()}))
+        return 1
+
+
+def cmd_compare_runs(args) -> int:
+    """Offline comparison reader: creates only a new output directory."""
+    baseline_dir, candidate_dir = args.baseline_run.resolve(), args.candidate_run.resolve()
+    output_dir = args.output_dir.resolve()
+    try:
+        baseline_manifest, candidate_manifest = load_manifest(baseline_dir), load_manifest(candidate_dir)
+        validate_comparison_output(output_dir, baseline_manifest, candidate_manifest, baseline_dir, candidate_dir)
+        comparison = build_comparison(baseline_dir, candidate_dir, args.factor,
+                                      args.baseline_evaluation, args.candidate_evaluation)
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(exist_ok=False)
+        write_comparison(output_dir, comparison)
+        print(dumps({"status": "completed", "factor": args.factor,
+                     "comparison_json": str(output_dir / "comparison.json"),
+                     "comparison_md": str(output_dir / "comparison.md")}))
+        return 0
+    except PipelineError as exc:
+        print(dumps({"status": "failed", "error": exc.record()}))
+        return 1
+    except (OSError, ValueError, TypeError, RecursionError):
+        print(dumps({"status": "failed", "error": PipelineError(
+            "OUTPUT_IO", "Comparison generation failed", "compare").record()}))
+        return 1
+
+
 def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
          runtime_loader=load_runtime, clock=time.monotonic) -> int:
     store, sample_id, attempt_start, recorder, agent_loop = None, None, None, None, None
     started = clock()
     try:
         args = parser().parse_args(argv)
+        if args.command == "report":
+            return cmd_report(args)
+        if args.command == "compare-runs":
+            return cmd_compare_runs(args)
         config = configuration(args)
         if args.command == "run":
             output = config.run_dir.resolve()

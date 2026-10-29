@@ -34,10 +34,10 @@ or runtime benchmarks are executed by generating this list.
 **Goal**: Offline, reproducible reports and compatible single-factor comparisons.
 **Independent test**: Synthetic completed/failed/incomplete/resumed artifacts.
 
-- [ ] T009 [US2] Implement validated manifest/trace measurement readers and nearest-rank distributions in `python/src/lifemate/reporting.py`, with explicit coverage, missing values, failures/imports and weighted token rates.
-- [ ] T010 [US2] Add evaluation identity validation, explicit gold_empty/sample_score handling, paired factor checks and acceptance classifications in `python/src/lifemate/reporting.py` per `contracts/experiments.md`; missing evidence stays exploratory.
-- [ ] T011 [US2] Add offline `report` and `compare-runs` parsers in `python/src/lifemate/cli.py`; atomically generate JSON/Markdown, validate output locations, and expose report failure without masking original inference errors in `artifacts.py`.
-- [ ] T012 [US2] Add synthetic aggregation/CLI tests in `python/tests/test_reporting.py` and `test_cli.py` for small/empty populations, unknown versions, invalid artifacts, incomplete failure, imports, incompatible factors/evaluation and no-model reporting; include empty-gold score independent of hash, full-total overruns after loop success, allowed report regeneration and rejected comparison overlap.
+- [x] T009 [US2] Implement validated manifest/trace measurement readers and nearest-rank distributions in `python/src/lifemate/reporting.py`, with explicit coverage, missing values, failures/imports and weighted token rates.
+- [x] T010 [US2] Add evaluation identity validation, explicit gold_empty/sample_score handling, paired factor checks and acceptance classifications in `python/src/lifemate/reporting.py` per `contracts/experiments.md`; missing evidence stays exploratory.
+- [x] T011 [US2] Add offline `report` and `compare-runs` parsers in `python/src/lifemate/cli.py`; atomically generate JSON/Markdown, validate output locations, and expose report failure without masking original inference errors in `artifacts.py`.
+- [x] T012 [US2] Add synthetic aggregation/CLI tests in `python/tests/test_reporting.py` and `test_cli.py` for small/empty populations, unknown versions, invalid artifacts, incomplete failure, imports, incompatible factors/evaluation and no-model reporting; include empty-gold score independent of hash, full-total overruns after loop success, allowed report regeneration and rejected comparison overlap.
 
 **Checkpoint**: US2 can be verified with fixtures without inference or prompt changes.
 

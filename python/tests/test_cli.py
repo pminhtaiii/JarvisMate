@@ -273,3 +273,69 @@ class CLITests(unittest.TestCase):
         self.assertEqual(self.execute(self.arguments()), 1)
         self.assertTrue(marker.exists())
         self.assertEqual(self.opened, [])
+
+
+class ReportAndCompareCLITests(unittest.TestCase):
+    def setUp(self):
+        self.fx = Fixture(2)
+        self.addCleanup(self.fx.close)
+        self.stdout, self.stderr = io.StringIO(), io.StringIO()
+
+    def runtime(self, config, data):
+        factory = load_runtime(config, data)
+
+        class Wrapper:
+            metadata = factory.metadata
+
+            def __call__(self, split, sample_id, root):
+                return ControlledEnvironment()
+
+        return Wrapper()
+
+    def run_batch(self, run_dir):
+        args = ["run", "--data-root", str(self.fx.data), "--runtime-dir", str(self.fx.runtime),
+                "--split", "train", "--input-mode", "transcript",
+                "--id", "train_0001", "--id", "train_0002",
+                "--planner-model", str(self.fx.root / "weights"), "--device", "cpu",
+                "--run-dir", str(run_dir)]
+        with contextlib.redirect_stdout(self.stdout), contextlib.redirect_stderr(self.stderr):
+            code = main(args, planner_factory=lambda *_: ControlledPlanner([FINISH, FINISH]),
+                        asr_factory=lambda *_: ControlledASR(), runtime_loader=self.runtime)
+        self.assertEqual(code, 0)
+
+    def execute(self, args):
+        self.stdout, self.stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(self.stdout), contextlib.redirect_stderr(self.stderr):
+            return main(args)
+
+    def test_report_command_writes_json_and_markdown(self):
+        run_dir = self.fx.root / "run"
+        self.run_batch(run_dir)
+        code = self.execute(["report", "--run-dir", str(run_dir)])
+        self.assertEqual(code, 0)
+        self.assertTrue((run_dir / "report.json").exists())
+        self.assertTrue((run_dir / "report.md").exists())
+        self.assertEqual(json.loads(self.stdout.getvalue())["status"], "completed")
+
+    def test_report_command_on_an_invalid_run_dir_returns_nonzero_without_a_traceback(self):
+        code = self.execute(["report", "--run-dir", str(self.fx.root / "missing")])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(self.stdout.getvalue())["status"], "failed")
+
+    def test_compare_runs_writes_outputs_and_rejects_output_overlapping_a_source_run(self):
+        baseline_dir, candidate_dir = self.fx.root / "baseline", self.fx.root / "candidate"
+        self.run_batch(baseline_dir)
+        self.run_batch(candidate_dir)
+        output_dir = self.fx.root / "comparison"
+        code = self.execute(["compare-runs", "--baseline-run", str(baseline_dir),
+                             "--candidate-run", str(candidate_dir), "--factor", "harness",
+                             "--output-dir", str(output_dir)])
+        self.assertEqual(code, 0)
+        self.assertTrue((output_dir / "comparison.json").exists())
+        self.assertTrue((output_dir / "comparison.md").exists())
+
+        code = self.execute(["compare-runs", "--baseline-run", str(baseline_dir),
+                             "--candidate-run", str(candidate_dir), "--factor", "harness",
+                             "--output-dir", str(baseline_dir)])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(self.stdout.getvalue())["status"], "failed")
