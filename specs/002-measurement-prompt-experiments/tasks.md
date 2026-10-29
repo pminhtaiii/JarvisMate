@@ -9,7 +9,7 @@ or runtime benchmarks are executed by generating this list.
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm existing sample/failure/resume extension seams and preserve public behavior in `python/src/lifemate/contracts.py`, `cli.py`, `artifacts.py`, and `checkpoint.py`; document any changed assumptions in `specs/002-measurement-prompt-experiments/research.md`.
+- [x] T001 Confirm existing sample/failure/resume extension seams and preserve public behavior in `python/src/lifemate/contracts.py`, `cli.py`, `artifacts.py`, and `checkpoint.py`; document any changed assumptions in `specs/002-measurement-prompt-experiments/research.md`.
 
 ## Phase 2: Foundation
 
