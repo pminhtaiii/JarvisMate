@@ -38,6 +38,20 @@ baseline.
 No contradictions were found between this document's earlier claims and the real
 source; the notes above sharpen exactly where T002/T003 attach.
 
+## T007 confirmation: legacy/imported metrics stay explicit, not ambiguous
+
+`checkpoint.read_checkpoint()` needed no change: its `samples` validation only
+checks `id` presence/type, so it already tolerates the additive fields from
+T003/T006 (or their absence) without modification. `RunStore.restore()` did
+need a small refinement: it now calls `setdefault("measurements", None)` and
+`setdefault("full_attempt_seconds", None)` on every imported row, so a reader
+never has to tell "key missing because the source predates this feature" apart
+from "value unavailable" — both now read as an explicit `null`. Added a
+clarifying comment directly on `SampleOutcome` in `contracts.py` stating that
+`elapsed`/`timings` remain agent-loop-only, and that the broader CLI-level
+`full_attempt_seconds`/`measurements` are computed by the caller and passed
+separately — not fields `run_sample` itself produces.
+
 ## Local files and optional adapter telemetry
 
 **Decision**: Extend Trace/RunStore; add JSON/Markdown reports and optional adapter

@@ -212,7 +212,11 @@ class ArtifactTests(unittest.TestCase):
         target.restore(source.directory)
         imported = target.manifest["samples"][0]
         self.assertEqual(imported["source"], "imported")
-        self.assertNotIn("measurements", imported)
+        # Absence is an explicit null, not an ambiguous missing key.
+        self.assertIn("measurements", imported)
+        self.assertIsNone(imported["measurements"])
+        self.assertIn("full_attempt_seconds", imported)
+        self.assertIsNone(imported["full_attempt_seconds"])
 
     def test_append_rejects_an_invalid_full_attempt_seconds(self):
         store = self.store()

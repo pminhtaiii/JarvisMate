@@ -119,6 +119,12 @@ class PreparedDataset:
 
 @dataclass
 class SampleOutcome:
+    # `elapsed` and `timings` are agent-loop time only (run_sample's own
+    # boundary) and keep that exact meaning for every existing/legacy reader.
+    # The broader CLI-level full_attempt_seconds (trace creation through
+    # durable output/trace close) and the fine-grained span/generation
+    # `measurements` payload are computed by the caller (cli.py), outside
+    # run_sample, and passed separately to RunStore.append/sample_failed.
     id: str
     status: Literal["completed", "needs_info", "failed"]
     elapsed: float

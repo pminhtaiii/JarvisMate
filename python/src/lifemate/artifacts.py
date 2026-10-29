@@ -231,6 +231,11 @@ class RunStore:
                                                   "timing_unavailable": True}))
             record.setdefault("source_run_id", previous["run_id"])
             record.setdefault("trace_path", str(source.resolve() / "traces" / f"{sample_id}.jsonl"))
+            # A pre-measurement source manifest has neither key: make that absence
+            # an explicit null rather than an ambiguous missing key, so a reader
+            # never has to distinguish "not implemented yet" from "unavailable".
+            record.setdefault("measurements", None)
+            record.setdefault("full_attempt_seconds", None)
             # Always this run's perspective, even if the source manifest had it as executed there.
             record["source"] = "imported"
             imported.append(record)
