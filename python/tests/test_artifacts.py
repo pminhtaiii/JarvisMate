@@ -214,6 +214,21 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(imported["source"], "imported")
         self.assertNotIn("measurements", imported)
 
+    def test_append_rejects_an_invalid_full_attempt_seconds(self):
+        store = self.store()
+        for bad in (-1.0, "1.0", float("nan"), True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(PipelineError):
+                    store.append(self.outcome(), full_attempt_seconds=bad)
+
+    def test_sample_failed_stores_measurements_and_full_attempt_seconds(self):
+        store = self.store(["train_0001"])
+        store.sample_failed({"code": "PLANNER_ERROR", "stage": "planner"}, "train_0001",
+                            measurements={"spans": [], "generations": []}, full_attempt_seconds=2.5)
+        failure = store.manifest["failures"][0]
+        self.assertEqual(failure["full_attempt_seconds"], 2.5)
+        self.assertEqual(failure["measurements"], {"spans": [], "generations": []})
+
     def test_capacity_failure_still_allows_terminal_metadata(self):
         trace = Trace(self.fx.root / "trace.jsonl", "run", "train_0001", event_limit=1024, total_limit=4096)
         self.addCleanup(trace.close)

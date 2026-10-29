@@ -91,6 +91,46 @@ class CLITests(unittest.TestCase):
         self.assertEqual(len(asr_loads), 1)
         self.assertEqual([p.stem for p in asr.paths], ["train_0001", "train_0002"])
 
+    def test_successful_run_records_full_attempt_seconds_and_spans(self):
+        self.assertEqual(self.execute(self.arguments()), 0)
+        manifest = json.loads((self.fx.config().run_dir / "manifest.json").read_text(encoding="utf-8"))
+        record = manifest["samples"][0]
+        self.assertIsInstance(record["full_attempt_seconds"], float)
+        self.assertGreaterEqual(record["full_attempt_seconds"], 0.0)
+        self.assertEqual(record["measurements"]["metrics_schema_version"], 1)
+        stages = [s["stage"] for s in record["measurements"]["spans"]]
+        self.assertEqual(stages, ["request", "environment_open", "planner_decision", "final_collection"])
+        # ControlledPlanner has no set_metrics_recorder; generation detail stays unavailable.
+        self.assertEqual(record["measurements"]["generations"], [])
+
+    def test_fatal_failure_records_full_attempt_seconds_and_partial_spans(self):
+        self.planner = ControlledPlanner([FINISH, RuntimeError("injected")])
+        self.assertEqual(self.execute(self.arguments(ids=[r["id"] for r in self.fx.rows])), 1)
+        manifest = json.loads((self.fx.config().run_dir / "manifest.json").read_text(encoding="utf-8"))
+        failure = manifest["failures"][0]
+        self.assertEqual(failure["id"], "train_0002")
+        self.assertIsInstance(failure["full_attempt_seconds"], float)
+        self.assertGreaterEqual(failure["full_attempt_seconds"], 0.0)
+        stages = [(s["stage"], s["status"]) for s in failure["measurements"]["spans"]]
+        self.assertEqual(stages, [("request", "completed"), ("environment_open", "completed"),
+                                  ("planner_decision", "unfinished")])
+
+    def test_continue_on_error_failure_also_records_full_attempt_seconds(self):
+        self.planner = ControlledPlanner([FINISH, RuntimeError("injected"), FINISH])
+        args = self.arguments(ids=[r["id"] for r in self.fx.rows]) + ["--continue-on-error"]
+        # continue-on-error still processes every sample, but a batch with any
+        # failure still exits nonzero overall.
+        self.assertEqual(self.execute(args), 1)
+        manifest = json.loads((self.fx.config().run_dir / "manifest.json").read_text(encoding="utf-8"))
+        failure = manifest["failures"][0]
+        self.assertEqual(failure["id"], "train_0002")
+        self.assertIsInstance(failure["full_attempt_seconds"], float)
+        self.assertIn("measurements", failure)
+        # The third sample still completes with its own full_attempt_seconds.
+        completed_ids = [s["id"] for s in manifest["samples"]]
+        self.assertEqual(completed_ids, ["train_0001", "train_0003"])
+        self.assertIsInstance(manifest["samples"][1]["full_attempt_seconds"], float)
+
     def test_second_sample_failure_never_invokes_third(self):
         self.planner = ControlledPlanner([FINISH, RuntimeError("injected")])
         self.assertEqual(self.execute(self.arguments(ids=[r["id"] for r in self.fx.rows])), 1)

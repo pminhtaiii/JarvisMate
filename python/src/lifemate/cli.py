@@ -14,6 +14,7 @@ from .artifacts import RunStore
 from .contracts import Limits, PipelineError, RunConfig
 from .dataset import preflight
 from .jsonio import dumps
+from .metrics import Clock, SpanRecorder
 from .runtime import load_runtime
 
 
@@ -80,7 +81,7 @@ def configuration(args) -> RunConfig:
 
 def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
          runtime_loader=load_runtime, clock=time.monotonic) -> int:
-    store, sample_id = None, None
+    store, sample_id, attempt_start, recorder = None, None, None, None
     started = clock()
     try:
         args = parser().parse_args(argv)
@@ -144,30 +145,39 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
             store.verify_code_snapshot()
             sample_id = sample.id
             print(f"[{position}/{total}] {sample.id} START", file=sys.stderr, flush=True)
+            attempt_start = clock()
             trace = store.trace(sample.id)
+            recorder = SpanRecorder(clock=Clock(clock))
             try:
                 with contextlib.redirect_stdout(sys.stderr):
                     outcome = run_sample(sample, planner, asr, factory, trace, config.limits,
-                                         split=config.split, data_root=config.data_root, clock=clock)
+                                         split=config.split, data_root=config.data_root, clock=clock,
+                                         recorder=recorder)
             finally:
                 trace.close()
             if outcome.status == "failed":
+                # Stop the clock right after trace close/cleanup, before any
+                # terminal failure-summary bookkeeping below.
+                full_attempt_seconds = clock() - attempt_start
                 print(f"[{position}/{total}] {sample.id} FAILED "
-                      f"code={outcome.error['code']} elapsed={outcome.elapsed:.1f}s",
+                      f"code={outcome.error['code']} elapsed={outcome.elapsed:.1f}s "
+                      f"total={full_attempt_seconds:.1f}s",
                       file=sys.stderr, flush=True)
                 if config.continue_on_error and outcome.error["code"] in {
                         "STEP_LIMIT", "TIME_LIMIT", "CONTEXT_LIMIT", "PLANNER_ERROR", "PLANNER_FORMAT", "OUTPUT_LIMIT", "NO_PROGRESS"}:
-                    store.sample_failed(outcome.error, sample.id)
-                    sample_id = None
+                    store.sample_failed(outcome.error, sample.id, measurements=recorder.to_json(),
+                                       full_attempt_seconds=full_attempt_seconds)
+                    sample_id, attempt_start, recorder = None, None, None
                     continue
                 raise PipelineError(outcome.error["code"], outcome.error["message"], outcome.error["stage"])
-            store.append(outcome)
+            full_attempt_seconds = clock() - attempt_start
+            store.append(outcome, measurements=recorder.to_json(), full_attempt_seconds=full_attempt_seconds)
             print(f"[{position}/{total}] {sample.id} {outcome.status} "
-                  f"elapsed={outcome.elapsed:.1f}s steps={outcome.steps} "
+                  f"elapsed={outcome.elapsed:.1f}s steps={outcome.steps} total={full_attempt_seconds:.1f}s "
                   f"progress={len(store.manifest['completed_ids']) / total:.1%} "
                   f"completed={len(store.manifest['completed_ids'])} failed={len(store.manifest['failed_ids'])}",
                   file=sys.stderr, flush=True)
-            sample_id = None
+            sample_id, attempt_start, recorder = None, None, None
         if store.manifest["failed_ids"]:
             error = store.manifest["failures"][-1]["error"]
             raise PipelineError(error["code"], "Batch finished with failed samples; resume to retry missing rows",
@@ -185,7 +195,8 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
         record = error.record()
         if store is not None:
             try:
-                store.fail(record, sample_id)
+                store.fail(record, sample_id, measurements=(recorder.to_json() if recorder is not None else None),
+                          full_attempt_seconds=(clock() - attempt_start if attempt_start is not None else None))
             except Exception:
                 record = PipelineError("OUTPUT_IO", "Cannot save failure manifest; artifacts are incomplete", "output").record()
         print(dumps({"status": "failed", "error": record,

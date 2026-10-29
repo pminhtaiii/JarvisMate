@@ -1,6 +1,7 @@
 """Durable predictions, bounded opt-in traces, and explicit run publication."""
 from __future__ import annotations
 
+import math
 import os
 import platform
 import re
@@ -45,6 +46,12 @@ def sanitize(value: Any) -> Any:
                 pass  # Malformed model text still receives the textual redaction below.
         return SECRET_TEXT.sub(r"\1[REDACTED]", BEARER.sub("Bearer [REDACTED]", value))
     return value
+
+
+def _valid_attempt_seconds(value) -> None:
+    if (value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0)):
+        raise PipelineError("OUTPUT_IO", "full_attempt_seconds must be a nonnegative finite number", "output")
 
 
 def validate_prediction(row: JSON) -> None:
@@ -255,11 +262,13 @@ class RunStore:
             raise PipelineError("INPUT_INVALID", "Pipeline code changed during this run; restart with a fixed version",
                                 "configuration")
 
-    def append(self, outcome, *, measurements: JSON | None = None) -> None:
+    def append(self, outcome, *, measurements: JSON | None = None,
+              full_attempt_seconds: float | None = None) -> None:
         if outcome.result is None or outcome.status == "failed":
             raise PipelineError("OUTPUT_IO", "Failure cannot become a prediction", "output")
         if measurements is not None and not isinstance(measurements, dict):
             raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
+        _valid_attempt_seconds(full_attempt_seconds)
         validate_prediction(outcome.result)
         if (outcome.id not in self.manifest["not_started_ids"]
                 or outcome.id in self.manifest["completed_ids"] or outcome.result["id"] != outcome.id):
@@ -274,21 +283,29 @@ class RunStore:
         self.manifest["samples"].append({"id": outcome.id, "status": outcome.status,
                                          "elapsed": outcome.elapsed, "steps": outcome.steps,
                                          "timings": outcome.timings, "stop_reason": outcome.stop_reason,
-                                         "source": "executed", "measurements": measurements})
+                                         "source": "executed", "measurements": measurements,
+                                         "full_attempt_seconds": full_attempt_seconds})
         self.save()
 
-    def sample_failed(self, error: JSON, sample_id: str) -> None:
+    def sample_failed(self, error: JSON, sample_id: str, *, measurements: JSON | None = None,
+                      full_attempt_seconds: float | None = None) -> None:
+        if measurements is not None and not isinstance(measurements, dict):
+            raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
+        _valid_attempt_seconds(full_attempt_seconds)
         if sample_id not in self.manifest["failed_ids"]:
             self.manifest["failed_ids"].append(sample_id)
-            self.manifest["failures"].append({"id": sample_id, "error": sanitize(error)})
+            self.manifest["failures"].append({"id": sample_id, "error": sanitize(error),
+                                              "measurements": sanitize(measurements) if measurements else measurements,
+                                              "full_attempt_seconds": full_attempt_seconds})
         if sample_id in self.manifest["not_started_ids"]:
             self.manifest["not_started_ids"].remove(sample_id)
         self.save()
 
-    def fail(self, error: JSON, sample_id: str | None = None) -> None:
+    def fail(self, error: JSON, sample_id: str | None = None, *, measurements: JSON | None = None,
+            full_attempt_seconds: float | None = None) -> None:
         self.manifest.update(status="failed", ended_at=utc_now(), error=sanitize(error))
         if sample_id is not None:
-            self.sample_failed(error, sample_id)
+            self.sample_failed(error, sample_id, measurements=measurements, full_attempt_seconds=full_attempt_seconds)
             return
         self.save()
 
