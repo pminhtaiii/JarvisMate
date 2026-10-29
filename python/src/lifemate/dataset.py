@@ -197,22 +197,46 @@ def preflight(config: RunConfig) -> PreparedDataset:
     })
 
 
-def prepare_request(sample: SampleInput, asr: ASR | None, deadline: Deadline) -> JSON:
+def _timed_clip(recorder, index: int, transcribe):
+    """Run one ASR clip, recording an asr_clip span nested under request.
+
+    Clips are indexed in call order: historical user turns first, the current
+    request last — that ordering alone distinguishes historical from current,
+    without exposing any file content in the span itself.
+    """
+    if recorder is None:
+        return transcribe()
+    start = recorder.clock.offset()
+    try:
+        value = transcribe()
+    except Exception:
+        recorder.unfinished("asr_clip", start, index=index, parent_stage="request")
+        raise
+    recorder.mark("asr_clip", start, index=index, parent_stage="request")
+    return value
+
+
+def prepare_request(sample: SampleInput, asr: ASR | None, deadline: Deadline, recorder=None) -> JSON:
     if sample.mode == "audio":
         require(asr is not None, "Audio mode requires an ASR adapter", "MODEL_UNAVAILABLE")
     history = []
+    clip_index = 0
     for turn in sample.history:
         deadline.remaining()
         if turn["role"] == "user":
-            value = (asr.transcribe(turn["audio"], deadline.remaining())
-                     if sample.mode == "audio" and asr is not None else turn.get("text"))
+            if sample.mode == "audio" and asr is not None:
+                value = _timed_clip(recorder, clip_index,
+                                    lambda: asr.transcribe(turn["audio"], deadline.remaining()))
+                clip_index += 1
+            else:
+                value = turn.get("text")
             history.append({"role": "user", "text": text(value, "prepared history transcript")})
         else:
             history.append(copy.deepcopy(turn))
     deadline.remaining()
     if sample.mode == "audio":
         require(asr is not None, "Audio mode requires an ASR adapter", "MODEL_UNAVAILABLE")
-        request = asr.transcribe(sample.audio, deadline.remaining())
+        request = _timed_clip(recorder, clip_index, lambda: asr.transcribe(sample.audio, deadline.remaining()))
     else:
         request = sample.text
     deadline.remaining()

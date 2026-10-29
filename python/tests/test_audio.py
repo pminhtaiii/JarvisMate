@@ -4,6 +4,7 @@ import wave
 from lifemate.agent import run_sample
 from lifemate.contracts import Deadline, Limits, PipelineError
 from lifemate.dataset import preflight, prepare_request, wav_info
+from lifemate.metrics import SpanRecorder
 from support import FINISH, ControlledASR, ControlledEnvironment, ControlledPlanner, Fixture, MemoryTrace, wav
 
 
@@ -91,6 +92,42 @@ class AudioTests(unittest.TestCase):
                              split="train", data_root=self.fx.data)
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(opened, [])
+
+    def test_clip_spans_are_recorded_historical_first_then_current(self):
+        self.history()
+        sample = preflight(self.fx.config(input_mode="audio")).samples[0]
+        recorder = SpanRecorder()
+        prepare_request(sample, ControlledASR(), Deadline(30), recorder)
+        clips = [s for s in recorder.spans if s.stage == "asr_clip"]
+        self.assertEqual([c.index for c in clips], [0, 1])
+        self.assertTrue(all(c.parent_stage == "request" and c.status == "completed" for c in clips))
+
+    def test_transcript_mode_records_no_clip_spans(self):
+        sample = preflight(self.fx.config(input_mode="transcript")).samples[0]
+        recorder = SpanRecorder()
+        prepare_request(sample, None, Deadline(30), recorder)
+        self.assertEqual([s for s in recorder.spans if s.stage == "asr_clip"], [])
+
+    def test_a_failing_clip_is_recorded_unfinished_then_reraises(self):
+        sample = preflight(self.fx.config(input_mode="audio")).samples[0]
+        recorder = SpanRecorder()
+
+        class FailingASR(ControlledASR):
+            def transcribe(self, *args):
+                raise PipelineError("MODEL_UNAVAILABLE", "no ASR", "asr")
+
+        with self.assertRaises(PipelineError):
+            prepare_request(sample, FailingASR(), Deadline(30), recorder)
+        clips = [s for s in recorder.spans if s.stage == "asr_clip"]
+        self.assertEqual(len(clips), 1)
+        self.assertEqual(clips[0].status, "unfinished")
+        self.assertIsNone(clips[0].end_offset)
+
+    def test_no_recorder_behaves_exactly_as_before(self):
+        self.history()
+        sample = preflight(self.fx.config(input_mode="audio")).samples[0]
+        prepared = prepare_request(sample, ControlledASR(), Deadline(30))
+        self.assertEqual(prepared["history"][1]["text"], "Đã xem")
 
     def test_asr_time_consumes_sample_budget(self):
         sample = preflight(self.fx.config(input_mode="audio")).samples[0]
