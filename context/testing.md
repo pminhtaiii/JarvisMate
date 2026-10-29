@@ -40,6 +40,11 @@ defines future exporter/loss-mask/leakage checks; none has been implemented by t
 
 ## Evidence to record
 
+The [measurement and prompt specification](../specs/002-measurement-prompt-experiments/spec.md)
+and linked plan/contracts define the proposed measurement and controlled-experiment
+behavior. These are planning artifacts, not implemented capabilities or measured
+latency/compliance claims.
+
 For each evaluation, record the code revision, dataset split and sample selection, model/component versions, seed and decoding settings, exact command, exit status, elapsed time, and scoring result. Record state-hash matches, tool-call F1, empty-gold accuracy, schema-rejected calls, and timeout count when the evaluator supplies them. Keep traces bounded and free of user secrets or hidden environment files.
 
 Per-sample traces are required under [ADR 009](../docs/adr/009-require-execution-traces-from-first-baseline.md). Record whether the request came from a supplied training transcript or ASR, the request text used, available tool names, ordered planner action outputs, validation outcomes, actual tool calls and observed results, timing, stopping reason, errors, and the authoritative call log and final state hash when available. Compare the executed path as well as the final state, using training references for evaluation only, never as planner input.
