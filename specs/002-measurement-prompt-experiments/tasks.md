@@ -13,7 +13,7 @@ or runtime benchmarks are executed by generating this list.
 
 ## Phase 2: Foundation
 
-- [ ] T002 Define validated metric records, optional sink, version/availability/status values and injectable monotonic spans in `python/src/lifemate/metrics.py` per `contracts/measurement.md`.
+- [x] T002 Define validated metric records, optional sink, version/availability/status values and injectable monotonic spans in `python/src/lifemate/metrics.py` per `contracts/measurement.md`.
 - [ ] T003 Add additive metadata serialization and original-run attempt identity to `python/src/lifemate/artifacts.py`; preserve existing schema keys, payload bounds and exact prediction fields.
 
 ## Phase 3: US1 - Locate sample latency (P1, MVP)
