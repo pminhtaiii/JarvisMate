@@ -8,6 +8,7 @@ from lifemate.adapters.asr import LocalASR
 from lifemate.adapters.common import ModelResidency, dependencies, model_directory, stopping_criteria
 from lifemate.adapters.planner import LocalPlanner
 from lifemate.contracts import Limits, PipelineError
+from lifemate.metrics import SpanRecorder
 from support import Fixture
 
 
@@ -168,6 +169,90 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(kwargs["language"], "vi")
         self.assertEqual(kwargs["task"], "transcribe")
         self.assertFalse(kwargs["do_sample"])
+
+    def test_planner_records_generation_detail_when_recorder_is_attached(self):
+        planner = self.load()
+        recorder = SpanRecorder()
+        planner.set_metrics_recorder(recorder)
+        planner.next_action(self.input, 30)
+        self.assertEqual([s.stage for s in recorder.spans], ["generation"])
+        self.assertEqual(recorder.spans[0].parent_stage, "planner_decision")
+        self.assertEqual(len(recorder.generations), 1)
+        generation = recorder.generations[0]
+        self.assertEqual(generation.role, "planner_action")
+        self.assertEqual(generation.index, 0)
+        self.assertEqual(generation.input_tokens, 10)
+        self.assertEqual(generation.output_tokens, 2)
+        self.assertEqual(generation.stop_reason, "eos")
+
+    def test_planner_generation_index_resets_per_sample_and_advances_within_one(self):
+        planner = self.load()
+        recorder = SpanRecorder()
+        planner.set_metrics_recorder(recorder)
+        planner.next_action(self.input, 30)
+        planner.next_action(self.input, 30)
+        self.assertEqual([g.index for g in recorder.generations], [0, 1])
+        planner.set_metrics_recorder(SpanRecorder())
+        planner.next_action(self.input, 30)
+        self.assertEqual(planner._recorder.generations[0].index, 0)
+
+    def test_planner_records_unfinished_generation_on_model_error(self):
+        planner = self.load()
+        recorder = SpanRecorder()
+        planner.set_metrics_recorder(recorder)
+        self.model.generate.side_effect = RuntimeError("device error")
+        with self.assertRaises(PipelineError):
+            planner.next_action(self.input, 30)
+        self.assertEqual(len(recorder.spans), 1)
+        self.assertEqual(recorder.spans[0].status, "unfinished")
+        self.assertEqual(recorder.generations, [])
+
+    def test_no_recorder_attached_records_nothing(self):
+        planner = self.load()
+        planner.next_action(self.input, 30)  # must not raise with no recorder attached
+
+    def test_asr_records_generation_detail_when_recorder_is_attached(self):
+        with patch("lifemate.adapters.asr.dependencies", return_value=(self.torch, self.hf, self.np)), \
+             patch("lifemate.adapters.asr.metadata", return_value=self.metadata):
+            asr = LocalASR(self.weights, "cpu", Limits())
+        self.model.generate.return_value = Tensor(14)
+        recorder = SpanRecorder()
+        asr.set_metrics_recorder(recorder)
+        asr.transcribe(self.fx.split / self.fx.rows[0]["audio"], 30)
+        self.assertEqual([s.stage for s in recorder.spans], ["generation"])
+        self.assertEqual(recorder.spans[0].parent_stage, "asr_clip")
+        self.assertEqual(len(recorder.generations), 1)
+        generation = recorder.generations[0]
+        self.assertEqual(generation.role, "asr")
+        self.assertEqual(generation.output_tokens, 14)
+        self.assertEqual(generation.stop_reason, "eos")
+
+    def test_asr_clip_index_advances_across_calls_and_resets_on_rebind(self):
+        with patch("lifemate.adapters.asr.dependencies", return_value=(self.torch, self.hf, self.np)), \
+             patch("lifemate.adapters.asr.metadata", return_value=self.metadata):
+            asr = LocalASR(self.weights, "cpu", Limits())
+        recorder = SpanRecorder()
+        asr.set_metrics_recorder(recorder)
+        path = self.fx.split / self.fx.rows[0]["audio"]
+        asr.transcribe(path, 30)
+        asr.transcribe(path, 30)
+        self.assertEqual([g.index for g in recorder.generations], [0, 1])
+        asr.set_metrics_recorder(SpanRecorder())
+        asr.transcribe(path, 30)
+        self.assertEqual(asr._recorder.generations[0].index, 0)
+
+    def test_asr_records_unfinished_generation_on_model_error(self):
+        with patch("lifemate.adapters.asr.dependencies", return_value=(self.torch, self.hf, self.np)), \
+             patch("lifemate.adapters.asr.metadata", return_value=self.metadata):
+            asr = LocalASR(self.weights, "cpu", Limits())
+        recorder = SpanRecorder()
+        asr.set_metrics_recorder(recorder)
+        self.model.generate.side_effect = RuntimeError("device error")
+        with self.assertRaises(PipelineError):
+            asr.transcribe(self.fx.split / self.fx.rows[0]["audio"], 30)
+        self.assertEqual(len(recorder.spans), 1)
+        self.assertEqual(recorder.spans[0].status, "unfinished")
+        self.assertEqual(recorder.generations, [])
 
     def test_whisper_rejects_truncated_payload(self):
         with patch("lifemate.adapters.asr.dependencies", return_value=(self.torch, self.hf, self.np)), \

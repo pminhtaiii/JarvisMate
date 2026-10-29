@@ -15,6 +15,14 @@ from ..jsonio import digest
 class ModelResidency:
     """Optional whole-model CPU storage between per-sample inference phases."""
 
+    _recorder = None
+
+    def set_metrics_recorder(self, recorder) -> None:
+        """Attach the current sample's optional SpanRecorder. Called once per
+        sample by run_sample; subclasses override to also reset their own
+        per-sample generation index, then call super()."""
+        self._recorder = recorder
+
     @contextmanager
     def inference_session(self):
         if not self.cpu_offload:
