@@ -14,6 +14,7 @@ from typing import Any
 from . import __version__
 from .contracts import JSON, PipelineError, RunConfig
 from .jsonio import dumps, loads, safe_id
+from .metrics import METRICS_SCHEMA_VERSION
 from .prompting import PROMPT_HASH, PROMPT_VERSION
 
 SCHEMA_VERSION = 1
@@ -157,7 +158,8 @@ class RunStore:
         self.payloads = config.trace_payloads
         self.config = config
         self.manifest = {
-            "schema_version": SCHEMA_VERSION, "run_id": self.run_id,
+            "schema_version": SCHEMA_VERSION, "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "run_id": self.run_id,
             "status": "running", "started_at": utc_now(), "ended_at": None,
             "split": config.split, "input_mode": config.input_mode,
             "requested_ids": list(config.selected_ids), "select_all": config.select_all,
@@ -222,6 +224,8 @@ class RunStore:
                                                   "timing_unavailable": True}))
             record.setdefault("source_run_id", previous["run_id"])
             record.setdefault("trace_path", str(source.resolve() / "traces" / f"{sample_id}.jsonl"))
+            # Always this run's perspective, even if the source manifest had it as executed there.
+            record["source"] = "imported"
             imported.append(record)
         # Provenance must survive a crash during the row import, too. Completion is
         # committed only by the subsequent newline-terminated, fsynced journal rows.
@@ -251,9 +255,11 @@ class RunStore:
             raise PipelineError("INPUT_INVALID", "Pipeline code changed during this run; restart with a fixed version",
                                 "configuration")
 
-    def append(self, outcome) -> None:
+    def append(self, outcome, *, measurements: JSON | None = None) -> None:
         if outcome.result is None or outcome.status == "failed":
             raise PipelineError("OUTPUT_IO", "Failure cannot become a prediction", "output")
+        if measurements is not None and not isinstance(measurements, dict):
+            raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
         validate_prediction(outcome.result)
         if (outcome.id not in self.manifest["not_started_ids"]
                 or outcome.id in self.manifest["completed_ids"] or outcome.result["id"] != outcome.id):
@@ -267,7 +273,8 @@ class RunStore:
         self.manifest["not_started_ids"].remove(outcome.id)
         self.manifest["samples"].append({"id": outcome.id, "status": outcome.status,
                                          "elapsed": outcome.elapsed, "steps": outcome.steps,
-                                         "timings": outcome.timings, "stop_reason": outcome.stop_reason})
+                                         "timings": outcome.timings, "stop_reason": outcome.stop_reason,
+                                         "source": "executed", "measurements": measurements})
         self.save()
 
     def sample_failed(self, error: JSON, sample_id: str) -> None:
