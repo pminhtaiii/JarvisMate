@@ -1,10 +1,12 @@
 import unittest
 import wave
+from unittest.mock import MagicMock
 
+from lifemate.adapters.common import ModelResidency
 from lifemate.agent import run_sample
 from lifemate.contracts import Deadline, Limits, PipelineError
 from lifemate.dataset import preflight, prepare_request, wav_info
-from lifemate.metrics import SpanRecorder
+from lifemate.metrics import Clock, SpanRecorder
 from support import FINISH, ControlledASR, ControlledEnvironment, ControlledPlanner, Fixture, MemoryTrace, wav
 
 
@@ -128,6 +130,34 @@ class AudioTests(unittest.TestCase):
         sample = preflight(self.fx.config(input_mode="audio")).samples[0]
         prepared = prepare_request(sample, ControlledASR(), Deadline(30))
         self.assertEqual(prepared["history"][1]["text"], "Đã xem")
+
+    def test_request_span_includes_asr_offload_transfer_time(self):
+        sample = preflight(self.fx.config(input_mode="audio")).samples[0]
+        now = [0.0]
+
+        class OffloadedASR(ModelResidency):
+            metadata = {"parameter_count": 10}
+
+            def transcribe(self, path, remaining_seconds):
+                return "text"
+
+        asr = OffloadedASR()
+        asr.cpu_offload, asr.device = True, "cuda"
+        asr.model, asr.torch = MagicMock(), MagicMock()
+
+        def slow_transfer(device):
+            now[0] += 2.0  # onload/offload is not free; it belongs to sample time.
+
+        asr.model.to.side_effect = slow_transfer
+        recorder = SpanRecorder(clock=Clock(lambda: now[0]))
+        outcome = run_sample(sample, ControlledPlanner([FINISH]), asr,
+                             lambda *_: ControlledEnvironment(), MemoryTrace(), Limits(),
+                             split="train", data_root=self.fx.data, clock=lambda: now[0], recorder=recorder)
+        self.assertEqual(outcome.status, "completed")
+        request_span = next(s for s in recorder.spans if s.stage == "request")
+        # Two transfers (onto cuda, back to cpu) at 2.0s each must be inside
+        # the request span, not lost between it and the next span.
+        self.assertGreaterEqual(request_span.duration, 4.0)
 
     def test_asr_time_consumes_sample_budget(self):
         sample = preflight(self.fx.config(input_mode="audio")).samples[0]

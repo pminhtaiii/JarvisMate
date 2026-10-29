@@ -21,11 +21,11 @@ or runtime benchmarks are executed by generating this list.
 **Goal**: Observe full sample and stage time without changing authoritative execution.
 **Independent test**: Fake-clock multi-clip/multi-call success and failure fixtures.
 
-- [ ] T004 [US1] Instrument each history/current clip in `python/src/lifemate/dataset.py` and each environment/planner/tool/final-collection boundary in `python/src/lifemate/agent.py`, including partial spans on errors.
-- [ ] T005 [US1] Add optional per-generation telemetry and completed-device timing in `python/src/lifemate/adapters/common.py`, `adapters/planner.py`, and `adapters/asr.py`; count actual tokens and separate filter/corrective/action/ASR roles.
-- [ ] T006 [US1] Measure full attempt through durable output/trace close in `python/src/lifemate/cli.py` and `artifacts.py`; retain failed outcomes for continued and fatal paths and separate run-overhead publication time.
-- [ ] T007 [US1] Preserve legacy elapsed semantics and imported measurements in `python/src/lifemate/contracts.py`, `artifacts.py`, and `checkpoint.py`; leave absent legacy/full-attempt metrics unavailable.
-- [ ] T008 [US1] Add behavioral coverage in `python/tests/test_metrics.py` and extend `test_agent.py`, `test_artifacts.py`, and `test_cli.py` for nested spans, failure timing, offload accounting, trace-creation/output overhead crossing the full 30s target while the loop succeeds, I/O loss and generous-deadline prediction parity.
+- [x] T004 [US1] Instrument each history/current clip in `python/src/lifemate/dataset.py` and each environment/planner/tool/final-collection boundary in `python/src/lifemate/agent.py`, including partial spans on errors.
+- [x] T005 [US1] Add optional per-generation telemetry and completed-device timing in `python/src/lifemate/adapters/common.py`, `adapters/planner.py`, and `adapters/asr.py`; count actual tokens and separate filter/corrective/action/ASR roles.
+- [x] T006 [US1] Measure full attempt through durable output/trace close in `python/src/lifemate/cli.py` and `artifacts.py`; retain failed outcomes for continued and fatal paths and separate run-overhead publication time.
+- [x] T007 [US1] Preserve legacy elapsed semantics and imported measurements in `python/src/lifemate/contracts.py`, `artifacts.py`, and `checkpoint.py`; leave absent legacy/full-attempt metrics unavailable.
+- [x] T008 [US1] Add behavioral coverage in `python/tests/test_metrics.py` and extend `test_agent.py`, `test_artifacts.py`, and `test_cli.py` for nested spans, failure timing, offload accounting, trace-creation/output overhead crossing the full 30s target while the loop succeeds, I/O loss and generous-deadline prediction parity.
 
 **Checkpoint**: US1 works with controlled adapters independently of reports/prompts.
 

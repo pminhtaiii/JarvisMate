@@ -81,7 +81,7 @@ def configuration(args) -> RunConfig:
 
 def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
          runtime_loader=load_runtime, clock=time.monotonic) -> int:
-    store, sample_id, attempt_start, recorder = None, None, None, None
+    store, sample_id, attempt_start, recorder, agent_loop = None, None, None, None, None
     started = clock()
     try:
         args = parser().parse_args(argv)
@@ -170,6 +170,11 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
                     sample_id, attempt_start, recorder = None, None, None
                     continue
                 raise PipelineError(outcome.error["code"], outcome.error["message"], outcome.error["stage"])
+            # The loop itself succeeded; if a later step (durable output) still
+            # fails, the except handler below needs this to tell that apart
+            # from the loop having failed outright.
+            agent_loop = {"status": outcome.status, "steps": outcome.steps,
+                         "stop_reason": outcome.stop_reason, "elapsed": outcome.elapsed}
             full_attempt_seconds = clock() - attempt_start
             store.append(outcome, measurements=recorder.to_json(), full_attempt_seconds=full_attempt_seconds)
             print(f"[{position}/{total}] {sample.id} {outcome.status} "
@@ -177,7 +182,7 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
                   f"progress={len(store.manifest['completed_ids']) / total:.1%} "
                   f"completed={len(store.manifest['completed_ids'])} failed={len(store.manifest['failed_ids'])}",
                   file=sys.stderr, flush=True)
-            sample_id, attempt_start, recorder = None, None, None
+            sample_id, attempt_start, recorder, agent_loop = None, None, None, None
         if store.manifest["failed_ids"]:
             error = store.manifest["failures"][-1]["error"]
             raise PipelineError(error["code"], "Batch finished with failed samples; resume to retry missing rows",
@@ -196,7 +201,8 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
         if store is not None:
             try:
                 store.fail(record, sample_id, measurements=(recorder.to_json() if recorder is not None else None),
-                          full_attempt_seconds=(clock() - attempt_start if attempt_start is not None else None))
+                          full_attempt_seconds=(clock() - attempt_start if attempt_start is not None else None),
+                          agent_loop=agent_loop)
             except Exception:
                 record = PipelineError("OUTPUT_IO", "Cannot save failure manifest; artifacts are incomplete", "output").record()
         print(dumps({"status": "failed", "error": record,

@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from lifemate.adapters.common import ModelResidency
+from lifemate.artifacts import sync_write
 from lifemate.cli import main
 from lifemate.contracts import PipelineError
 from lifemate.runtime import load_runtime
@@ -130,6 +131,47 @@ class CLITests(unittest.TestCase):
         completed_ids = [s["id"] for s in manifest["samples"]]
         self.assertEqual(completed_ids, ["train_0001", "train_0003"])
         self.assertIsInstance(manifest["samples"][1]["full_attempt_seconds"], float)
+
+    def test_output_write_failure_after_loop_success_marks_agent_loop_completed(self):
+        def fail_prediction_write_only(stream, content):
+            if "predictions.partial" in getattr(stream, "name", ""):
+                raise OSError("disk full")
+            return sync_write(stream, content)
+
+        with patch("lifemate.artifacts.sync_write", side_effect=fail_prediction_write_only):
+            self.assertEqual(self.execute(self.arguments()), 1)
+        manifest = json.loads((self.fx.config().run_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["status"], "failed")
+        self.assertEqual(manifest["samples"], [])  # no durable row for this attempt
+        failure = manifest["failures"][0]
+        self.assertEqual(failure["id"], "train_0001")
+        self.assertEqual(failure["error"]["code"], "OUTPUT_IO")
+        self.assertEqual(failure["agent_loop"]["status"], "completed")
+        self.assertIsInstance(failure["full_attempt_seconds"], float)
+        self.assertEqual(failure["measurements"]["spans"][-1]["stage"], "final_collection")
+
+    def test_mid_loop_failure_has_no_agent_loop_summary(self):
+        self.planner = ControlledPlanner([RuntimeError("injected")])
+        self.assertEqual(self.execute(self.arguments()), 1)
+        manifest = json.loads((self.fx.config().run_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertIsNone(manifest["failures"][0]["agent_loop"])
+
+    def test_sample_total_over_30_seconds_still_persists_as_completed(self):
+        import itertools
+        counter = itertools.count(0.0, 5.0)
+        clock = lambda: next(counter)
+        args = self.arguments() + ["--sample-timeout-seconds", "1000"]
+        with contextlib.redirect_stdout(self.stdout), contextlib.redirect_stderr(self.stderr):
+            code = main(args, planner_factory=self.load_planner, asr_factory=lambda *_: ControlledASR(),
+                       runtime_loader=self.runtime, clock=clock)
+        self.assertEqual(code, 0)
+        manifest = json.loads((self.fx.config().run_dir / "manifest.json").read_text(encoding="utf-8"))
+        record = manifest["samples"][0]
+        self.assertEqual(record["status"], "completed")
+        self.assertGreaterEqual(record["full_attempt_seconds"], 30.0)
+        self.assertTrue((self.fx.config().run_dir / "predictions.jsonl").exists())
+        # No retroactive TIME_LIMIT: the row is published exactly as produced.
+        self.assertNotIn("error", manifest)
 
     def test_second_sample_failure_never_invokes_third(self):
         self.planner = ControlledPlanner([FINISH, RuntimeError("injected")])

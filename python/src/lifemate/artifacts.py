@@ -293,24 +293,31 @@ class RunStore:
         self.save()
 
     def sample_failed(self, error: JSON, sample_id: str, *, measurements: JSON | None = None,
-                      full_attempt_seconds: float | None = None) -> None:
+                      full_attempt_seconds: float | None = None, agent_loop: JSON | None = None) -> None:
         if measurements is not None and not isinstance(measurements, dict):
             raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
+        if agent_loop is not None and not isinstance(agent_loop, dict):
+            raise PipelineError("OUTPUT_IO", "agent_loop summary must be an object", "output")
         _valid_attempt_seconds(full_attempt_seconds)
         if sample_id not in self.manifest["failed_ids"]:
             self.manifest["failed_ids"].append(sample_id)
+            # agent_loop is only ever set when run_sample itself reported
+            # completed/needs_info and a *later* step (durable output) failed;
+            # it distinguishes that case from the loop having failed outright.
             self.manifest["failures"].append({"id": sample_id, "error": sanitize(error),
                                               "measurements": sanitize(measurements) if measurements else measurements,
-                                              "full_attempt_seconds": full_attempt_seconds})
+                                              "full_attempt_seconds": full_attempt_seconds,
+                                              "agent_loop": agent_loop})
         if sample_id in self.manifest["not_started_ids"]:
             self.manifest["not_started_ids"].remove(sample_id)
         self.save()
 
     def fail(self, error: JSON, sample_id: str | None = None, *, measurements: JSON | None = None,
-            full_attempt_seconds: float | None = None) -> None:
+            full_attempt_seconds: float | None = None, agent_loop: JSON | None = None) -> None:
         self.manifest.update(status="failed", ended_at=utc_now(), error=sanitize(error))
         if sample_id is not None:
-            self.sample_failed(error, sample_id, measurements=measurements, full_attempt_seconds=full_attempt_seconds)
+            self.sample_failed(error, sample_id, measurements=measurements,
+                              full_attempt_seconds=full_attempt_seconds, agent_loop=agent_loop)
             return
         self.save()
 

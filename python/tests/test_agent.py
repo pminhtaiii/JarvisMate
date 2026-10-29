@@ -143,6 +143,24 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([s.stage for s in recorder.spans], ["request", "environment_open"])
         self.assertEqual(recorder.spans[-1].status, "unfinished")
 
+    def test_recorder_presence_never_changes_the_authoritative_outcome(self):
+        """SC-003: with a generous deadline, attaching a SpanRecorder must not
+        change the authoritative prediction, status, steps, timings, or stop
+        reason. Uses a deterministic fake clock so timings are comparable."""
+        actions = [call("contacts.search", query="Lan"),
+                  lambda value: call("sms.send", contact_id=value["observations"][0]["result"]["contacts"][0]["id"],
+                                     content="Đến trễ"), FINISH]
+        fake_clock = lambda: next(ticks)
+        ticks = iter(float(i) for i in range(1000))
+        baseline = self.execute(list(actions), clock=fake_clock)
+        ticks = iter(float(i) for i in range(1000))
+        instrumented = self.execute(list(actions), clock=fake_clock, recorder=SpanRecorder())
+        self.assertEqual(baseline.result, instrumented.result)
+        self.assertEqual(baseline.status, instrumented.status)
+        self.assertEqual(baseline.steps, instrumented.steps)
+        self.assertEqual(baseline.stop_reason, instrumented.stop_reason)
+        self.assertEqual(baseline.timings, instrumented.timings)
+
     def test_step_and_deadline_exhaustion_have_no_fake_success(self):
         outcome = self.execute(['bad'], limits=Limits(max_steps=1))
         self.assertEqual(outcome.error["code"], "STEP_LIMIT")
