@@ -1,7 +1,7 @@
 # E0–E4 và các gate thực thi
 
-**Status:** cấu hình khởi đầu đề xuất, chưa đo VRAM/accuracy. Script contracts ở
-[plan.md](plan.md), điều kiện chọn checkpoint ở [evaluation.md](evaluation.md).
+**Status:** cấu hình khởi đầu đã có ở `configs/`, chưa đo VRAM/accuracy của large.
+Commands thực tế ở [RUNBOOK.md](RUNBOOK.md); điều kiện chọn checkpoint ở [evaluation.md](evaluation.md).
 
 ## Cấu hình chung cần freeze trước E1
 
@@ -151,6 +151,6 @@ không bỏ row. Thực hiện kiểm tra nghe một tập nhỏ **Train** trư�
 | E4 | Có đối chứng E1/E2, probe augmentation/profile pass |
 | Finalize | CSV đủ E0–E4, chọn/giữ baseline theo evidence, export/reload được |
 
-Không cần chờ người dùng xác nhận ở mỗi gate: gate là kiểm tra bằng evidence,
-không phải permission prompt. Chưa có evidence thì record trạng thái chưa đạt;
-không đánh dấu một experiment hoàn tất chỉ vì đã có script.
+Gate chỉ kiểm tra evidence cho experiment được gọi. **Mỗi command kết thúc rồi dừng**;
+người dùng chủ động gọi experiment tiếp theo, kể cả khi gate pass. Không có automatic
+E0→E4 runner. Chưa có evidence thì record chưa đạt; script tồn tại không chứng minh run thành công.

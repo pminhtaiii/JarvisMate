@@ -10,11 +10,13 @@ import wave
 
 from lifemate.dataset import wav_info
 from lifemate.jsonio import contained, digest, loads, visible_path
+from lifemate.model_budget import check_budget
 
 REGISTRY = {
     "whisper-small": ("openai/whisper-small", "transformers"),
     "phowhisper-small": ("vinai/PhoWhisper-small", "transformers"),
     "phowhisper-medium": ("vinai/PhoWhisper-medium", "transformers"),
+    "phowhisper-large": ("vinai/PhoWhisper-large", "transformers"),
     "whisper-turbo": ("openai/whisper-large-v3-turbo", "transformers"),
     "whisper-small-ct2": ("openai/whisper-small", "faster-whisper"),
 }
@@ -53,7 +55,7 @@ def local_spec(name: str, models_dir: Path) -> dict:
             or not re.fullmatch(r"[0-9a-f]{40}", provenance["revision"])
             or not isinstance(provenance.get("assets"), dict) or not provenance["assets"]
             or type(provenance.get("parameter_count")) is not int
-            or not 0 < provenance["parameter_count"] < 1_000_000_000
+            or not 0 < provenance["parameter_count"] < 6_000_000_000
             or not isinstance(provenance.get("generation_defaults"), dict)):
         raise ValueError(f"Invalid local provenance: {name}; run prepare explicitly")
     required = {"config.json", "preprocessor_config.json"}
@@ -113,8 +115,7 @@ class TransformersASR:
             spec["path"], local_files_only=True, trust_remote_code=False,
             torch_dtype=dtype, attn_implementation="eager", weights_only=True).to(device).eval()
         count = sum(p.numel() for p in self.model.parameters())
-        if count >= 1_000_000_000:
-            raise ValueError("Selected ASR exceeds the experiment's <1B parameter guard")
+        check_budget(count)
         if count != spec["provenance"]["parameter_count"]:
             raise ValueError("Loaded model parameter count differs from preparation provenance")
         self.np, self.torch, self.device, self.dtype = np, torch, device, dtype
@@ -139,7 +140,7 @@ class TransformersASR:
         kwargs = {"attention_mask": batch["attention_mask"].to(self.device)} if "attention_mask" in batch else {}
         with self.torch.inference_mode():
             output = self.model.generate(
-                features, **kwargs, language="vi", task="transcribe", forced_decoder_ids=None,
+                features, **kwargs, language="vi", task="transcribe",
                 do_sample=False, num_beams=1, max_new_tokens=440, return_timestamps=False,
                 length_penalty=1.0, repetition_penalty=1.0)
         return self.processor.batch_decode(output, skip_special_tokens=True)[0].strip()

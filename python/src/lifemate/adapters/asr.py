@@ -49,7 +49,7 @@ class LocalASR(ModelResidency):
             kwargs = {"attention_mask": batch["attention_mask"].to(self.device)} if "attention_mask" in batch else {}
             with self.torch.inference_mode():
                 output = self.model.generate(
-                    features, **kwargs, language="vi", task="transcribe", forced_decoder_ids=None,
+                    features, **kwargs, language="vi", task="transcribe",
                     do_sample=False, num_beams=1, max_new_tokens=440,
                     return_timestamps=False, stopping_criteria=stop)
             if time.monotonic() - started >= remaining_seconds:

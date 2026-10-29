@@ -13,6 +13,7 @@ import sys
 import time
 
 from lifemate.jsonio import dumps, visible_path
+from lifemate.model_budget import check_budget
 
 from .data import audio_asset, identity, load_selection
 from .metrics import NORMALIZATION, normalize, score, summarize
@@ -228,6 +229,8 @@ def benchmark(args, repo: Path) -> int:
     split, selected = load_selection(args.split_manifest, args.data_root, args.scope, args.limit)
     names = list(REGISTRY_NAMES if args.models == ["all"] else args.models)
     specs = [local_spec(name, args.models_dir) for name in names]
+    for spec in specs:
+        check_budget(spec["provenance"]["parameter_count"], args.planner_parameters)
     require_paired_source(specs)
     settings = {"device": args.device, "dtype": args.dtype or ("float32" if args.device == "cpu" else "float16"),
                 "compute_type": args.compute_type or ("int8" if args.device == "cpu" else "float16"),
@@ -282,4 +285,4 @@ def benchmark(args, repo: Path) -> int:
 
 
 # Kept here to preserve the configured order: small models first, larger ones later.
-REGISTRY_NAMES = ("whisper-small-ct2", "whisper-small", "phowhisper-small", "phowhisper-medium", "whisper-turbo")
+REGISTRY_NAMES = ("whisper-small-ct2", "whisper-small", "phowhisper-small", "phowhisper-medium", "whisper-turbo", "phowhisper-large")

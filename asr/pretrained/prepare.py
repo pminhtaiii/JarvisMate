@@ -7,6 +7,7 @@ import os
 import re
 
 from lifemate.jsonio import digest, dumps, loads, visible_path
+from lifemate.model_budget import check_budget
 
 from .models import REGISTRY, local_spec, offline, packages
 
@@ -38,8 +39,7 @@ def model_details(target: Path) -> tuple[int, dict]:
     with torch.device("meta"):
         model = WhisperForConditionalGeneration(config)
     count = sum(p.numel() for p in model.parameters())
-    if count >= 1_000_000_000:
-        raise ValueError("ASR architecture exceeds the <1B experiment guard")
+    check_budget(count)
     generation_path = target / "generation_config.json"
     generation = loads(generation_path.read_text(encoding="utf-8")) if generation_path.is_file() else config.to_dict()
     return count, generation

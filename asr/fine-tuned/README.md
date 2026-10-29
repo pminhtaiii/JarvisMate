@@ -1,8 +1,9 @@
-# Specs: Fine-tuning PhoWhisper-large cho LifeMate
+# Fine-tuning PhoWhisper-large cho LifeMate
 
-**Ngày:** 29/10/2026. **Trạng thái:** specs đã viết; training scripts, dependency lock,
-VRAM probe và experiments E0–E4 **chưa được triển khai/chạy** trong hạng mục này.
-Các tên script/config dưới đây là hợp đồng cho bước implementation, chưa phải lệnh chạy ngay.
+**Ngày:** 29/10/2026. **Trạng thái:** đã có scripts, configs, shared engine và tests.
+Chưa chạy PhoWhisper-large/GPU, chưa đo VRAM 12 GiB, chưa full training E0–E4.
+Đọc [RUNBOOK.md](RUNBOOK.md) để cài và chạy thật, [review.md](review.md) cho review/evidence.
+Mỗi lệnh chỉ vận hành **một experiment**, kết thúc rồi dừng; không có chế độ chạy all E0–E4.
 
 Mục tiêu là cải thiện nhận dạng tiếng Việt, nhất là số tiền, thời gian, địa chỉ,
 tên riêng và tiếng Anh xen tiếng Việt, trên cùng Validation đã benchmark.
@@ -14,10 +15,9 @@ context LLM <=16.384 token. Không có quy định riêng ASR phải <1B trong t
 PhoWhisper-large khoảng 1,55B + Qwen3-4B khoảng 4B = **khoảng 5,55B danh nghĩa**,
 có thể đáp ứng giới hạn nếu không có thành phần bổ sung làm vượt ngưỡng.
 
-ASR <1B là guard nội bộ còn trong `asr/pretrained/`, không phải rule BTC.
-Sau khi đồng bộ `main` tại `2006a02`, runtime `LocalASR` đã nới guard và CLI vẫn
-kiểm tra tổng ASR + planner. Implementation fine-tuning cần xử lý đường benchmark/
-preparation còn lại và giữ kiểm tra số tham số thực tế của LLM/toàn hệ thống.
+Guard cũ ASR <1B đã được thay bằng kiểm tra logical parameters theo budget LifeMate
+trong benchmark/preparation; `phowhisper-large` đã được đăng ký. Runtime `LocalASR`
+vẫn hỗ trợ large/offload và CLI vẫn kiểm tra tổng ASR + planner.
 Adapter LoRA chưa merge và model bổ sung phải được tính;
 quantization không giảm số tham số. Đủ parameters không chứng minh đủ VRAM hoặc
 đạt giới hạn 30 giây/mẫu trên A30.
@@ -26,10 +26,13 @@ quantization không giảm số tham số. Đủ parameters không chứng minh 
 
 | File | Nội dung |
 |---|---|
+| [RUNBOOK.md](RUNBOOK.md) | Commands thực tế cho Prepare, E0–E4 độc lập, resume, status, skip, export và compare |
+| [review.md](review.md) | Những thiếu hụt đã xử lý, test evidence và hardware acceptance còn thiếu |
+| [SLOT_FORMAT.md](SLOT_FORMAT.md) | Schema optional cho annotation và extractor, không dựng slot accuracy |
 | [spec.md](spec.md) | Phạm vi, split cố định, yêu cầu và acceptance scenarios |
 | [experiments.md](experiments.md) | E0–E4, hyperparameters đề xuất, thứ tự và gate VRAM |
 | [evaluation.md](evaluation.md) | WER/CER, Critical Slot Accuracy, timing, chọn checkpoint |
-| [plan.md](plan.md) | Module, CLI/script dự kiến, artifacts, offline export và tích hợp |
+| [plan.md](plan.md) | Thiết kế module/artifacts/offline; RUNBOOK là CLI vận hành hiện tại |
 | [tasks.md](tasks.md) | Công việc triển khai tuần tự, điều kiện nghiệm thu |
 | [research.md](research.md) | Nguồn chính thức, điều đã biết và tương thích chưa kiểm chứng |
 
@@ -52,13 +55,13 @@ Benchmark CPU trước đó có PhoWhisper-small/medium, **chưa có PhoWhisper-
 không lấy điểm của medium làm E0. Validation đã được xem để phân tích lỗi nên
 đây là development validation, không phải một test set chưa từng được quan sát.
 
-## Đầu ra cần có sau implementation
+## Đầu ra của implementation
 
 - Script độc lập cho E0, E1, E2, E3, E4; common engine và config version hóa.
 - CSV so sánh đủ 5 experiment, predicted transcripts, lịch sử đánh giá và peak VRAM.
 - Best adapter/checkpoint, bản export offline, source/model/environment hashes.
-- README chạy thực tế, cài dependency đã kiểm chứng, khôi phục và tái lập kết quả.
+- README/Runbook cài dependency đã khóa, khôi phục và tái lập; GPU compatibility vẫn cần probe.
 
 Artifacts thực tế chỉ lưu dưới `.agent-work/asr-finetune/` ignored; không commit
 audio, transcript corpus, annotation, weights, checkpoint hay cache. Các bảng số
-liệu chỉ được tạo từ run thật; specs này không tạo checkpoint hoặc điểm giả.
+liệu chỉ được tạo từ run thật; hiện chưa có điểm/checkpoint PhoWhisper-large của suite này.

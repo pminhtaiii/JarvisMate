@@ -1,8 +1,9 @@
 # Implementation plan và contracts
 
-**Status:** implementation chưa bắt đầu. File/script/config trong cây dưới đây là
-deliverables dự kiến, không phải những file đã có hoặc đã chạy thành công.
-Đọc yêu cầu ở [spec.md](spec.md), trình tự ở [experiments.md](experiments.md).
+**Status:** shared engine/scripts đã được viết; GPU/large acceptance chưa chạy.
+Tài liệu này giữ thiết kế; module map thực tế ở [review.md](review.md), commands chính
+xác ở [RUNBOOK.md](RUNBOOK.md). Những tên file thiết kế được gom/tách trong implementation
+không thay đổi contract dữ liệu, metric hoặc việc người dùng chạy riêng từng experiment.
 
 ## Module và dependency boundary
 
@@ -23,10 +24,10 @@ asr/fine-tuned/
     common.json
     e0.json ... e4.json
 python/src/lifemate/asr_training/
-  config.py, data.py, preprocessing.py, augmentation.py
-  adapters.py, resource_probe.py, trainer.py
-  slots.py, evaluation.py, artifacts.py, exporting.py
-python/tests/asr_training/
+  config.py, data.py, augmentation.py
+  models.py, resources.py, trainer.py, checkpoints.py, workers.py
+  slots.py, evaluation.py, selection.py, storage.py, reporting.py, exporting.py, orchestration.py, execution.py, cli.py
+python/tests/test_asr_training*.py
 ```
 
 Folder `fine-tuned` giữ tên theo yêu cầu, không dùng tên có dấu `-` làm Python
@@ -47,7 +48,7 @@ Tạo môi trường training riêng; không nâng cấp `.venv` CPU benchmark �
 Whisper; Torch 2.9.0 / Transformers 4.57.1 đang có trong baseline chỉ là điểm bắt
 đầu đối chiếu, **CPU wheel hiện có không dùng trên GPU**.
 
-Trước E0, chạy kernel probe trên GPU thật rồi freeze `requirements-train.lock`:
+Trước E0, chạy kernel probe trên GPU thật; mỗi probe/run freeze `requirements-resolved.txt`:
 Torch build/CUDA/cuDNN, Transformers, PEFT, Accelerate, NumPy, audio augmentation
 library, safetensors, và bitsandbytes nếu E3 được xét. Nếu E3 cần stack khác, tạo
 environment ID mới, chạy lại E0 và LoRA đối chứng để so sánh công bằng. Không dùng
@@ -58,73 +59,51 @@ Training/report offline sau explicit preparation; HF caches đều dưới ignor
 Model snapshot, noise assets và dependency wheels cần chuẩn bị riêng trước khi
 chạy trên máy/container không mạng. Ghi license/release/revision và file hashes.
 
-## Script/CLI contract dự kiến
+## Script/CLI contract thực tế
 
-Chạy scripts từ repo root với interpreter của environment training. Các lệnh dưới
-đây mô tả interface cần implement; **chưa thể chạy trước khi scripts/configs có thật**.
+[RUNBOOK.md](RUNBOOK.md) là hướng dẫn cài/chạy chính xác. Scripts là thin entrypoints
+cho `python -m lifemate.asr_training`; mỗi lệnh `run` hoặc `preflight` chọn đúng một
+experiment. Không có automatic all-experiments runner.
 
-```powershell
-# Biến DATA_ROOT, MODEL_SHA và environment do người chạy cấu hình trên máy GPU.
-$suite = '.agent-work/asr-finetune/suite-01'
-$split = '.agent-work/asr-benchmark/split42.json'
-$model = '.agent-work/asr-finetune/models/phowhisper-large'
+| Operation | Entry point |
+|---|---|
+| Online snapshot preparation | `prepare_model.py` hoặc CLI `prepare-model --models-dir ... --revision ...` |
+| Frozen suite preparation | `prepare_data.py --suite-dir ... --data-root ... --split-manifest ... --model ...` |
+| GPU/resource probe | `preflight.py --suite-dir ... --experiment E0` (tương tự E1–E4) |
+| One experiment | `run_e0.py` ... `run_e4.py --suite-dir ...`, hoặc CLI `run --experiment ...` |
+| Explicit resume | Thêm `--resume-from <durable checkpoint>` vào đúng experiment |
+| Status | CLI `status --suite-dir ...`; đọc artifacts, không load model |
+| Skip/failure recovery | CLI `skip`, `fail`, `unlock` với reason/PID/path explicit |
+| Export selected best | `export_model.py --suite-dir ... --run-dir ... --output ...` |
+| Final compare | `compare.py --suite-dir ...`; không training/inference |
 
-# Chỉ bước này có thể truy cập mạng để chuẩn bị snapshot.
-python asr/fine-tuned/scripts/prepare_model.py --source vinai/PhoWhisper-large --revision $MODEL_SHA --output $model
-python asr/fine-tuned/scripts/prepare_data.py --data-root $DATA_ROOT --split-manifest $split --train-scope with-history --eval-scope current --suite-dir $suite
-python asr/fine-tuned/scripts/preflight.py --model $model --suite-dir $suite --experiment E0
-python asr/fine-tuned/scripts/run_e0.py --config asr/fine-tuned/configs/e0.json --suite-dir $suite
-
-# Mỗi profile phải có probe pass đúng config/hash trước full training.
-python asr/fine-tuned/scripts/preflight.py --model $model --suite-dir $suite --experiment E1
-python asr/fine-tuned/scripts/run_e1.py --config asr/fine-tuned/configs/e1.json --suite-dir $suite
-python asr/fine-tuned/scripts/preflight.py --model $model --suite-dir $suite --experiment E2
-python asr/fine-tuned/scripts/run_e2.py --config asr/fine-tuned/configs/e2.json --suite-dir $suite
-python asr/fine-tuned/scripts/preflight.py --model $model --suite-dir $suite --experiment E3
-python asr/fine-tuned/scripts/run_e3.py --config asr/fine-tuned/configs/e3.json --suite-dir $suite
-python asr/fine-tuned/scripts/preflight.py --model $model --suite-dir $suite --experiment E4
-python asr/fine-tuned/scripts/run_e4.py --config asr/fine-tuned/configs/e4.json --suite-dir $suite
-python asr/fine-tuned/scripts/compare.py --suite-dir $suite
-```
-
-Những dòng trên không phải batch automation để chạy mù: xem result/gate từng
-stage. Script phải từ chối predecessor/config chưa đạt; E3/E4 skipped được ghi
-bằng `--record-skip <reason>` thay vì train. E1 fail không có nghĩa tự động kết
-luận E2 OOM; ghi E2 skipped vì thiếu prerequisite như experiments.md.
-
-Common contract:
-
-- Mỗi experiment có directory/run ID mới. `--resume-from <checkpoint>` explicit,
-  không overwrite và không resume khi model/split/config/source hashes khác.
-- `preflight` dùng cùng effective config được script experiment resolve; training
-  phải kiểm tra probe hash, không chỉ kiểm tra “có file preflight.json”.
-- `--limit` chỉ được dùng smoke/evaluation diagnostic; đánh dấu partial và không
-  cho checkpoint promotion. Probe chỉ lấy Train, không gradient trên Validation.
-- Exit 0 thành công; exit 1 execution/OOM; exit 2 input/config/integrity; exit 3
-  unsupported/skipped có reason; 130 interrupted. Gate engine hiểu trạng thái,
-  không coi một exit khác 0 là được phép chạy tiếp full training.
-- Mọi failure lưu manifest/partial artifacts trước khi thoát; không giấu lỗi
-  generation bằng ground truth hoặc loại row. Không auto retry config khác.
+Mỗi run có ID mới. Probe pass phải khớp config/model/data/code/environment/GPU;
+không chỉ kiểm tra có một file preflight. Resume không cho đổi binding và không
+nhận checkpoint probe/experiment khác. E4 freeze control/update budget.
+Exit 0 completed/passed, 1 execution/resource failure, 2 input/integrity error,
+3 unsupported, 130 interrupted. Skip là operation ghi nhận có chủ đích, exit 0
+không có nghĩa experiment đã train thành công. Không tự retry OOM hoặc đổi config.
 
 ## Artifacts contract
 
 ```text
 .agent-work/asr-finetune/<suite-id>/
-  suite.json, requirements-train.lock
-  data/audit.json, fit.jsonl, validation-current.jsonl
-  data/validation-history.jsonl             # chỉ nếu bật diagnostic
-  annotations/critical-slots-v1.jsonl
+  suite.json
+  data/fit.jsonl, validation-current.jsonl, validation-history.jsonl
+  data/audit.json, files.json, slots.jsonl, slot-rules.json  # slots optional
   E0/ ... E4/
-    manifest.json, resolved-config.json, preflight.json
-    train-log.jsonl, evaluation-history.jsonl, memory.json
-    best-checkpoint.json
-    checkpoints/<step>/adapter_model.safetensors, adapter_config.json
-    checkpoints/<step>/training-state/     # optimizer/scheduler/scaler/RNG/sampler
-    exports/<checkpoint-id>/               # merged model + processor/tokenizer/config
-    primary/transcripts.jsonl, metrics.json
-    native-4bit/transcripts.jsonl, metrics.json  # E3, nếu khả thi
-  comparison.csv, comparison-variants.csv
-  report.md, error-analysis.jsonl
+    probe-<id>/manifest.json, preflight evidence/checkpoints, files.json
+    run-<id>/
+      manifest.json, resolved-config.json, requirements-resolved.txt
+      train-log.jsonl, augmentation.jsonl, evaluation-history.jsonl
+      best-checkpoint.json, latest-checkpoint.json
+      checkpoints/step-<step>-<id>/adapter/, optimizer.pt, state.json, files.json
+      primary/step-<step>/transcripts.jsonl, metrics.json   # E0 primary trực tiếp
+      native-4bit/step-<step>/transcripts.jsonl, metrics.json # E3
+      exports/best/                                        # merged local bundle
+      export-evaluation/transcripts.jsonl, metrics.json
+  comparisons/<timestamp-id>/
+    comparison.csv, comparison-variants.csv, details.json, report.md
 ```
 
 E0 không tạo train log/checkpoint adapter giả. Skipped/unsupported có manifest
@@ -156,8 +135,8 @@ State Match. Raw counts và per-type details nằm trong metrics JSON để CSV 
 
 ## Sửa guard và tích hợp Python runtime
 
-Sau khi đồng bộ `main` tại `2006a02`, runtime đã hỗ trợ large; implementation cần
-xử lý đường benchmark còn bị chặn và giữ các invariant runtime:
+Runtime đã hỗ trợ large; implementation này cũng đã cập nhật registry/preparation/
+loader benchmark sang budget LifeMate. Các invariant vẫn cần giữ khi tiếp tục phát triển:
 
 | Vị trí hiện tại | Việc cần làm |
 |---|---|

@@ -1,7 +1,8 @@
 # Specification: PhoWhisper-large E0–E4
 
-**Version:** 1.0. **Ngày:** 29/10/2026. **Status:** design only.
-Phạm vi được yêu cầu là viết specs; các yêu cầu dưới đây dành cho implementation tiếp theo.
+**Version:** 1.0. **Ngày:** 29/10/2026. **Status:** implementation authored, hardware acceptance pending.
+Các yêu cầu dưới đây là acceptance contract; lệnh vận hành thực tế ở [RUNBOOK.md](RUNBOOK.md).
+Không tự chạy nhiều experiments liên tiếp; mỗi invocation chỉ một experiment rồi dừng.
 
 ## Mục tiêu và phạm vi
 
@@ -120,9 +121,9 @@ Giữ contract `ASR.transcribe(audio_path, remaining_seconds) -> str` cùng meta
 của [Python runtime](../../python/src/lifemate/contracts.py); deadline được tôn trọng,
 không fallback ground truth/context. Export có round-trip test.
 
-**DEP-02.** Guard ASR <1B còn trong benchmark/preparation là policy nội bộ,
-**không phải rule BTC**. Runtime `LocalASR` trên `main` đã nới guard; giữ hỗ trợ đó
-và cho phép checkpoint PhoWhisper-large được xác minh ở các đường còn lại;
+**DEP-02.** Guard ASR <1B cũ là policy nội bộ, **không phải rule BTC**. Đã thay
+guard benchmark/preparation theo budget và đăng ký PhoWhisper-large; giữ hỗ trợ
+large/offload của runtime `LocalASR` và kiểm tra checkpoint được xác minh;
 vẫn đếm riêng LLM <5B, tổng deployed models <6B, context planner <=16.384.
 Phép tính khoảng 1,55B+4B chỉ là ước lượng; đếm shared tensors đúng một lần trong
 mỗi model, tính adapter chưa merge và mọi model bổ sung. Không trừ parameters

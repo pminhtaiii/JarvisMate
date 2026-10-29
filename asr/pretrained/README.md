@@ -16,6 +16,7 @@ trên máy này. `--threads 8` là điểm bắt đầu có thể điều chỉn
 | `whisper-small` | `openai/whisper-small` | Transformers | FP32 |
 | `phowhisper-small` | `vinai/PhoWhisper-small` | Transformers | FP32 |
 | `phowhisper-medium` | `vinai/PhoWhisper-medium` | Transformers | FP32 |
+| `phowhisper-large` | `vinai/PhoWhisper-large` | Transformers | FP32 |
 | `whisper-turbo` | `openai/whisper-large-v3-turbo` | Transformers | FP32 |
 | `whisper-small-ct2` | Cùng snapshot `openai/whisper-small` | faster-whisper/CTranslate2 | INT8 |
 
@@ -124,7 +125,7 @@ Các con số này mô tả audit/split dữ liệu, không phải kết quả n
 # Bắt đầu với small chạy CT2; chuẩn bị cả HF source và conversion CT2 cùng SHA.
 & $python -m asr.pretrained prepare --models whisper-small-ct2
 
-# Hoặc chuẩn bị toàn bộ 4 checkpoint nguồn và conversion small.
+# Hoặc chuẩn bị toàn bộ 5 checkpoint nguồn và conversion small.
 & $python -m asr.pretrained prepare --models all
 ```
 
@@ -177,7 +178,7 @@ Mỗi lần dùng thư mục kết quả mới; bỏ `--run-dir` để tự tạ
 # Một checkpoint khác, sau khi đã prepare nó.
 & $python -m asr.pretrained run --models phowhisper-small --device cpu --threads 8
 
-# Toàn bộ 5 cấu hình, tuần tự mỗi lần một model.
+# Toàn bộ registry hiện tại (6 cấu hình, bao gồm large); tuần tự mỗi lần một model.
 & $python -m asr.pretrained run --models all --device cpu --threads 8
 
 # Cặp cùng checkpoint, cùng FP32; vẫn có khác biệt backend được ghi trong manifest.

@@ -18,7 +18,7 @@ trước khi dùng; không mặc định tài liệu `main` khớp package đã 
 - [Benchmark rules](../../context/benchmark.md): toàn models <6B; LLM <5B;
   context <=16.384; offline, A30, 30 giây/mẫu. **Không có ASR <1B riêng.**
 - [Pretrained loader](../pretrained/models.py), [preparation](../pretrained/prepare.py):
-  còn guard nội bộ 1B cần xử lý khi hỗ trợ large.
+  guard nội bộ 1B đã được thay bằng budget check và registry đã có large.
 - [ASR runtime loader](../../python/src/lifemate/adapters/asr.py) sau khi đồng bộ
   `main` tại `2006a02` đã nới guard model lên 6B và có CPU offload; không cần bỏ
   lại cap 1B ở runtime, vẫn phải kiểm tra tổng ASR + planner và adapter thật.
@@ -38,6 +38,7 @@ trước khi dùng; không mặc định tài liệu `main` khớp package đã 
    regex làm accuracy chuẩn. WER/CER đơn thuần không chứng minh giữ ý nghĩa.
 6. Có thể giữ E0 nếu fine-tuning không cải thiện; không chọn checkpoint vì training loss thấp.
 
-Chưa tải snapshot PhoWhisper-large, chưa cài training stack CUDA/PEFT/bitsandbytes,
-chưa chạy resource probes/training/export/inference của suite này. Các số liệu
+Chưa tải snapshot PhoWhisper-large hoặc chạy CUDA/bitsandbytes tại đây. Đã kiểm tra
+LoRA/PEFT bằng Whisper ngẫu nhiên tiny trên CPU; chưa chạy large resource probes,
+training/export/inference của suite này. Các số liệu
 benchmark CPU đã có thuộc hạng mục pretrained trước đó, không phải E0 của suite này.
