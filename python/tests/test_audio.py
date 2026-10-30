@@ -159,6 +159,30 @@ class AudioTests(unittest.TestCase):
         # the request span, not lost between it and the next span.
         self.assertGreaterEqual(request_span.duration, 4.0)
 
+    def test_asr_session_entry_failure_still_closes_the_request_span(self):
+        sample = preflight(self.fx.config(input_mode="audio")).samples[0]
+
+        class OffloadedASR(ModelResidency):
+            metadata = {"parameter_count": 10}
+
+            def transcribe(self, path, remaining_seconds):
+                return "text"
+
+        asr = OffloadedASR()
+        asr.cpu_offload, asr.device = True, "cuda"
+        asr.model, asr.torch = MagicMock(), MagicMock()
+        asr.model.to.side_effect = RuntimeError("device transfer failed")
+        recorder = SpanRecorder()
+        outcome = run_sample(sample, ControlledPlanner([FINISH]), asr,
+                             lambda *_: ControlledEnvironment(), MemoryTrace(), Limits(),
+                             split="train", data_root=self.fx.data, recorder=recorder)
+        self.assertEqual(outcome.status, "failed")
+        # A failure entering/leaving the offloaded session must still be visible
+        # as an unfinished request span, not silently absent from measurements.
+        request_spans = [s for s in recorder.spans if s.stage == "request"]
+        self.assertEqual(len(request_spans), 1)
+        self.assertEqual(request_spans[0].status, "unfinished")
+
     def test_asr_time_consumes_sample_budget(self):
         sample = preflight(self.fx.config(input_mode="audio")).samples[0]
         now, opened = [0.0], []

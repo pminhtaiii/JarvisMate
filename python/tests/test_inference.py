@@ -147,6 +147,22 @@ class AdapterTests(unittest.TestCase):
         for call in self.tokenizer.call_args_list:
             self.assertEqual(call.kwargs.get("return_tensors"), "pt")
 
+    def test_live_few_shot_overhead_is_rechecked_every_decision_not_only_at_init(self):
+        example = {"input": {"request": "Gửi tin", "context": {}, "history": [], "available_tools": [],
+                             "observations": []}, "target": {"action": "finish"}}
+        self.tokenizer.apply_chat_template.side_effect = lambda turns, **kw: "x" * len(turns)
+        self.tokenizer.side_effect = lambda text, **kw: {"input_ids": Tensor(len(text))}
+        planner = self.load(examples=(example,), few_shot_token_budget=100)
+        calls_before = self.tokenizer.apply_chat_template.call_count
+        planner.next_action(self.input, 30)
+        new_calls = self.tokenizer.apply_chat_template.call_args_list[calls_before:]
+        turn_counts = sorted(len(call.args[0]) for call in new_calls)
+        # One render includes the two example turns (used for generation), one
+        # omits them (the live budget check); the cached init-time probe alone
+        # is never trusted again for this decision.
+        self.assertEqual(len(new_calls), 2)
+        self.assertEqual(turn_counts[-1] - turn_counts[-2], 2)
+
     def test_examples_exceeding_the_few_shot_token_budget_raise_before_any_sample(self):
         example = {"input": {"request": "Gửi tin", "context": {}, "history": [], "available_tools": [],
                              "observations": []}, "target": {"action": "finish"}}
@@ -266,6 +282,16 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(generation.role, "asr")
         self.assertEqual(generation.output_tokens, 14)
         self.assertEqual(generation.stop_reason, "eos")
+
+    def test_asr_generation_capped_at_max_new_tokens_is_labeled_max_tokens_not_eos(self):
+        with patch("lifemate.adapters.asr.dependencies", return_value=(self.torch, self.hf, self.np)), \
+             patch("lifemate.adapters.asr.metadata", return_value=self.metadata):
+            asr = LocalASR(self.weights, "cpu", Limits())
+        self.model.generate.return_value = Tensor(440)  # Hits the generation cap, not the deadline.
+        recorder = SpanRecorder()
+        asr.set_metrics_recorder(recorder)
+        asr.transcribe(self.fx.split / self.fx.rows[0]["audio"], 30)
+        self.assertEqual(recorder.generations[0].stop_reason, "max_tokens")
 
     def test_asr_clip_index_advances_across_calls_and_resets_on_rebind(self):
         with patch("lifemate.adapters.asr.dependencies", return_value=(self.torch, self.hf, self.np)), \

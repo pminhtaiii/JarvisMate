@@ -143,6 +143,12 @@ class BundleTests(unittest.TestCase):
         with self.assertRaises(PipelineError):
             validate_bundle(payload, self.members, self.partition_sha256, self.catalog_fingerprint)
 
+    def test_bundle_example_with_a_source_hash_not_matching_its_partition_member_is_rejected(self):
+        payload = bundle_payload(self.partition_sha256, self.catalog_fingerprint)
+        payload["examples"][0]["source_sha256"] = "not-the-partition-hash"
+        with self.assertRaises(PipelineError):
+            validate_bundle(payload, self.members, self.partition_sha256, self.catalog_fingerprint)
+
     def test_bundle_with_mismatched_partition_hash_is_rejected(self):
         with self.assertRaises(PipelineError):
             validate_bundle(bundle_payload("other-hash", self.catalog_fingerprint),
@@ -219,6 +225,7 @@ class AuditFixture(unittest.TestCase):
                "history": [], "label": {"tool_calls": tool_calls, "tool_results": tool_results}}
         self.rows[sample_id] = row
         self.train_jsonl.write_text("".join(dumps(r) + "\n" for r in self.rows.values()), encoding="utf-8")
+        self.partition["dataset_sha256"] = digest(self.train_jsonl)
         self.partition["members"].append({"id": sample_id, "group_id": group_id, "partition": partition,
                                           "source_sha256": "s-" + sample_id})
         self.partition_path.write_text(dumps(self.partition), encoding="utf-8")
@@ -313,6 +320,14 @@ class AuditBundleTests(AuditFixture):
                              "history": prepared["history"], "available_tools": prepared["available_tools"],
                              "observations": []}
         example = self.example(row, "g1", 5, {"action": "finish"}, input_override=placeholder_input)
+        with self.assertRaises(PipelineError):
+            self.audit(self.write_bundle([example]))
+
+    def test_partition_from_a_different_train_revision_is_rejected(self):
+        row = self.add_row("train_0001", "g1", [], [])
+        example = self.example(row, "g1", 0, {"action": "finish"})
+        self.partition["dataset_sha256"] = "0" * 64  # No longer the actual train.jsonl digest.
+        self.partition_path.write_text(dumps(self.partition), encoding="utf-8")
         with self.assertRaises(PipelineError):
             self.audit(self.write_bundle([example]))
 

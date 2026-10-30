@@ -140,7 +140,10 @@ class Generation:
     def rate(self) -> float | None:
         if self.output_tokens is None or self.seconds is None or self.seconds <= 0:
             return None
-        return self.output_tokens / self.seconds
+        rate = self.output_tokens / self.seconds
+        # A very small positive duration can make this quotient infinite; jsonio
+        # rejects non-finite values, so persisting the sample would otherwise fail.
+        return rate if math.isfinite(rate) else None
 
     def to_json(self) -> dict:
         return {"role": self.role, "index": self.index, "seconds": self.seconds,

@@ -183,6 +183,24 @@ class ArtifactTests(unittest.TestCase):
         with self.assertRaises(PipelineError):
             store.append(self.outcome(), measurements="not an object")
 
+    def test_write_prediction_then_record_sample_matches_append(self):
+        # cli.py measures the full attempt after this fsync, so it calls the two
+        # steps separately; splitting them must not change the persisted result.
+        store = self.store()
+        outcome = self.outcome()
+        store.write_prediction(outcome)
+        store.record_sample(outcome, measurements={"spans": [], "generations": []}, full_attempt_seconds=1.5)
+        record = store.manifest["samples"][0]
+        self.assertEqual(record["source"], "executed")
+        self.assertEqual(record["full_attempt_seconds"], 1.5)
+        self.assertEqual(json.loads(store.partial_path.read_text(encoding="utf-8")), outcome.result)
+
+    def test_record_sample_without_write_prediction_leaves_no_durable_row(self):
+        store = self.store()
+        with self.assertRaises(PipelineError):
+            store.write_prediction(self.outcome("unknown-id"))
+        self.assertEqual(store.partial_path.read_text(encoding="utf-8"), "")
+
     def test_restore_marks_imported_rows_regardless_of_their_source_tag(self):
         metadata = {"selected_ids": ["train_0001", "train_0002"], "coverage_scope": "subset",
                     "dataset_sha256": "dataset", "catalog_sha256": "catalog"}

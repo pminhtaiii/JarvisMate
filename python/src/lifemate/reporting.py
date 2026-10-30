@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import artifacts
 from .contracts import JSON, PipelineError
-from .jsonio import digest, dumps, read_json
+from .jsonio import digest, dumps, loads, read_json
 from .metrics import MODEL_ROLES, SPAN_STAGES
 
 REPORT_SCHEMA_VERSION = 1
@@ -87,9 +87,25 @@ def validate_manifest(manifest: JSON) -> None:
         raise PipelineError("INPUT_INVALID", "Run manifest coverage does not match its selected IDs", "report")
 
 
+def _journal_ids(run_dir: Path) -> set[str] | None:
+    for name in ("predictions.jsonl", "predictions.partial.jsonl"):
+        path = Path(run_dir) / name
+        if path.is_file():
+            try:
+                with path.open(encoding="utf-8") as stream:
+                    return {loads(line)["id"] for line in stream if line.strip()}
+            except (OSError, ValueError, TypeError, UnicodeError, RecursionError, KeyError) as exc:
+                raise PipelineError("INPUT_INVALID", "Prediction journal is unreadable or invalid", "report") from exc
+    return None
+
+
 def load_manifest(run_dir: Path) -> JSON:
-    manifest = read_json(Path(run_dir) / "manifest.json")
+    run_dir = Path(run_dir)
+    manifest = read_json(run_dir / "manifest.json")
     validate_manifest(manifest)
+    sample_ids = {sample["id"] for sample in manifest["samples"]}
+    if sample_ids and not sample_ids <= (_journal_ids(run_dir) or set()):
+        raise PipelineError("INPUT_INVALID", "Manifest lists samples missing from the prediction journal", "report")
     return manifest
 
 
@@ -251,6 +267,7 @@ def validate_evaluation(payload: JSON, manifest: JSON, prediction_sha256: str | 
     eval_selected = payload["selected_ids"]
     if not isinstance(eval_selected, list) or not set(eval_selected) <= selected:
         raise PipelineError("INPUT_INVALID", "Evaluation selected_ids exceeds this run's selection", "evaluation")
+    eval_selected_set = set(eval_selected)
     rows = payload["rows"]
     if not isinstance(rows, list):
         raise PipelineError("INPUT_INVALID", "Evaluation rows must be a list", "evaluation")
@@ -259,7 +276,7 @@ def validate_evaluation(payload: JSON, manifest: JSON, prediction_sha256: str | 
         if not isinstance(row, dict):
             raise PipelineError("INPUT_INVALID", "Evaluation row must be an object", "evaluation")
         sample_id = row.get("id")
-        if not isinstance(sample_id, str) or sample_id not in selected or sample_id in seen:
+        if not isinstance(sample_id, str) or sample_id not in eval_selected_set or sample_id in seen:
             raise PipelineError("INPUT_INVALID", "Evaluation row has an unknown or duplicate sample ID", "evaluation")
         seen.add(sample_id)
         if type(row.get("gold_empty")) is not bool:

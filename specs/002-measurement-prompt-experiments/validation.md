@@ -26,26 +26,26 @@ command above. Results:
 
 | File | Tests | Result |
 |---|---|---|
-| `test_metrics.py` | 19 | OK |
-| `test_reporting.py` | 31 | OK |
-| `test_prompt_profiles.py` | 33 | OK |
+| `test_metrics.py` | 20 | OK |
+| `test_reporting.py` | 41 | OK |
+| `test_prompt_profiles.py` | 35 | OK |
 | `test_agent.py` | 15 | OK |
-| `test_artifacts.py` | 23 | OK |
-| `test_cli.py` | 30 | OK |
+| `test_artifacts.py` | 25 | OK |
+| `test_cli.py` | 32 | OK |
 
 Also run, outside the quickstart's explicit list, for full-suite regression on files
 this feature touches or that exercise the same manifest/checkpoint surface:
 
 | File | Tests | Result |
 |---|---|---|
-| `test_checkpoint.py` | 5 | OK |
+| `test_checkpoint.py` | 6 | OK |
 | `test_dataset.py` | 12 (2 skipped) | OK |
 | `test_runtime.py` | 5 | OK |
 | `test_selection.py` | 5 | OK |
-| `test_audio.py` | 12 | OK |
-| `test_inference.py` | 23 | OK |
+| `test_audio.py` | 13 | OK |
+| `test_inference.py` | 25 | OK |
 
-213 tests ran, 213 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
+234 tests ran, 234 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
 that require `LIFEMATE_REAL_*` data). `test_real_samples.py` was not invoked: it needs
 `LIFEMATE_REAL_DATA_ROOT`/`LIFEMATE_REAL_SAMPLE_ID`/`LIFEMATE_RUNTIME_DIR`, none of which
 exist in this environment. This confirms the controlled behaviors in
@@ -57,6 +57,11 @@ versions, invalid artifacts, incomplete/imported runs, incompatible factors, bas
 profile-message equivalence, scoped example IDs, strict-prefix rejection, fit/validation
 exclusion, frozen hashes and overflow. It does not measure real latency, token rates,
 or model accuracy.
+
+Updated after addressing CodeRabbit's review of [PR #8](https://github.com/pminhtaiii/JarvisMate/pull/8):
+all 24 findings (7 Major, 17 Minor, including 4 only in the review summary, not
+posted as separate inline comments) were fixed, each with a new or extended
+regression test; counts above are the resulting controlled-suite totals.
 
 ## Real instrumented control, prompt arms, failure/compatibility checks — NOT RUN
 

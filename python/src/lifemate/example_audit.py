@@ -8,9 +8,11 @@ labeled row to inference; only this separate command parses Train labels.
 """
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
-from .artifacts import atomic_json
+from .artifacts import sync_write
 from .contracts import Deadline, JSON, PipelineError, RunConfig
 from .dataset import normalize_record, prepare_request, validate_catalog
 from .jsonio import digest, dumps, loads, read_json, safe_id
@@ -87,7 +89,10 @@ def audit_bundle(bundle_path: Path, partition_manifest_path: Path, train_jsonl_p
     specs = validate_catalog(catalog)
     catalog_fingerprint = digest(catalog_path)
     partition_sha256 = digest(partition_manifest_path)
-    _, members = load_partition_manifest(partition_manifest_path)
+    partition, members = load_partition_manifest(partition_manifest_path)
+    source_dataset_sha256 = digest(train_jsonl_path)
+    if partition["dataset_sha256"] != source_dataset_sha256:
+        raise PipelineError("INPUT_INVALID", "Partition manifest belongs to a different Train revision", "audit")
     bundle = read_json(bundle_path)
     validate_bundle(bundle, members, partition_sha256, catalog_fingerprint)
     rows = _load_train_rows(train_jsonl_path)
@@ -109,20 +114,31 @@ def audit_bundle(bundle_path: Path, partition_manifest_path: Path, train_jsonl_p
                                 f"Bundle example {example['id']} target does not match its gold action", "audit")
     return bundle | {
         "audit_schema_version": AUDIT_SCHEMA_VERSION, "conversion_version": CONVERSION_VERSION,
-        "source_dataset_sha256": digest(train_jsonl_path), "catalog_sha256": catalog_fingerprint,
+        "source_dataset_sha256": source_dataset_sha256, "catalog_sha256": catalog_fingerprint,
         "partition_sha256": partition_sha256,
     }
 
 
 def write_audited_bundle(output_path: Path, audited_bundle: JSON) -> None:
     output_path = Path(output_path)
-    if output_path.exists():
-        raise PipelineError("OUTPUT_IO", "Audited bundle output must be new; audited bundles are immutable", "audit")
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise PipelineError("OUTPUT_IO", "Cannot create audited bundle output directory", "audit") from exc
-    atomic_json(output_path, audited_bundle)
+    temporary = output_path.with_name(output_path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+            sync_write(stream, dumps(audited_bundle) + "\n")
+        # A hard link is atomically exclusive: it fails if `output_path` already
+        # exists, closing the race between an `exists()` check and a later write.
+        os.link(temporary, output_path)
+    except FileExistsError as exc:
+        raise PipelineError("OUTPUT_IO", "Audited bundle output must be new; audited bundles are immutable",
+                            "audit") from exc
+    except OSError as exc:
+        raise PipelineError("OUTPUT_IO", "Cannot persist audited bundle", "audit") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 __all__ = ["AUDIT_SCHEMA_VERSION", "CONVERSION_VERSION", "audit_bundle", "write_audited_bundle"]

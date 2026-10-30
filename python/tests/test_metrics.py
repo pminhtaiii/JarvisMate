@@ -90,6 +90,12 @@ class GenerationTests(unittest.TestCase):
         self.assertIsNone(Generation("planner_action", 0, output_tokens=10, seconds=0.0).rate)
         self.assertEqual(Generation("planner_action", 0, output_tokens=10, seconds=2.0).rate, 5.0)
 
+    def test_rate_stays_finite_or_null_never_infinite(self):
+        # A vanishingly small positive duration can make the quotient overflow to
+        # inf; jsonio rejects non-finite values, so persisting the sample would fail.
+        generation = Generation("planner_action", 0, output_tokens=10**18, seconds=1e-300)
+        self.assertIsNone(generation.rate)
+
     def test_partial_availability_keeps_other_fields_null(self):
         generation = Generation("asr", 1, input_tokens=120)
         payload = generation.to_json()

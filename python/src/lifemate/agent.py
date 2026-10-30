@@ -54,13 +54,13 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                         adapter.set_metrics_recorder(recorder)
             started = clock()
             request_start = recorder.clock.offset() if recorder else None
-            with inference_session(asr):
-                try:
+            try:
+                with inference_session(asr):
                     prepared = prepare_request(sample, asr, deadline, recorder)
-                except Exception:
-                    if recorder:
-                        recorder.unfinished("request", request_start)
-                    raise
+            except Exception:
+                if recorder:
+                    recorder.unfinished("request", request_start)
+                raise
             if recorder:
                 recorder.mark("request", request_start)
             timings["request"] = clock() - started

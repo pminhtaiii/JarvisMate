@@ -102,7 +102,8 @@ class CLITests(unittest.TestCase):
         self.assertGreaterEqual(record["full_attempt_seconds"], 0.0)
         self.assertEqual(record["measurements"]["metrics_schema_version"], 1)
         stages = [s["stage"] for s in record["measurements"]["spans"]]
-        self.assertEqual(stages, ["request", "environment_open", "planner_decision", "final_collection"])
+        self.assertEqual(stages, ["request", "environment_open", "planner_decision", "final_collection",
+                                  "trace_close", "prediction_output"])
         # ControlledPlanner has no set_metrics_recorder; generation detail stays unavailable.
         self.assertEqual(record["measurements"]["generations"], [])
 
@@ -116,7 +117,7 @@ class CLITests(unittest.TestCase):
         self.assertGreaterEqual(failure["full_attempt_seconds"], 0.0)
         stages = [(s["stage"], s["status"]) for s in failure["measurements"]["spans"]]
         self.assertEqual(stages, [("request", "completed"), ("environment_open", "completed"),
-                                  ("planner_decision", "unfinished")])
+                                  ("planner_decision", "unfinished"), ("trace_close", "completed")])
 
     def test_continue_on_error_failure_also_records_full_attempt_seconds(self):
         self.planner = ControlledPlanner([FINISH, RuntimeError("injected"), FINISH])
@@ -150,7 +151,9 @@ class CLITests(unittest.TestCase):
         self.assertEqual(failure["error"]["code"], "OUTPUT_IO")
         self.assertEqual(failure["agent_loop"]["status"], "completed")
         self.assertIsInstance(failure["full_attempt_seconds"], float)
-        self.assertEqual(failure["measurements"]["spans"][-1]["stage"], "final_collection")
+        # The loop succeeded through final_collection and trace_close; the prediction
+        # write itself is what failed, so no prediction_output span is recorded.
+        self.assertEqual(failure["measurements"]["spans"][-1]["stage"], "trace_close")
 
     def test_mid_loop_failure_has_no_agent_loop_summary(self):
         self.planner = ControlledPlanner([RuntimeError("injected")])
@@ -504,7 +507,8 @@ class AuditExamplesCLITests(unittest.TestCase):
         self.catalog_path = self.fx.split / "train_tools_catalog.json"
         self.partition_path = self.fx.root / "partition.json"
         self.partition_path.write_text(json.dumps({
-            "partition_schema_version": 1, "dataset_sha256": "d", "grouping_method": "m", "members": [
+            "partition_schema_version": 1, "dataset_sha256": digest(self.fx.split / "train.jsonl"),
+            "grouping_method": "m", "members": [
                 {"id": "train_0001", "group_id": "g1", "partition": "fit", "source_sha256": "s"}]}),
             encoding="utf-8")
         row = self.fx.rows[0]

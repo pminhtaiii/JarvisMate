@@ -139,7 +139,8 @@ def validate_bundle(payload: JSON, partition_members: dict[str, JSON], partition
             raise PipelineError("INPUT_INVALID", "Bundle example provenance is not unique", "prompt")
         seen_ids.add(example["id"])
         member = partition_members.get(example["id"])
-        if member is None or member["partition"] != "fit" or member["group_id"] != example["group_id"]:
+        if (member is None or member["partition"] != "fit" or member["group_id"] != example["group_id"]
+                or member["source_sha256"] != example["source_sha256"]):
             raise PipelineError("INPUT_INVALID", "Bundle example is not a validated fit-partition member", "prompt")
         validate_example_input(example.get("input"))
         validate_example_target(example.get("target"))

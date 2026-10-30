@@ -111,6 +111,19 @@ class ReportTests(RunFixture):
         with self.assertRaises(PipelineError):
             build_report(store.directory)
 
+    def test_manifest_sample_without_a_matching_prediction_row_is_rejected(self):
+        store = self.make_run(ids=["train_0001"])
+        # A damaged manifest claims a completed, timed sample, but its prediction
+        # journal was never written for it.
+        store.manifest["samples"].append({"id": "train_0001", "status": "completed", "elapsed": 1.0,
+                                          "steps": 1, "timings": {}, "stop_reason": "finish",
+                                          "source": "executed", "measurements": None, "full_attempt_seconds": 1.0})
+        store.manifest["completed_ids"].append("train_0001")
+        store.manifest["not_started_ids"] = []
+        store.save()
+        with self.assertRaises(PipelineError):
+            build_report(store.directory)
+
     def test_incomplete_run_with_a_failure_still_reports(self):
         store = self.make_run(ids=["train_0001", "train_0002", "train_0003"])
         store.append(outcome("train_0001"), full_attempt_seconds=1.0)
@@ -265,6 +278,18 @@ class EvaluationTests(RunFixture):
                 payload = self.evaluation_payload(store, rows)
                 with self.assertRaises(PipelineError):
                     build_report(store.directory, self.write_evaluation(payload))
+
+    def test_evaluation_row_outside_its_own_declared_selection_is_rejected(self):
+        store = self.make_run(ids=["train_0001", "train_0002"])
+        store.append(outcome("train_0001"))
+        store.append(outcome("train_0002"))
+        store.finish()
+        # train_0002 is part of the run's full selection but not of this
+        # evaluation's own narrower selected_ids; it must not score anyway.
+        payload = self.evaluation_payload(store, [
+            {"id": "train_0002", "gold_empty": False, "sample_score": 0.5}], selected_ids=["train_0001"])
+        with self.assertRaises(PipelineError):
+            build_report(store.directory, self.write_evaluation(payload))
 
     def test_missing_evaluation_defaults_correctness_to_not_evaluated(self):
         store = self.make_run(ids=["train_0001"])

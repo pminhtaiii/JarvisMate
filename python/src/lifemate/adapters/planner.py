@@ -49,6 +49,7 @@ class LocalPlanner(ModelResidency):
         self.selection_filter = selection_filter
         self.profile = profile or resolve_profile("baseline")
         self.system, self.examples = self.profile["system"], tuple(examples)
+        self.few_shot_token_budget = few_shot_token_budget
         self.last_decision_details = []
         self._selection_filters = {}
         self._generation_index = 0
@@ -229,6 +230,16 @@ class LocalPlanner(ModelResidency):
                 tokenize=False, add_generation_prompt=True, enable_thinking=False)
             tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
             length = tokens["input_ids"].shape[-1]
+            if self.examples and self.few_shot_token_budget is not None:
+                # The cached init-time probe is a lower bound, not this decision's
+                # actual delta; verify every live render against the configured budget.
+                bare = self.tokenizer.apply_chat_template(
+                    messages(planner_input, system=self.system, examples=()),
+                    tokenize=False, add_generation_prompt=True, enable_thinking=False)
+                bare_length = self.tokenizer(bare, return_tensors="pt", add_special_tokens=False)["input_ids"].shape[-1]
+                if length - bare_length > self.few_shot_token_budget:
+                    raise PipelineError("CONTEXT_LIMIT",
+                                        "Fixed demonstrations exceed the configured few-shot token budget", "planner")
             if length + self.limits.output_tokens > self.limits.context_tokens:
                 raise PipelineError("CONTEXT_LIMIT", "Prompt plus output reservation exceeds context", "planner")
             if self.device == "cuda" and remaining_seconds > 0:

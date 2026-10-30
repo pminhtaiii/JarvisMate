@@ -267,13 +267,14 @@ class RunStore:
             raise PipelineError("INPUT_INVALID", "Pipeline code changed during this run; restart with a fixed version",
                                 "configuration")
 
-    def append(self, outcome, *, measurements: JSON | None = None,
-              full_attempt_seconds: float | None = None) -> None:
+    def write_prediction(self, outcome) -> None:
+        """Fsync the prediction row only; call `record_sample` to commit the manifest entry.
+
+        Split out so a caller can measure the full attempt, including this fsync,
+        before recording `full_attempt_seconds` (the row write is the commit point).
+        """
         if outcome.result is None or outcome.status == "failed":
             raise PipelineError("OUTPUT_IO", "Failure cannot become a prediction", "output")
-        if measurements is not None and not isinstance(measurements, dict):
-            raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
-        _valid_attempt_seconds(full_attempt_seconds)
         validate_prediction(outcome.result)
         if (outcome.id not in self.manifest["not_started_ids"]
                 or outcome.id in self.manifest["completed_ids"] or outcome.result["id"] != outcome.id):
@@ -283,6 +284,12 @@ class RunStore:
                 sync_write(stream, dumps(outcome.result) + "\n")
         except OSError as exc:
             raise PipelineError("OUTPUT_IO", "Cannot persist prediction row", "output") from exc
+
+    def record_sample(self, outcome, *, measurements: JSON | None = None,
+                      full_attempt_seconds: float | None = None) -> None:
+        if measurements is not None and not isinstance(measurements, dict):
+            raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
+        _valid_attempt_seconds(full_attempt_seconds)
         self.manifest["completed_ids"].append(outcome.id)
         self.manifest["not_started_ids"].remove(outcome.id)
         self.manifest["samples"].append({"id": outcome.id, "status": outcome.status,
@@ -291,6 +298,11 @@ class RunStore:
                                          "source": "executed", "measurements": measurements,
                                          "full_attempt_seconds": full_attempt_seconds})
         self.save()
+
+    def append(self, outcome, *, measurements: JSON | None = None,
+              full_attempt_seconds: float | None = None) -> None:
+        self.write_prediction(outcome)
+        self.record_sample(outcome, measurements=measurements, full_attempt_seconds=full_attempt_seconds)
 
     def sample_failed(self, error: JSON, sample_id: str, *, measurements: JSON | None = None,
                       full_attempt_seconds: float | None = None, agent_loop: JSON | None = None) -> None:

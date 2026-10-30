@@ -36,7 +36,7 @@ custom scorer, full-container supervisor, or Docker submission is added here.
 | `artifacts.py` | Durable exact predictions, bounded/redacted debug traces, manifest/publication lifecycle |
 | `cli.py` | Preflight, sequential model reuse, stop-on-first-failure orchestration, `report`/`compare-runs`/`audit-examples` |
 | `metrics.py` | Injectable monotonic clock, nested spans, per-generation token/role telemetry |
-| `reporting.py` | Offline manifest/trace readers, nearest-rank distributions, single-factor comparison |
+| `reporting.py` | Offline manifest reader (spans/generations from `measurements`, never `traces/*.jsonl`), nearest-rank distributions, single-factor comparison |
 | `prompt_profiles.py`, `example_audit.py` | Baseline/precise-v1 profile identity, fit-only bundle/partition validation |
 
 ## Install on the receiving machine
@@ -82,8 +82,9 @@ attempt time in the manifest/trace; legacy elapsed fields stay populated unchang
 Three additional offline commands, and three `run` options, implement
 [feature 002](../specs/002-measurement-prompt-experiments/spec.md):
 
-- `lifemate report --run-dir DIR [--evaluation-file PATH]` reads a run's manifest/traces
-  only (no models, no ToolEnv) and writes `report.json`/`report.md` beside it: coverage,
+- `lifemate report --run-dir DIR [--evaluation-file PATH]` reads a run's `manifest.json`
+  only — each sample's nested spans/generations, not the separate `traces/*.jsonl`
+  files — (no models, no ToolEnv) and writes `report.json`/`report.md` beside it: coverage,
   missing/failed/imported counts, nearest-rank stage/latency distributions, weighted
   token rates, and `not_evaluated` correctness unless a separate evaluation file is given.
 - `lifemate compare-runs --baseline-run DIR --candidate-run DIR --factor

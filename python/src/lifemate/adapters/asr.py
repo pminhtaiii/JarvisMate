@@ -9,6 +9,8 @@ from ..dataset import wav_info
 from ..metrics import Generation
 from .common import ModelResidency, dependencies, metadata, model_directory, parameter_count, stopping_criteria
 
+MAX_NEW_TOKENS = 440
+
 
 class LocalASR(ModelResidency):
     def __init__(self, path, device: str, limits: Limits, seed: int = 20261027, *, cpu_offload=False):
@@ -60,7 +62,7 @@ class LocalASR(ModelResidency):
                 with self.torch.inference_mode():
                     output = self.model.generate(
                         features, **kwargs, language="vi", task="transcribe", forced_decoder_ids=None,
-                        do_sample=False, num_beams=1, max_new_tokens=440,
+                        do_sample=False, num_beams=1, max_new_tokens=MAX_NEW_TOKENS,
                         return_timestamps=False, stopping_criteria=stop)
             except Exception:
                 if self._recorder:
@@ -70,9 +72,11 @@ class LocalASR(ModelResidency):
             if self._recorder:
                 span = self._recorder.mark("generation", generation_start, index=index, parent_stage="asr_clip")
                 output_length = int(output.shape[-1]) if hasattr(output, "shape") else None
+                stop_reason = ("deadline" if timed_out
+                              else "max_tokens" if output_length is not None and output_length >= MAX_NEW_TOKENS
+                              else "eos")
                 self._recorder.record_generation(Generation("asr", index, seconds=span.duration,
-                                                             output_tokens=output_length,
-                                                             stop_reason="deadline" if timed_out else "eos"))
+                                                             output_tokens=output_length, stop_reason=stop_reason))
             if timed_out:
                 raise PipelineError("TIME_LIMIT", "ASR exceeded sample deadline", "asr")
             result = self.processor.batch_decode(output, skip_special_tokens=True)[0].strip()

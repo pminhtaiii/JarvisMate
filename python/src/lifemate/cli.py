@@ -292,7 +292,10 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
                                          split=config.split, data_root=config.data_root, clock=clock,
                                          recorder=recorder)
             finally:
+                trace_close_start = recorder.clock.offset() if recorder else None
                 trace.close()
+                if recorder:
+                    recorder.mark("trace_close", trace_close_start)
             if outcome.status == "failed":
                 # Stop the clock right after trace close/cleanup, before any
                 # terminal failure-summary bookkeeping below.
@@ -313,8 +316,13 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
             # from the loop having failed outright.
             agent_loop = {"status": outcome.status, "steps": outcome.steps,
                          "stop_reason": outcome.stop_reason, "elapsed": outcome.elapsed}
+            output_start = recorder.clock.offset() if recorder else None
+            store.write_prediction(outcome)
+            if recorder:
+                recorder.mark("prediction_output", output_start)
+            # Measured after the fsynced prediction write, the actual commit point.
             full_attempt_seconds = clock() - attempt_start
-            store.append(outcome, measurements=recorder.to_json(), full_attempt_seconds=full_attempt_seconds)
+            store.record_sample(outcome, measurements=recorder.to_json(), full_attempt_seconds=full_attempt_seconds)
             print(f"[{position}/{total}] {sample.id} {outcome.status} "
                   f"elapsed={outcome.elapsed:.1f}s steps={outcome.steps} total={full_attempt_seconds:.1f}s "
                   f"progress={len(store.manifest['completed_ids']) / total:.1%} "
