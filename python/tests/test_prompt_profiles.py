@@ -8,7 +8,7 @@ from pathlib import Path
 
 from lifemate.contracts import Deadline, PipelineError, RunConfig
 from lifemate.dataset import normalize_record, prepare_request, validate_catalog
-from lifemate.example_audit import audit_bundle, write_audited_bundle
+from lifemate.example_audit import audit_bundle, verified_content_sha256, write_audited_bundle
 from lifemate.jsonio import digest, dumps
 from lifemate.prompt_profiles import (
     bundle_identity, profile_identity, reject_fit_in_selection, resolve_profile, validate_bundle,
@@ -273,6 +273,11 @@ class AuditBundleTests(AuditFixture):
         self.assertEqual(audited["conversion_version"], "lifemate-sft-conversion-v1")
         self.assertEqual(audited["source_dataset_sha256"], digest(self.train_jsonl))
         self.assertEqual(audited["catalog_sha256"], digest(self.catalog_path))
+        self.assertEqual(audited["verified_content_sha256"], verified_content_sha256(audited["examples"]))
+        # Editing the content after auditing must change the bound digest, so a
+        # run-path recheck against the (unedited) current content would catch it.
+        edited = [dict(audited["examples"][0], target={"action": "finish"})]
+        self.assertNotEqual(audited["verified_content_sha256"], verified_content_sha256(edited))
 
     def test_valid_terminal_finish_target_is_accepted(self):
         row = self.add_row("train_0001", "g1", [{"name": "contacts.search", "arguments": {"query": "Lan"}}],

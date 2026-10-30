@@ -8,7 +8,7 @@ from lifemate.adapters.common import ModelResidency
 from lifemate.artifacts import sync_write
 from lifemate.cli import main
 from lifemate.contracts import PipelineError
-from lifemate.example_audit import AUDIT_SCHEMA_VERSION
+from lifemate.example_audit import AUDIT_SCHEMA_VERSION, verified_content_sha256
 from lifemate.jsonio import digest
 from lifemate.runtime import load_runtime
 from support import CATALOG, FINISH, ControlledASR, ControlledEnvironment, ControlledPlanner, Fixture, call
@@ -381,6 +381,7 @@ class FewShotCLITests(unittest.TestCase):
                 "audit_schema_version": AUDIT_SCHEMA_VERSION, "conversion_version": "lifemate-sft-conversion-v1",
                 "source_dataset_sha256": self.dataset_sha256, "catalog_sha256": catalog_sha256,
                 "partition_sha256": digest(self.partition_path),
+                "verified_content_sha256": verified_content_sha256(bundle["examples"]),
             }
         bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         return bundle_path
@@ -445,6 +446,19 @@ class FewShotCLITests(unittest.TestCase):
 
     def test_unaudited_bundle_is_rejected_before_model_load(self):
         bundle_path = self.write_bundle(audited=False)
+        code = self.execute(self.arguments("train_0002", "--few-shot-bundle", str(bundle_path),
+                                           "--partition-manifest", str(self.partition_path)))
+        self.assertEqual(code, 2)
+        self.assertEqual(self.model_loads, [])
+
+    def test_bundle_content_edited_after_auditing_is_rejected_before_model_load(self):
+        bundle_path = self.write_bundle()  # Audit markers are genuine for the original content.
+        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+        # Copying the four scalar audit markers alone is not enough: the content
+        # hash binds them to this exact input/target, so an edit after auditing
+        # (or a forged bundle with real markers but fabricated content) is caught.
+        bundle["examples"][0]["target"] = {"action": "call", "name": "sms.send", "arguments": {}}
+        bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         code = self.execute(self.arguments("train_0002", "--few-shot-bundle", str(bundle_path),
                                            "--partition-manifest", str(self.partition_path)))
         self.assertEqual(code, 2)

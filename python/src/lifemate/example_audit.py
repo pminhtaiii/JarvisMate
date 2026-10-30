@@ -8,6 +8,7 @@ labeled row to inference; only this separate command parses Train labels.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from .artifacts import sync_write
@@ -16,8 +17,17 @@ from .dataset import normalize_record, prepare_request, validate_catalog
 from .jsonio import digest, dumps, loads, read_json, safe_id
 from .prompt_profiles import load_partition_manifest, validate_bundle
 
-AUDIT_SCHEMA_VERSION = 1
+AUDIT_SCHEMA_VERSION = 2
 CONVERSION_VERSION = "lifemate-sft-conversion-v1"
+
+
+def verified_content_sha256(examples: list[JSON]) -> str:
+    """Bind an audit to the exact input/target content it checked against Train
+    gold. Editing an example's content after auditing changes this digest, so a
+    run comparing it against the bundle's current content catches the edit —
+    a copied/forged marker on hand-written content will not reproduce it."""
+    content = dumps([{"id": e["id"], "input": e["input"], "target": e["target"]} for e in examples])
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _load_train_rows(path: Path) -> dict[str, JSON]:
@@ -114,6 +124,7 @@ def audit_bundle(bundle_path: Path, partition_manifest_path: Path, train_jsonl_p
         "audit_schema_version": AUDIT_SCHEMA_VERSION, "conversion_version": CONVERSION_VERSION,
         "source_dataset_sha256": source_dataset_sha256, "catalog_sha256": catalog_fingerprint,
         "partition_sha256": partition_sha256,
+        "verified_content_sha256": verified_content_sha256(bundle["examples"]),
     }
 
 
@@ -136,4 +147,5 @@ def write_audited_bundle(output_path: Path, audited_bundle: JSON) -> None:
         raise PipelineError("OUTPUT_IO", "Cannot persist audited bundle", "audit") from exc
 
 
-__all__ = ["AUDIT_SCHEMA_VERSION", "CONVERSION_VERSION", "audit_bundle", "write_audited_bundle"]
+__all__ = ["AUDIT_SCHEMA_VERSION", "CONVERSION_VERSION", "audit_bundle", "verified_content_sha256",
+          "write_audited_bundle"]

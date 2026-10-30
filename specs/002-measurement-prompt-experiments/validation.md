@@ -31,7 +31,7 @@ command above. Results:
 | `test_prompt_profiles.py` | 35 | OK |
 | `test_agent.py` | 15 | OK |
 | `test_artifacts.py` | 25 | OK |
-| `test_cli.py` | 32 | OK |
+| `test_cli.py` | 33 | OK |
 
 Also run, outside the quickstart's explicit list, for full-suite regression on files
 this feature touches or that exercise the same manifest/checkpoint surface:
@@ -45,7 +45,7 @@ this feature touches or that exercise the same manifest/checkpoint surface:
 | `test_audio.py` | 13 | OK |
 | `test_inference.py` | 25 | OK |
 
-237 tests ran, 237 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
+238 tests ran, 238 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
 that require `LIFEMATE_REAL_*` data). `test_real_samples.py` was not invoked: it needs
 `LIFEMATE_REAL_DATA_ROOT`/`LIFEMATE_REAL_SAMPLE_ID`/`LIFEMATE_RUNTIME_DIR`, none of which
 exist in this environment. This confirms the controlled behaviors in
@@ -66,23 +66,30 @@ by an `@coderabbitai review` comment) posted 6 more findings (1 Major: an
 unterminated final row in `predictions.partial.jsonl` could block reporting; 5
 Minor: a non-finite aggregate token rate, a hard-link publish failing on
 filesystems without hard-link support, a same-prompt comparison passing
-validation, and a dataset-mismatch test that didn't actually exercise its own
-check). All 5 of those with a concrete code fix were fixed and tested.
+validation, a dataset-mismatch test that didn't actually exercise its own check,
+and the run path trusting a bundle's copied audit-identity fields without binding
+them to its actual content). All 6 were fixed and tested.
 
-One finding from that second round is **not** fixed as literally suggested:
-CodeRabbit's note on `cli.py` that the run path trusts a bundle's copied
-`audit_schema_version`/`source_dataset_sha256`/`catalog_sha256`/`partition_sha256`
-fields without re-verifying examples against Train labels. Per
-[contracts/prompts.md](contracts/prompts.md), re-verification against Train labels
-belongs only to the offline `audit-examples` command — "Parsing Train labels
-belongs only to this separate offline command... never feeds this raw labeled row
-to inference" — and the run path is specified to verify only "these identities
-[the four hashes] against the visible inputs," which is what it does. Re-checking
-targets at run time would require the run path to read Train labels, contradicting
-that contract. This is a cooperative-identity check, like every other hash
-comparison in this codebase (dataset/catalog/partition digests), not a
-cryptographic guarantee against a hand-forged bundle; closing that gap for real
-would need an external signature mechanism outside this feature's scope.
+The last of those, on `cli.py`, needed a design decision rather than a local
+one-line fix: it noted that the run path trusted a
+bundle's copied `audit_schema_version`/`source_dataset_sha256`/`catalog_sha256`/
+`partition_sha256` fields without re-verifying examples against Train labels — a
+hand-written bundle with fabricated content could carry those four fields and
+still reach `LocalPlanner`. Re-running the full target reconstruction on the run
+path (CodeRabbit's literal suggestion) would require the run path to parse Train
+labels, contradicting [contracts/prompts.md](contracts/prompts.md)'s "Parsing
+Train labels belongs only to this separate offline command." Instead,
+`audit_bundle` now also records `verified_content_sha256`, a digest over each
+example's exact verified `input`/`target`, and the run path recomputes that same
+digest from the bundle's current content and rejects a mismatch. This binds the
+audit markers to the content they were checked against — editing an example after
+auditing, or copying the four scalar fields onto fabricated content, no longer
+reproduces the digest — without the run path ever reading a Train label itself.
+It remains a cooperative-identity check, like every other hash comparison in this
+codebase, not a cryptographic guarantee against someone who recomputes the digest
+themselves; that would need an external signature mechanism outside this
+feature's scope, and was judged disproportionate for this single-user offline
+pipeline.
 
 ## Real instrumented control, prompt arms, failure/compatibility checks — NOT RUN
 

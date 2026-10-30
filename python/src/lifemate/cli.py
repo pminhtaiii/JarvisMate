@@ -13,7 +13,7 @@ from .agent import run_sample
 from .artifacts import RunStore
 from .contracts import Limits, PipelineError, RunConfig
 from .dataset import preflight
-from .example_audit import AUDIT_SCHEMA_VERSION, audit_bundle, write_audited_bundle
+from .example_audit import AUDIT_SCHEMA_VERSION, audit_bundle, verified_content_sha256, write_audited_bundle
 from .jsonio import digest, dumps, read_json
 from .metrics import Clock, SpanRecorder
 from .prompt_profiles import (
@@ -194,6 +194,13 @@ def resolve_prompt_configuration(config: RunConfig, dataset_metadata) -> dict:
         raise PipelineError(
             "INPUT_INVALID",
             "Few-shot bundle is not an audited bundle matching this run's dataset/catalog/partition", "prompt")
+    if bundle.get("verified_content_sha256") != verified_content_sha256(bundle["examples"]):
+        # The audit-time markers above are copied scalar fields; this binds them
+        # to the exact content they were checked against, so editing an example
+        # after auditing (or hand-writing the markers onto fabricated content)
+        # is caught instead of silently reaching the planner.
+        raise PipelineError(
+            "INPUT_INVALID", "Few-shot bundle content does not match its audited content hash", "prompt")
     reject_fit_in_selection(dataset_metadata["selected_ids"], members)
     result["examples"] = tuple(bundle["examples"])
     result["identity"]["bundle"] = bundle_identity(bundle) | {"partition_sha256": partition_sha256}
