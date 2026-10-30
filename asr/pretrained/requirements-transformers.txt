@@ -1,0 +1,5 @@
+# Install torch's CPU wheel first on Raccoon; see README.
+torch==2.9.0
+transformers==4.57.1
+numpy==2.3.4
+huggingface-hub==0.36.0

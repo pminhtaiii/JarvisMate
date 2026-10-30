@@ -1,0 +1,2 @@
+# Optional, gated at runtime. This pin is not a claim of target-GPU compatibility.
+bitsandbytes==0.48.1
