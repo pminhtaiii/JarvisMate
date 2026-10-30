@@ -8,6 +8,7 @@ from lifemate.adapters.common import ModelResidency
 from lifemate.artifacts import sync_write
 from lifemate.cli import main
 from lifemate.contracts import PipelineError
+from lifemate.example_audit import AUDIT_SCHEMA_VERSION
 from lifemate.jsonio import digest
 from lifemate.runtime import load_runtime
 from support import CATALOG, FINISH, ControlledASR, ControlledEnvironment, ControlledPlanner, Fixture, call
@@ -350,23 +351,35 @@ class FewShotCLITests(unittest.TestCase):
         self.addCleanup(self.fx.close)
         self.model_loads = []
         self.stdout, self.stderr = io.StringIO(), io.StringIO()
+        self.dataset_sha256 = digest(self.fx.split / "train.jsonl")
         self.partition_path = self.fx.root / "partition.json"
         self.partition_path.write_text(json.dumps({
-            "partition_schema_version": 1, "dataset_sha256": "d", "grouping_method": "m", "members": [
+            "partition_schema_version": 1, "dataset_sha256": self.dataset_sha256, "grouping_method": "m",
+            "members": [
                 {"id": "train_0001", "group_id": "g1", "partition": "fit", "source_sha256": "s1"},
                 {"id": "train_0002", "group_id": "g2", "partition": "validation", "source_sha256": "s2"}]}),
             encoding="utf-8")
 
-    def write_bundle(self, catalog_fingerprint=None):
+    def write_bundle(self, catalog_fingerprint=None, audited=True):
         bundle_path = self.fx.root / "bundle.json"
-        bundle_path.write_text(json.dumps({
+        catalog_sha256 = catalog_fingerprint or digest(self.fx.split / "train_tools_catalog.json")
+        bundle = {
             "bundle_schema_version": 1, "bundle_id": "b1",
             "partition_manifest_sha256": digest(self.partition_path), "split": "train",
-            "catalog_fingerprint": catalog_fingerprint or digest(self.fx.split / "train_tools_catalog.json"),
+            "catalog_fingerprint": catalog_sha256,
             "examples": [{"id": "train_0001", "group_id": "g1", "source_sha256": "s1", "prefix_index": 0,
                          "rationale": "r", "input": {"request": "x", "context": {}, "history": [],
                                                       "available_tools": [], "observations": []},
-                         "target": {"action": "finish"}}]}), encoding="utf-8")
+                         "target": {"action": "finish"}}]}
+        if audited:
+            # A run only ever consumes the output of `audit-examples`; mirror that
+            # proof here instead of a hand-written bundle the pipeline must reject.
+            bundle |= {
+                "audit_schema_version": AUDIT_SCHEMA_VERSION, "conversion_version": "lifemate-sft-conversion-v1",
+                "source_dataset_sha256": self.dataset_sha256, "catalog_sha256": catalog_sha256,
+                "partition_sha256": digest(self.partition_path),
+            }
+        bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         return bundle_path
 
     def runtime(self, config, data):
@@ -426,6 +439,34 @@ class FewShotCLITests(unittest.TestCase):
         manifest = json.loads((self.fx.root / "run" / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["effective_prompt"]["few_shot_token_budget"], 1024)
         self.assertEqual(manifest["effective_prompt"]["bundle"]["example_count"], 1)
+
+    def test_unaudited_bundle_is_rejected_before_model_load(self):
+        bundle_path = self.write_bundle(audited=False)
+        code = self.execute(self.arguments("train_0002", "--few-shot-bundle", str(bundle_path),
+                                           "--partition-manifest", str(self.partition_path)))
+        self.assertEqual(code, 2)
+        self.assertEqual(self.model_loads, [])
+
+    def test_partition_from_a_different_dataset_is_rejected_before_model_load(self):
+        other_partition = self.fx.root / "other_partition.json"
+        other_partition.write_text(json.dumps({
+            "partition_schema_version": 1, "dataset_sha256": "0" * 64, "grouping_method": "m", "members": [
+                {"id": "train_0002", "group_id": "g2", "partition": "validation", "source_sha256": "s2"}]}),
+            encoding="utf-8")
+        bundle_path = self.fx.root / "bundle.json"
+        bundle_path.write_text(json.dumps({
+            "bundle_schema_version": 1, "bundle_id": "b1",
+            "partition_manifest_sha256": digest(other_partition), "split": "train",
+            "catalog_fingerprint": digest(self.fx.split / "train_tools_catalog.json"),
+            "audit_schema_version": AUDIT_SCHEMA_VERSION, "conversion_version": "lifemate-sft-conversion-v1",
+            "source_dataset_sha256": self.dataset_sha256,
+            "catalog_sha256": digest(self.fx.split / "train_tools_catalog.json"),
+            "partition_sha256": digest(other_partition),
+            "examples": []}), encoding="utf-8")
+        code = self.execute(self.arguments("train_0002", "--few-shot-bundle", str(bundle_path),
+                                           "--partition-manifest", str(other_partition)))
+        self.assertEqual(code, 2)
+        self.assertEqual(self.model_loads, [])
 
     def test_explicit_over_cap_budget_is_rejected_at_argument_validation(self):
         bundle_path = self.write_bundle()

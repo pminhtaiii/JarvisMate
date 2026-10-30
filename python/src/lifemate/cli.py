@@ -13,7 +13,7 @@ from .agent import run_sample
 from .artifacts import RunStore
 from .contracts import Limits, PipelineError, RunConfig
 from .dataset import preflight
-from .example_audit import audit_bundle, write_audited_bundle
+from .example_audit import AUDIT_SCHEMA_VERSION, audit_bundle, write_audited_bundle
 from .jsonio import digest, dumps, read_json
 from .metrics import Clock, SpanRecorder
 from .prompt_profiles import (
@@ -182,9 +182,18 @@ def resolve_prompt_configuration(config: RunConfig, dataset_metadata) -> dict:
     if config.few_shot_bundle is None:
         return result
     partition_sha256 = digest(config.partition_manifest)
-    _, members = load_partition_manifest(config.partition_manifest)
+    partition, members = load_partition_manifest(config.partition_manifest)
+    if partition["dataset_sha256"] != dataset_metadata["dataset_sha256"]:
+        raise PipelineError("INPUT_INVALID", "Partition dataset does not match the selected dataset", "prompt")
     bundle = read_json(config.few_shot_bundle)
     validate_bundle(bundle, members, partition_sha256, dataset_metadata["catalog_sha256"])
+    if (bundle.get("audit_schema_version") != AUDIT_SCHEMA_VERSION
+            or bundle.get("source_dataset_sha256") != dataset_metadata["dataset_sha256"]
+            or bundle.get("catalog_sha256") != dataset_metadata["catalog_sha256"]
+            or bundle.get("partition_sha256") != partition_sha256):
+        raise PipelineError(
+            "INPUT_INVALID",
+            "Few-shot bundle is not an audited bundle matching this run's dataset/catalog/partition", "prompt")
     reject_fit_in_selection(dataset_metadata["selected_ids"], members)
     result["examples"] = tuple(bundle["examples"])
     result["identity"]["bundle"] = bundle_identity(bundle) | {"partition_sha256": partition_sha256}

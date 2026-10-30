@@ -174,7 +174,7 @@ def _timing(entries: list[JSON]) -> JSON:
 def _stage_durations(entries: list[JSON]) -> JSON:
     per_sample_totals = {stage: [] for stage in SPAN_STAGES}
     per_invocation = {stage: [] for stage in SPAN_STAGES}
-    for entry in entries:
+    for entry in _current_run(entries):
         measurements = entry.get("measurements")
         if not measurements:
             continue
@@ -197,7 +197,7 @@ def _stage_durations(entries: list[JSON]) -> JSON:
 
 def _token_rates(entries: list[JSON]) -> JSON:
     by_role = {role: [] for role in MODEL_ROLES}
-    for entry in entries:
+    for entry in _current_run(entries):
         measurements = entry.get("measurements")
         if not measurements:
             continue
@@ -394,11 +394,18 @@ def _model_identity(manifest: JSON) -> JSON:
     return {"planner": identity.get("planner"), "asr": identity.get("asr"), "packages": identity.get("packages")}
 
 
+def _comparable_prompt(manifest: JSON) -> JSON:
+    # `example_overhead_tokens` is only known after the planner loads a bundle; it is
+    # informational, not an experiment-defining input, so it never gates identity.
+    value = manifest.get("effective_prompt") or {}
+    return {k: v for k, v in value.items() if k != "example_overhead_tokens"}
+
+
 def validate_factor_identity(factor: str, baseline: JSON, candidate: JSON) -> None:
     if factor not in FACTORS:
         raise PipelineError("INPUT_INVALID", "Unsupported comparison factor", "compare")
-    for key in ("split", "input_mode"):
-        if baseline[key] != candidate[key]:
+    for key in ("split", "input_mode", "dataset_sha256", "catalog_sha256", "runtime"):
+        if baseline.get(key) != candidate.get(key):
             raise PipelineError("INPUT_INVALID", f"Baseline/candidate {key} differ", "compare")
     if set(baseline["selected_ids"]) != set(candidate["selected_ids"]):
         raise PipelineError("INPUT_INVALID", "Baseline/candidate selected IDs differ", "compare")
@@ -412,13 +419,27 @@ def validate_factor_identity(factor: str, baseline: JSON, candidate: JSON) -> No
             raise PipelineError("INPUT_INVALID", f"Baseline/candidate {key} differ", "compare")
     if baseline["limits"] != candidate["limits"]:
         raise PipelineError("INPUT_INVALID", "Baseline/candidate limits differ", "compare")
+    baseline_prompt, candidate_prompt = _comparable_prompt(baseline), _comparable_prompt(candidate)
     if factor == "harness":
         if (baseline["prompt_version"], baseline["prompt_sha256"]) != (candidate["prompt_version"], candidate["prompt_sha256"]):
             raise PipelineError("INPUT_INVALID", "A harness factor must not change the prompt", "compare")
+        if baseline_prompt != candidate_prompt:
+            raise PipelineError(
+                "INPUT_INVALID", "A harness factor must not change the effective prompt configuration", "compare")
         return
     # Instructions/few-shot trials declare an unchanged harness: require identical code.
     if baseline["execution_identity"]["code"] != candidate["execution_identity"]["code"]:
         raise PipelineError("INPUT_INVALID", f"Factor {factor!r} requires identical execution code", "compare")
+    # Each trial isolates exactly one prompt factor; the other must stay fixed.
+    if factor == "instructions":
+        other = lambda prompt: {k: v for k, v in prompt.items() if k != "profile"}
+        if other(baseline_prompt) != other(candidate_prompt):
+            raise PipelineError(
+                "INPUT_INVALID", "An instructions factor must hold the few-shot configuration fixed", "compare")
+    else:  # few-shot
+        if baseline_prompt.get("profile") != candidate_prompt.get("profile"):
+            raise PipelineError(
+                "INPUT_INVALID", "A few-shot factor must hold the instruction profile fixed", "compare")
 
 
 def _paired_rows(baseline_entries: list[JSON], candidate_entries: list[JSON]) -> list[JSON]:
@@ -435,8 +456,9 @@ def _paired_rows(baseline_entries: list[JSON], candidate_entries: list[JSON]) ->
             "candidate_outcome": c["outcome"] if c else "missing",
             "baseline_total_seconds": b_total, "candidate_total_seconds": c_total,
             "delta_total_seconds": (c_total - b_total) if (b_total is not None and c_total is not None) else None,
-            # A missing or failed candidate is a regression/incomplete comparison, never a dropped pair.
-            "regression_or_incomplete": bool(b is None or c is None
+            # A missing, not-started or failed candidate is a regression/incomplete
+            # comparison, never a dropped pair.
+            "regression_or_incomplete": bool(b is None or c is None or c["outcome"] == "not_started"
                                              or (c["outcome"] == "failed" and b["outcome"] != "failed")),
         })
     return rows
@@ -462,16 +484,22 @@ def _paired_scores(baseline_correctness: JSON, candidate_correctness: JSON) -> l
 
 
 def _classify_harness(baseline: JSON, candidate: JSON, paired_scores: list[JSON] | None) -> JSON:
+    full_coverage = (baseline["correctness"]["full_coverage"] and candidate["correctness"]["full_coverage"]
+                     if paired_scores is not None else None)
     failure_ok = candidate["counts"]["failed"] <= baseline["counts"]["failed"]
     deadline_ok = (candidate["counts"]["time_limit_failures"] <= baseline["counts"]["time_limit_failures"]
                    and candidate["counts"]["known_total_over_or_at_30s"] <= baseline["counts"]["known_total_over_or_at_30s"])
     b_p95, c_p95 = baseline["timing"]["sample_total_seconds"]["p95"], candidate["timing"]["sample_total_seconds"]["p95"]
     latency_improved = b_p95 is not None and c_p95 is not None and c_p95 < b_p95
+    # Partial evaluator coverage must never read as preserved correctness; require
+    # every selected ID scored on both sides before trusting the paired comparison.
     correctness_preserved = (None if paired_scores is None else
-                              not any(row["score_regression"] or row["hash_match_regression"] for row in paired_scores))
+                              bool(full_coverage) and not any(
+                                  row["score_regression"] or row["hash_match_regression"] for row in paired_scores))
     return {
         "no_failure_regression": failure_ok, "no_deadline_regression": deadline_ok,
-        "p95_latency_improved": latency_improved, "correctness_preserved": correctness_preserved,
+        "p95_latency_improved": latency_improved, "full_evaluator_coverage": full_coverage,
+        "correctness_preserved": correctness_preserved,
         "single_pair_eligible": bool(failure_ok and deadline_ok and latency_improved
                                      and correctness_preserved in (True, None)),
         "latency_direction_confirmed_on_three_replicates": False,
@@ -491,16 +519,20 @@ def _classify_prompt(baseline: JSON, candidate: JSON, paired_scores: list[JSON] 
     deadline_ok = (candidate["counts"]["time_limit_failures"] <= baseline["counts"]["time_limit_failures"]
                    and candidate["counts"]["known_total_over_or_at_30s"] <= baseline["counts"]["known_total_over_or_at_30s"])
     b_p95, c_p95 = baseline["timing"]["sample_total_seconds"]["p95"], candidate["timing"]["sample_total_seconds"]["p95"]
-    latency_not_worse = b_p95 is None or c_p95 is None or c_p95 <= b_p95
+    latency_known = b_p95 is not None and c_p95 is not None
+    latency_not_worse = not latency_known or c_p95 <= b_p95
     return {
         "status": "evaluated",
         "full_fixed_selection_scored": full_coverage,
         "mean_score_improved_diagnostic": score_improved,
         "no_state_hash_regression": not hash_regression,
         "no_failure_or_deadline_regression": failure_ok and deadline_ok,
+        "p95_latency_known": latency_known,
         "p95_latency_not_increased": latency_not_worse,
+        # An unknown p95 is never comparative latency evidence; never auto-recommend on it.
         "default_automatic_recommendation": bool(full_coverage and score_improved and not hash_regression
-                                                  and failure_ok and deadline_ok and latency_not_worse),
+                                                  and failure_ok and deadline_ok and latency_not_worse
+                                                  and latency_known),
         "accuracy_latency_tradeoff": bool(score_improved and not latency_not_worse),
         "per_sample_regressions": [row["id"] for row in paired_scores if row["score_regression"]],
     }
@@ -510,7 +542,7 @@ def _classify_final_budget(baseline: JSON, candidate: JSON) -> JSON:
     def ready(report):
         counts = report["counts"]
         return (counts["failed"] == 0 and counts["unknown_total"] == 0 and counts["not_started"] == 0
-                and counts["known_total_over_or_at_30s"] == 0)
+                and counts["known_total_over_or_at_30s"] == 0 and counts["imported"] == 0)
 
     return {
         "baseline_ready": ready(baseline), "candidate_ready": ready(candidate),

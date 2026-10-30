@@ -142,6 +142,10 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(planner.example_overhead_tokens, 2)  # two added demonstration turns
         self.assertEqual(planner.metadata["example_overhead_tokens"], 2)
         self.assertEqual(planner.metadata["few_shot_token_budget"], 100)
+        # The real tokenizer returns a plain list without `return_tensors="pt"`,
+        # which has no `.shape`; guard against losing that kwarg again.
+        for call in self.tokenizer.call_args_list:
+            self.assertEqual(call.kwargs.get("return_tensors"), "pt")
 
     def test_examples_exceeding_the_few_shot_token_budget_raise_before_any_sample(self):
         example = {"input": {"request": "Gửi tin", "context": {}, "history": [], "available_tools": [],

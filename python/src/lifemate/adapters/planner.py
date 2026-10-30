@@ -215,7 +215,7 @@ class LocalPlanner(ModelResidency):
         def rendered_length(examples):
             text = self.tokenizer.apply_chat_template(messages(probe, system=self.system, examples=examples),
                 tokenize=False, add_generation_prompt=True, enable_thinking=False)
-            return self.tokenizer(text, add_special_tokens=False)["input_ids"].shape[-1]
+            return self.tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"].shape[-1]
 
         return rendered_length(self.examples) - rendered_length(())
 

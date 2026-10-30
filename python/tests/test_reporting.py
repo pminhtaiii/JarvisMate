@@ -57,6 +57,18 @@ class RunFixture(unittest.TestCase):
         store.selected(self.metadata(ids), {})
         return store
 
+    def evaluation_payload(self, store, rows, selected_ids=None):
+        prediction_path = store.final_path if store.final_path.exists() else store.partial_path
+        return {"evaluation_schema_version": 1, "run_id": store.run_id,
+                "prediction_sha256": digest(prediction_path),
+                "selected_ids": selected_ids or list(store.manifest["selected_ids"]),
+                "evaluator": {"name": "test"}, "rows": rows}
+
+    def write_evaluation(self, payload, name="eval.json"):
+        path = self.fx.root / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
 
 class ReportTests(RunFixture):
     def test_small_population_report(self):
@@ -122,6 +134,22 @@ class ReportTests(RunFixture):
         self.assertEqual(report["counts"]["executed_completed"], 0)
         self.assertEqual(report["timing"]["sample_total_seconds"]["count"], 0)
 
+    def test_imported_rows_are_excluded_from_stage_and_token_aggregation(self):
+        measurements = {"spans": [
+            {"stage": "tool_call", "index": 0, "parent_stage": None, "start_offset": 0.0,
+             "end_offset": 9.0, "duration": 9.0, "status": "completed", "lower_bound_duration": None,
+             "unavailable_reason": None}],
+            "generations": [{"role": "planner_action", "index": 0, "seconds": 1.0, "input_tokens": 1,
+                             "output_tokens": 100, "rate": 100.0, "stop_reason": "eos"}]}
+        source = self.make_run(ids=["train_0001"])
+        source.append(outcome("train_0001"), measurements=measurements, full_attempt_seconds=3.0)
+        target = RunStore(self.fx.config(run_dir=self.fx.root / "run-2"))
+        target.selected(self.metadata(["train_0001"]), {})
+        target.restore(source.directory)
+        report = build_report(target.directory)
+        self.assertEqual(report["stages"]["tool_call"]["per_sample_total"]["count"], 0)
+        self.assertEqual(report["tokens"]["planner_action"]["eligible_count"], 0)
+
     def test_full_total_overrun_after_loop_success_is_flagged_but_stays_completed(self):
         store = self.make_run(ids=["train_0001"])
         store.append(outcome("train_0001"), full_attempt_seconds=31.0)
@@ -175,18 +203,6 @@ class ReportTests(RunFixture):
 
 
 class EvaluationTests(RunFixture):
-    def evaluation_payload(self, store, rows, selected_ids=None):
-        prediction_path = store.final_path if store.final_path.exists() else store.partial_path
-        return {"evaluation_schema_version": 1, "run_id": store.run_id,
-                "prediction_sha256": digest(prediction_path),
-                "selected_ids": selected_ids or list(store.manifest["selected_ids"]),
-                "evaluator": {"name": "test"}, "rows": rows}
-
-    def write_evaluation(self, payload):
-        path = self.fx.root / "eval.json"
-        path.write_text(json.dumps(payload), encoding="utf-8")
-        return path
-
     def test_empty_gold_score_is_accepted_independent_of_hash_match(self):
         store = self.make_run(ids=["train_0001"])
         store.append(outcome("train_0001"))
@@ -317,6 +333,96 @@ class CompareRunsTests(RunFixture):
         with self.assertRaises(PipelineError):
             validate_comparison_output(self.fx.data / "nested", baseline_manifest, candidate_manifest,
                                        baseline.directory, candidate.directory)
+
+    def test_comparison_rejects_a_candidate_from_a_different_dataset(self):
+        baseline, candidate = self.two_runs()
+        candidate.manifest["dataset_sha256"] = "different"
+        candidate.save()
+        with self.assertRaises(PipelineError):
+            build_comparison(baseline.directory, candidate.directory, "harness")
+
+    def test_not_started_candidate_is_regression_or_incomplete(self):
+        baseline = self.make_run(ids=["train_0001", "train_0002"], run_dir=self.fx.root / "baseline")
+        baseline.append(outcome("train_0001"), full_attempt_seconds=10.0)
+        baseline.append(outcome("train_0002"), full_attempt_seconds=12.0)
+        candidate = RunStore(self.fx.config(run_dir=self.fx.root / "candidate"))
+        candidate.selected(self.metadata(["train_0001", "train_0002"]), {})
+        candidate.append(outcome("train_0001"), full_attempt_seconds=5.0)
+        comparison = build_comparison(baseline.directory, candidate.directory, "harness")
+        row = next(r for r in comparison["paired"]["rows"] if r["id"] == "train_0002")
+        self.assertEqual(row["candidate_outcome"], "not_started")
+        self.assertTrue(row["regression_or_incomplete"])
+
+    def test_final_budget_not_ready_when_a_run_has_imported_rows(self):
+        baseline, candidate = self.two_runs()
+        imported = RunStore(self.fx.config(run_dir=self.fx.root / "candidate-imported"))
+        imported.selected(self.metadata(["train_0001", "train_0002"]), {})
+        imported.restore(candidate.directory)
+        comparison = build_comparison(baseline.directory, imported.directory, "harness")
+        self.assertFalse(comparison["acceptance"]["final_budget"]["candidate_ready"])
+
+    def test_harness_correctness_preserved_requires_full_evaluator_coverage(self):
+        baseline, candidate = self.two_runs()
+        baseline.finish()
+        candidate.finish()
+        # Only one of the two selected IDs is scored on each side; no regression is
+        # observed in that partial overlap, but coverage is incomplete.
+        baseline_eval = self.write_evaluation(self.evaluation_payload(
+            baseline, [{"id": "train_0001", "gold_empty": False, "sample_score": 1.0}]), "baseline_eval.json")
+        candidate_eval = self.write_evaluation(self.evaluation_payload(
+            candidate, [{"id": "train_0001", "gold_empty": False, "sample_score": 1.0}]), "candidate_eval.json")
+        comparison = build_comparison(baseline.directory, candidate.directory, "harness",
+                                      baseline_evaluation=baseline_eval, candidate_evaluation=candidate_eval)
+        harness = comparison["acceptance"]["harness"]
+        self.assertFalse(harness["full_evaluator_coverage"])
+        self.assertFalse(harness["correctness_preserved"])
+        self.assertFalse(harness["single_pair_eligible"])
+
+    def test_prompt_recommendation_requires_known_latency(self):
+        baseline = self.make_run(ids=["train_0001"], run_dir=self.fx.root / "baseline")
+        baseline.append(outcome("train_0001"))  # No full_attempt_seconds: p95 stays unknown.
+        baseline.finish()
+        candidate = RunStore(self.fx.config(run_dir=self.fx.root / "candidate"))
+        candidate.selected(self.metadata(["train_0001"]), {})
+        candidate.append(outcome("train_0001"))
+        candidate.finish()
+        baseline_eval = self.write_evaluation(self.evaluation_payload(
+            baseline, [{"id": "train_0001", "gold_empty": False, "sample_score": 0.5}]), "baseline_eval.json")
+        candidate_eval = self.write_evaluation(self.evaluation_payload(
+            candidate, [{"id": "train_0001", "gold_empty": False, "sample_score": 0.9}]), "candidate_eval.json")
+        comparison = build_comparison(baseline.directory, candidate.directory, "instructions",
+                                      baseline_evaluation=baseline_eval, candidate_evaluation=candidate_eval)
+        prompt = comparison["acceptance"]["prompt"]
+        self.assertFalse(prompt["p95_latency_known"])
+        self.assertFalse(prompt["default_automatic_recommendation"])
+
+    def test_instructions_factor_requires_fixed_few_shot_configuration(self):
+        baseline, candidate = self.two_runs()
+        baseline.manifest["effective_prompt"] = {
+            "profile": {"profile": "baseline", "version": "v1", "sha256": "h1"},
+            "bundle": None, "few_shot_token_budget": None}
+        baseline.save()
+        candidate.manifest["effective_prompt"] = {
+            "profile": {"profile": "precise-v1", "version": "v2", "sha256": "h2"},
+            "bundle": {"bundle_sha256": "x", "example_count": 1, "example_ids": ["a"], "partition_sha256": "p"},
+            "few_shot_token_budget": 1024}
+        candidate.save()
+        with self.assertRaises(PipelineError):
+            build_comparison(baseline.directory, candidate.directory, "instructions")
+
+    def test_few_shot_factor_requires_fixed_instruction_profile(self):
+        baseline, candidate = self.two_runs()
+        baseline.manifest["effective_prompt"] = {
+            "profile": {"profile": "baseline", "version": "v1", "sha256": "h1"},
+            "bundle": None, "few_shot_token_budget": None}
+        baseline.save()
+        candidate.manifest["effective_prompt"] = {
+            "profile": {"profile": "precise-v1", "version": "v2", "sha256": "h2"},
+            "bundle": {"bundle_sha256": "x", "example_count": 1, "example_ids": ["a"], "partition_sha256": "p"},
+            "few_shot_token_budget": 1024}
+        candidate.save()
+        with self.assertRaises(PipelineError):
+            build_comparison(baseline.directory, candidate.directory, "few-shot")
 
     def test_comparison_writes_json_and_markdown(self):
         baseline, candidate = self.two_runs()
