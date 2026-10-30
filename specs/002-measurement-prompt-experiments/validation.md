@@ -27,7 +27,7 @@ command above. Results:
 | File | Tests | Result |
 |---|---|---|
 | `test_metrics.py` | 20 | OK |
-| `test_reporting.py` | 41 | OK |
+| `test_reporting.py` | 44 | OK |
 | `test_prompt_profiles.py` | 35 | OK |
 | `test_agent.py` | 15 | OK |
 | `test_artifacts.py` | 25 | OK |
@@ -45,7 +45,7 @@ this feature touches or that exercise the same manifest/checkpoint surface:
 | `test_audio.py` | 13 | OK |
 | `test_inference.py` | 25 | OK |
 
-234 tests ran, 234 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
+237 tests ran, 237 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
 that require `LIFEMATE_REAL_*` data). `test_real_samples.py` was not invoked: it needs
 `LIFEMATE_REAL_DATA_ROOT`/`LIFEMATE_REAL_SAMPLE_ID`/`LIFEMATE_RUNTIME_DIR`, none of which
 exist in this environment. This confirms the controlled behaviors in
@@ -59,9 +59,30 @@ exclusion, frozen hashes and overflow. It does not measure real latency, token r
 or model accuracy.
 
 Updated after addressing CodeRabbit's review of [PR #8](https://github.com/pminhtaiii/JarvisMate/pull/8):
-all 24 findings (7 Major, 17 Minor, including 4 only in the review summary, not
-posted as separate inline comments) were fixed, each with a new or extended
-regression test; counts above are the resulting controlled-suite totals.
+all 24 findings from the first review (7 Major, 17 Minor, including 4 only in the
+review summary, not posted as separate inline comments) were fixed, each with a
+new or extended regression test. A second review round after that push (triggered
+by an `@coderabbitai review` comment) posted 6 more findings (1 Major: an
+unterminated final row in `predictions.partial.jsonl` could block reporting; 5
+Minor: a non-finite aggregate token rate, a hard-link publish failing on
+filesystems without hard-link support, a same-prompt comparison passing
+validation, and a dataset-mismatch test that didn't actually exercise its own
+check). All 5 of those with a concrete code fix were fixed and tested.
+
+One finding from that second round is **not** fixed as literally suggested:
+CodeRabbit's note on `cli.py` that the run path trusts a bundle's copied
+`audit_schema_version`/`source_dataset_sha256`/`catalog_sha256`/`partition_sha256`
+fields without re-verifying examples against Train labels. Per
+[contracts/prompts.md](contracts/prompts.md), re-verification against Train labels
+belongs only to the offline `audit-examples` command — "Parsing Train labels
+belongs only to this separate offline command... never feeds this raw labeled row
+to inference" — and the run path is specified to verify only "these identities
+[the four hashes] against the visible inputs," which is what it does. Re-checking
+targets at run time would require the run path to read Train labels, contradicting
+that contract. This is a cooperative-identity check, like every other hash
+comparison in this codebase (dataset/catalog/partition digests), not a
+cryptographic guarantee against a hand-forged bundle; closing that gap for real
+would need an external signature mechanism outside this feature's scope.
 
 ## Real instrumented control, prompt arms, failure/compatibility checks — NOT RUN
 

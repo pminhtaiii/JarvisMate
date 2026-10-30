@@ -8,8 +8,6 @@ labeled row to inference; only this separate command parses Train labels.
 """
 from __future__ import annotations
 
-import os
-import uuid
 from pathlib import Path
 
 from .artifacts import sync_write
@@ -125,20 +123,17 @@ def write_audited_bundle(output_path: Path, audited_bundle: JSON) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise PipelineError("OUTPUT_IO", "Cannot create audited bundle output directory", "audit") from exc
-    temporary = output_path.with_name(output_path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
-        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+        # Exclusive create (O_CREAT|O_EXCL) is atomically exclusive on every
+        # filesystem, unlike a hard link, which some (FAT/exFAT) do not support;
+        # it closes the same exists()-check/later-write race without that limit.
+        with output_path.open("x", encoding="utf-8", newline="\n") as stream:
             sync_write(stream, dumps(audited_bundle) + "\n")
-        # A hard link is atomically exclusive: it fails if `output_path` already
-        # exists, closing the race between an `exists()` check and a later write.
-        os.link(temporary, output_path)
     except FileExistsError as exc:
         raise PipelineError("OUTPUT_IO", "Audited bundle output must be new; audited bundles are immutable",
                             "audit") from exc
     except OSError as exc:
         raise PipelineError("OUTPUT_IO", "Cannot persist audited bundle", "audit") from exc
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 __all__ = ["AUDIT_SCHEMA_VERSION", "CONVERSION_VERSION", "audit_bundle", "write_audited_bundle"]

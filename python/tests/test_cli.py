@@ -454,6 +454,7 @@ class FewShotCLITests(unittest.TestCase):
         other_partition = self.fx.root / "other_partition.json"
         other_partition.write_text(json.dumps({
             "partition_schema_version": 1, "dataset_sha256": "0" * 64, "grouping_method": "m", "members": [
+                {"id": "train_0001", "group_id": "g1", "partition": "fit", "source_sha256": "s1"},
                 {"id": "train_0002", "group_id": "g2", "partition": "validation", "source_sha256": "s2"}]}),
             encoding="utf-8")
         bundle_path = self.fx.root / "bundle.json"
@@ -465,7 +466,13 @@ class FewShotCLITests(unittest.TestCase):
             "source_dataset_sha256": self.dataset_sha256,
             "catalog_sha256": digest(self.fx.split / "train_tools_catalog.json"),
             "partition_sha256": digest(other_partition),
-            "examples": []}), encoding="utf-8")
+            # A valid fit example, so only the dataset-hash check rejects this run
+            # (an empty/invalid examples list would be rejected earlier for a
+            # different reason and never actually exercise that check).
+            "examples": [{"id": "train_0001", "group_id": "g1", "source_sha256": "s1", "prefix_index": 0,
+                         "rationale": "r", "input": {"request": "x", "context": {}, "history": [],
+                                                      "available_tools": [], "observations": []},
+                         "target": {"action": "finish"}}]}), encoding="utf-8")
         code = self.execute(self.arguments("train_0002", "--few-shot-bundle", str(bundle_path),
                                            "--partition-manifest", str(other_partition)))
         self.assertEqual(code, 2)

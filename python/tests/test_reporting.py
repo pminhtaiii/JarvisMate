@@ -201,6 +201,25 @@ class ReportTests(RunFixture):
         # Aggregate = sum(tokens)/sum(time) = 14/5 = 2.8, not mean(10, 1) = 5.5.
         self.assertAlmostEqual(report["tokens"]["planner_action"]["tokens_per_second"], 2.8)
 
+    def test_token_rate_overflow_is_null_not_infinite(self):
+        store = self.make_run(ids=["train_0001"])
+        measurements = {"spans": [], "generations": [
+            {"role": "planner_action", "index": 0, "seconds": 1e-300, "input_tokens": 1,
+             "output_tokens": 10**18, "rate": None, "stop_reason": "eos"}]}
+        store.append(outcome("train_0001"), measurements=measurements, full_attempt_seconds=1.0)
+        # jsonio rejects non-finite values; a null rate must not break report writing.
+        report = build_report(store.directory)
+        self.assertIsNone(report["tokens"]["planner_action"]["tokens_per_second"])
+        write_report(store.directory, report)
+
+    def test_unterminated_final_journal_row_does_not_block_reporting(self):
+        store = self.make_run(ids=["train_0001", "train_0002"])
+        store.append(outcome("train_0001"), full_attempt_seconds=1.0)
+        with store.partial_path.open("a", encoding="utf-8") as stream:
+            stream.write('{"id": "train_0002", "tool_calls": []')  # No closing brace/newline.
+        report = build_report(store.directory)
+        self.assertEqual(report["counts"]["executed_completed"], 1)
+
     def test_report_regeneration_is_allowed(self):
         store = self.make_run(ids=["train_0001"])
         store.append(outcome("train_0001"), full_attempt_seconds=1.0)
@@ -405,10 +424,18 @@ class CompareRunsTests(RunFixture):
 
     def test_prompt_recommendation_requires_known_latency(self):
         baseline = self.make_run(ids=["train_0001"], run_dir=self.fx.root / "baseline")
+        baseline.manifest["effective_prompt"] = {
+            "profile": {"profile": "baseline", "version": "v1", "sha256": "h1"},
+            "bundle": None, "few_shot_token_budget": None}
+        baseline.save()
         baseline.append(outcome("train_0001"))  # No full_attempt_seconds: p95 stays unknown.
         baseline.finish()
         candidate = RunStore(self.fx.config(run_dir=self.fx.root / "candidate"))
         candidate.selected(self.metadata(["train_0001"]), {})
+        candidate.manifest["effective_prompt"] = {
+            "profile": {"profile": "precise-v1", "version": "v2", "sha256": "h2"},
+            "bundle": None, "few_shot_token_budget": None}
+        candidate.save()
         candidate.append(outcome("train_0001"))
         candidate.finish()
         baseline_eval = self.write_evaluation(self.evaluation_payload(
@@ -448,6 +475,17 @@ class CompareRunsTests(RunFixture):
         candidate.save()
         with self.assertRaises(PipelineError):
             build_comparison(baseline.directory, candidate.directory, "few-shot")
+
+    def test_factor_comparison_with_an_unchanged_prompt_is_rejected(self):
+        baseline, candidate = self.two_runs()
+        identical = {"profile": {"profile": "baseline", "version": "v1", "sha256": "h1"},
+                    "bundle": None, "few_shot_token_budget": None}
+        baseline.manifest["effective_prompt"] = identical
+        baseline.save()
+        candidate.manifest["effective_prompt"] = dict(identical)
+        candidate.save()
+        with self.assertRaises(PipelineError):
+            build_comparison(baseline.directory, candidate.directory, "instructions")
 
     def test_comparison_writes_json_and_markdown(self):
         baseline, candidate = self.two_runs()

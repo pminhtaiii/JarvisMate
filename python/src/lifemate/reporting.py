@@ -92,8 +92,12 @@ def _journal_ids(run_dir: Path) -> set[str] | None:
         path = Path(run_dir) / name
         if path.is_file():
             try:
-                with path.open(encoding="utf-8") as stream:
-                    return {loads(line)["id"] for line in stream if line.strip()}
+                raw = path.read_bytes()
+                # An interrupted append can leave an unterminated final row; discard
+                # it the same way `read_checkpoint` does, rather than rejecting the
+                # whole run's otherwise-complete samples.
+                end = raw.rfind(b"\n") + 1
+                return {loads(line.decode("utf-8"))["id"] for line in raw[:end].splitlines() if line.strip()}
             except (OSError, ValueError, TypeError, UnicodeError, RecursionError, KeyError) as exc:
                 raise PipelineError("INPUT_INVALID", "Prediction journal is unreadable or invalid", "report") from exc
     return None
@@ -227,11 +231,18 @@ def _token_rates(entries: list[JSON]) -> JSON:
                     and g.get("seconds") is not None and g["seconds"] > 0]
         total_tokens = sum(g["output_tokens"] for g in eligible)
         total_seconds = sum(g["seconds"] for g in eligible)
+        if not math.isfinite(total_seconds):
+            total_seconds = None
+        # A tiny per-generation `seconds` can make the quotient (or the sum
+        # itself) overflow to inf; `atomic_json` rejects non-finite values.
+        rate = (total_tokens / total_seconds) if total_seconds else None
+        if rate is not None and not math.isfinite(rate):
+            rate = None
         result[role] = {
             "generation_count": len(generations), "eligible_count": len(eligible),
             "total_output_tokens": total_tokens, "total_seconds": total_seconds,
             # Aggregate rate over complete records, never a mean of individual rates.
-            "tokens_per_second": (total_tokens / total_seconds) if total_seconds > 0 else None,
+            "tokens_per_second": rate,
         }
     return result
 
@@ -457,6 +468,8 @@ def validate_factor_identity(factor: str, baseline: JSON, candidate: JSON) -> No
         if baseline_prompt.get("profile") != candidate_prompt.get("profile"):
             raise PipelineError(
                 "INPUT_INVALID", "A few-shot factor must hold the instruction profile fixed", "compare")
+    if baseline_prompt == candidate_prompt:
+        raise PipelineError("INPUT_INVALID", "The comparison factor must change the effective prompt", "compare")
 
 
 def _paired_rows(baseline_entries: list[JSON], candidate_entries: list[JSON]) -> list[JSON]:
