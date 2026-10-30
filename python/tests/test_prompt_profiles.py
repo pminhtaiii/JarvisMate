@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from lifemate.contracts import Deadline, PipelineError, RunConfig
@@ -370,3 +371,15 @@ class AuditBundleTests(AuditFixture):
         write_audited_bundle(output_path, audited)
         with self.assertRaises(PipelineError):
             write_audited_bundle(output_path, audited)
+
+    def test_failed_write_leaves_no_partial_output_for_a_rerun(self):
+        row = self.add_row("train_0001", "g1", [], [])
+        example = self.example(row, "g1", 0, {"action": "finish"})
+        audited = self.audit(self.write_bundle([example]))
+        output_path = self.root / "audited.json"
+        with patch("lifemate.example_audit.sync_write", side_effect=OSError("disk full")):
+            with self.assertRaises(PipelineError):
+                write_audited_bundle(output_path, audited)
+        self.assertFalse(output_path.exists())
+        # A rerun with the same --output must succeed once the failure clears.
+        write_audited_bundle(output_path, audited)

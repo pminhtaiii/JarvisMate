@@ -134,16 +134,23 @@ def write_audited_bundle(output_path: Path, audited_bundle: JSON) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise PipelineError("OUTPUT_IO", "Cannot create audited bundle output directory", "audit") from exc
+    payload = dumps(audited_bundle) + "\n"
+    created = False
     try:
         # Exclusive create (O_CREAT|O_EXCL) is atomically exclusive on every
         # filesystem, unlike a hard link, which some (FAT/exFAT) do not support;
         # it closes the same exists()-check/later-write race without that limit.
         with output_path.open("x", encoding="utf-8", newline="\n") as stream:
-            sync_write(stream, dumps(audited_bundle) + "\n")
+            created = True
+            sync_write(stream, payload)
     except FileExistsError as exc:
         raise PipelineError("OUTPUT_IO", "Audited bundle output must be new; audited bundles are immutable",
                             "audit") from exc
     except OSError as exc:
+        if created:
+            # Leave no partial/empty file behind; a rerun with the same --output
+            # must not be blocked by a failed previous attempt.
+            output_path.unlink(missing_ok=True)
         raise PipelineError("OUTPUT_IO", "Cannot persist audited bundle", "audit") from exc
 
 

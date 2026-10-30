@@ -92,12 +92,18 @@ def _journal_ids(run_dir: Path) -> set[str] | None:
         path = Path(run_dir) / name
         if path.is_file():
             try:
-                raw = path.read_bytes()
-                # An interrupted append can leave an unterminated final row; discard
-                # it the same way `read_checkpoint` does, rather than rejecting the
-                # whole run's otherwise-complete samples.
-                end = raw.rfind(b"\n") + 1
-                return {loads(line.decode("utf-8"))["id"] for line in raw[:end].splitlines() if line.strip()}
+                ids = set()
+                with path.open("rb") as stream:
+                    # An interrupted append can leave an unterminated final row; discard
+                    # it the same way `read_checkpoint` does, rather than rejecting the
+                    # whole run's otherwise-complete samples. Stream rather than load
+                    # the whole journal so peak memory tracks the ID set, not its size.
+                    for line in stream:
+                        if not line.endswith(b"\n"):
+                            break
+                        if line.strip():
+                            ids.add(loads(line.decode("utf-8"))["id"])
+                return ids
             except (OSError, ValueError, TypeError, UnicodeError, RecursionError, KeyError) as exc:
                 raise PipelineError("INPUT_INVALID", "Prediction journal is unreadable or invalid", "report") from exc
     return None

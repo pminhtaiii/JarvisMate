@@ -28,7 +28,7 @@ command above. Results:
 |---|---|---|
 | `test_metrics.py` | 20 | OK |
 | `test_reporting.py` | 44 | OK |
-| `test_prompt_profiles.py` | 35 | OK |
+| `test_prompt_profiles.py` | 36 | OK |
 | `test_agent.py` | 15 | OK |
 | `test_artifacts.py` | 25 | OK |
 | `test_cli.py` | 33 | OK |
@@ -45,7 +45,7 @@ this feature touches or that exercise the same manifest/checkpoint surface:
 | `test_audio.py` | 13 | OK |
 | `test_inference.py` | 25 | OK |
 
-238 tests ran, 238 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
+239 tests ran, 239 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
 that require `LIFEMATE_REAL_*` data). `test_real_samples.py` was not invoked: it needs
 `LIFEMATE_REAL_DATA_ROOT`/`LIFEMATE_REAL_SAMPLE_ID`/`LIFEMATE_RUNTIME_DIR`, none of which
 exist in this environment. This confirms the controlled behaviors in
@@ -90,6 +90,14 @@ codebase, not a cryptographic guarantee against someone who recomputes the diges
 themselves; that would need an external signature mechanism outside this
 feature's scope, and was judged disproportionate for this single-user offline
 pipeline.
+
+A third review round after that push posted 2 more Minor findings, both fixed
+and tested: `write_audited_bundle` left a partial/empty file behind (blocking a
+rerun at the same `--output`) if the write failed after the exclusive create —
+now it serializes first and unlinks the file on failure; `_journal_ids` had
+regressed from streaming the prediction journal to loading it whole with
+`read_bytes()` when the unterminated-tail fix was added — restored to line-by-line
+streaming, stopping at the first line without a trailing newline.
 
 ## Real instrumented control, prompt arms, failure/compatibility checks — NOT RUN
 
