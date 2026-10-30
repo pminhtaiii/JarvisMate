@@ -41,9 +41,15 @@ defines future exporter/loss-mask/leakage checks; none has been implemented by t
 ## Evidence to record
 
 The [measurement and prompt specification](../specs/002-measurement-prompt-experiments/spec.md)
-and linked plan/contracts define the proposed measurement and controlled-experiment
-behavior. These are planning artifacts, not implemented capabilities or measured
-latency/compliance claims.
+and linked plan/contracts define the measurement and controlled-experiment behavior.
+Spans, telemetry, offline `report`/`compare-runs`/`audit-examples`, and opt-in
+`precise-v1`/fit-only prompt profiles are implemented (see
+[python/README.md](../python/README.md#measurement-reports-and-prompt-profiles)) and
+covered by the controlled suite; see
+[002 validation](../specs/002-measurement-prompt-experiments/validation.md) for the exact
+command and per-file results. No real run, report, comparison, or evaluator-scored
+result exists yet; latency/compliance/accuracy claims still require actual hardware,
+models and an evaluator.
 
 For each evaluation, record the code revision, dataset split and sample selection, model/component versions, seed and decoding settings, exact command, exit status, elapsed time, and scoring result. Record state-hash matches, tool-call F1, empty-gold accuracy, schema-rejected calls, and timeout count when the evaluator supplies them. Keep traces bounded and free of user secrets or hidden environment files.
 

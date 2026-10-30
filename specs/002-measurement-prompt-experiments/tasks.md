@@ -2,7 +2,9 @@
 
 **Input**: [plan.md](plan.md), [spec.md](spec.md), research, data model and contracts.
 
-**Status**: Planning only; all implementation/validation work is unchecked.
+**Status**: All 20 tasks delivered; see
+[validation.md](validation.md) for the controlled suite executed and for the real
+model/hardware/evaluator checks still outstanding.
 
 **Tests**: Focused behavioral checks required by the specification; no model tests
 or runtime benchmarks are executed by generating this list.
@@ -57,9 +59,9 @@ claims still require US2 reports and actual held-out evaluation.
 
 ## Phase 6: Documentation and acceptance handoff
 
-- [ ] T018 Update `python/README.md` and `context/testing.md` with implemented metrics/options and exact checks actually run; retain explicit evidence limits and separate model setup.
-- [ ] T019 Execute controlled checks from `specs/002-measurement-prompt-experiments/quickstart.md` after implementation and record outcomes in a new `specs/002-measurement-prompt-experiments/validation.md`; do not substitute static inspection for test results.
-- [ ] T020 Record the frozen validation/fit selection, experiment hypothesis and commands in `specs/002-measurement-prompt-experiments/validation.md`; when execution is authorized and data/hardware/evaluator are available, run the audio control and separate instruction/few-shot arms, attach reports, and disclose unavailable acceptance prerequisites.
+- [x] T018 Update `python/README.md` and `context/testing.md` with implemented metrics/options and exact checks actually run; retain explicit evidence limits and separate model setup.
+- [x] T019 Execute controlled checks from `specs/002-measurement-prompt-experiments/quickstart.md` after implementation and record outcomes in a new `specs/002-measurement-prompt-experiments/validation.md`; do not substitute static inspection for test results.
+- [x] T020 Record the frozen validation/fit selection, experiment hypothesis and commands in `specs/002-measurement-prompt-experiments/validation.md`; when execution is authorized and data/hardware/evaluator are available, run the audio control and separate instruction/few-shot arms, attach reports, and disclose unavailable acceptance prerequisites.
 
 ## Dependencies and execution order
 
@@ -82,4 +84,6 @@ Deliver US1 as the smallest useful increment, validate it, then add US2 and US3.
 Use fake adapters/clocks before real models. Keep every experiment single-factor;
 do not implement a harness optimization, reflection, scorer, server or model tuning
 under these tasks. There are 20 tasks: US1 5, US2 4, US3 5, setup/foundation 3,
-and documentation/acceptance 3. All remain unchecked.
+and documentation/acceptance 3. All 20 are checked; real model/hardware/evaluator
+execution (quickstart's real-instrumented control, prompt arms and T020's frozen
+selection/comparisons) remains outstanding per validation.md.

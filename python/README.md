@@ -1,10 +1,14 @@
 # LifeMate Python baseline
 
-Implementation handoff for [feature 001](../specs/001-python-sample-pipeline/spec.md).
-**Source and tests are authored; installation, tests, real-runtime checks and model
-inference have not been run by the author, at the user's request.** The pinned optional
-dependency combination also awaits validation on the receiving machine. This is not
-a measured baseline, a validation score, or a submission-ready container.
+Implementation handoff for [feature 001](../specs/001-python-sample-pipeline/spec.md),
+extended by [feature 002](../specs/002-measurement-prompt-experiments/spec.md) (timing,
+offline reports, opt-in prompt profiles). **Package installation, real-runtime checks
+and model inference have not been run by the author, at the user's request.** The
+controlled unittest suite was run directly against `python/src` (no package install) on
+2026-10-30; see [feature 002 validation](../specs/002-measurement-prompt-experiments/validation.md)
+for the exact command and outcome. The pinned optional dependency combination still
+awaits validation on the receiving machine. This is not a measured baseline, a
+validation score, or a submission-ready container.
 
 ## Architecture
 
@@ -30,7 +34,10 @@ custom scorer, full-container supervisor, or Docker submission is added here.
 | `adapters/planner.py` | Local Qwen3 tokenizer/model, greedy actions, token and time budgets |
 | `adapters/asr.py` | Local Whisper/PhoWhisper Vietnamese transcription from PCM WAV, no text fallback |
 | `artifacts.py` | Durable exact predictions, bounded/redacted debug traces, manifest/publication lifecycle |
-| `cli.py` | Preflight, sequential model reuse, stop-on-first-failure orchestration |
+| `cli.py` | Preflight, sequential model reuse, stop-on-first-failure orchestration, `report`/`compare-runs`/`audit-examples` |
+| `metrics.py` | Injectable monotonic clock, nested spans, per-generation token/role telemetry |
+| `reporting.py` | Offline manifest/trace readers, nearest-rank distributions, single-factor comparison |
+| `prompt_profiles.py`, `example_audit.py` | Baseline/precise-v1 profile identity, fit-only bundle/partition validation |
 
 ## Install on the receiving machine
 
@@ -56,7 +63,48 @@ python3 -m venv .venv
 Ordinary tests use standard-library controlled adapters and synthetic visible records;
 they need no GPU, downloaded weights, or competition environment contents. Controlled
 responses are test-only injection points, not a production CLI backend. The separate
-real-data test skips unless explicitly enabled. No test pass is claimed in this handoff.
+real-data test (`test_real_samples.py`) skips unless its `LIFEMATE_REAL_*` environment
+variables are set; it was not run here. The controlled suite (213 tests across
+`test_metrics.py`, `test_reporting.py`, `test_prompt_profiles.py`, `test_agent.py`,
+`test_artifacts.py`, `test_cli.py`, `test_checkpoint.py`, `test_dataset.py`,
+`test_runtime.py`, `test_selection.py`, `test_audio.py`, `test_inference.py`) was run
+directly against `python/src` with `PYTHONPATH` set, Python 3.13.1 on
+Windows-11-10.0.26200, revision `baa4f4b`, and passed; see
+[feature 002 validation](../specs/002-measurement-prompt-experiments/validation.md) for
+the exact command and per-file results. This is a controlled-check pass only, not a
+package-install, model, or real-runtime result.
+
+## Measurement, reports and prompt profiles
+
+`lifemate run` always records nested spans (environment/planner/tool/ASR boundaries,
+per-generation token/role telemetry where the adapter supports it) and the full CLI
+attempt time in the manifest/trace; legacy elapsed fields stay populated unchanged.
+Three additional offline commands, and three `run` options, implement
+[feature 002](../specs/002-measurement-prompt-experiments/spec.md):
+
+- `lifemate report --run-dir DIR [--evaluation-file PATH]` reads a run's manifest/traces
+  only (no models, no ToolEnv) and writes `report.json`/`report.md` beside it: coverage,
+  missing/failed/imported counts, nearest-rank stage/latency distributions, weighted
+  token rates, and `not_evaluated` correctness unless a separate evaluation file is given.
+- `lifemate compare-runs --baseline-run DIR --candidate-run DIR --factor
+  {harness,instructions,few-shot} --output-dir DIR [--baseline-evaluation PATH]
+  [--candidate-evaluation PATH]` validates the two runs share every identity field
+  except the named factor, pairs sample IDs, and classifies the single-factor delta;
+  it refuses to write into either source run.
+- `lifemate audit-examples --bundle PATH --partition-manifest PATH --train-jsonl PATH
+  --catalog PATH --output PATH` verifies a few-shot bundle's source prefixes/targets
+  against the frozen fit partition only, before inference ever sees it.
+- `run` adds `--prompt-profile {baseline,precise-v1}` (default `baseline`, exact
+  legacy rendering unchanged), and `--few-shot-bundle PATH --partition-manifest PATH
+  --few-shot-token-budget N` to attach an already-audited, fit-only demonstration
+  bundle under an enforced token budget.
+
+These commands are offline/deterministic and were exercised by the controlled suite
+above (fixtures only); no real run, report, or comparison has been produced from actual
+model output. See [contracts/measurement.md](../specs/002-measurement-prompt-experiments/contracts/measurement.md),
+[contracts/prompts.md](../specs/002-measurement-prompt-experiments/contracts/prompts.md), and
+[contracts/experiments.md](../specs/002-measurement-prompt-experiments/contracts/experiments.md)
+for exact schemas, bounds, and acceptance classifications.
 
 For real inference, install `./python[inference]` during environment preparation.
 Pins are PyTorch `2.9.0`, Transformers `4.57.1`, NumPy `2.3.4`. Select the matching
@@ -190,7 +238,10 @@ A final container still needs process supervision, organizer failure-output poli
 offline/replay validation, A30 timing and full-split coverage checks.
 
 Record receiving-machine commands, outcomes, package/model identities and evidence in
-[validation.md](../specs/001-python-sample-pipeline/validation.md). The
-[task ledger](../specs/001-python-sample-pipeline/tasks.md) distinguishes delivered
+[validation.md](../specs/001-python-sample-pipeline/validation.md) for the baseline and
+[validation.md](../specs/002-measurement-prompt-experiments/validation.md) for
+measurement/prompt-profile acceptance. The task ledgers
+([001](../specs/001-python-sample-pipeline/tasks.md),
+[002](../specs/002-measurement-prompt-experiments/tasks.md)) distinguish delivered
 implementation from unexecuted acceptance gates. Follow the [roadmap](../context/roadmap.md) for Train
 Validation/error analysis; conditional SFT remains design-only.
