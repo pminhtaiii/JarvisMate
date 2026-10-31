@@ -6,6 +6,8 @@ import time
 
 from ..contracts import JSON, Limits, PipelineError
 from ..agent import parse_action
+from ..metrics import Generation
+from ..prompt_profiles import profile_identity, resolve_profile
 from ..prompting import messages
 from ..jsonio import dumps, loads
 from ..selection import (FILTER_SYSTEM, filter_schema, referenced_records,
@@ -37,14 +39,20 @@ def sdpa_expanded_kv(module, query, key, value, attention_mask, dropout=0.0,
 
 
 class LocalPlanner(ModelResidency):
-    def __init__(self, path, device: str, limits: Limits, seed: int = 20261027, *, selection_filter=False, cpu_offload=False):
+    def __init__(self, path, device: str, limits: Limits, seed: int = 20261027, *, selection_filter=False,
+                 cpu_offload=False, profile: JSON | None = None, examples: tuple[JSON, ...] = (),
+                 few_shot_token_budget: int | None = None):
         path = model_directory(path)
         torch, hf, _ = dependencies(device, seed)
         self.torch, self.hf, self.device, self.limits = torch, hf, device, limits
         self.cpu_offload = cpu_offload and device == "cuda"
         self.selection_filter = selection_filter
+        self.profile = profile or resolve_profile("baseline")
+        self.system, self.examples = self.profile["system"], tuple(examples)
+        self.few_shot_token_budget = few_shot_token_budget
         self.last_decision_details = []
         self._selection_filters = {}
+        self._generation_index = 0
         dtype = torch.float32 if device == "cpu" else torch.float16
         # Avoid materializing quadratic attention scores for long CUDA prompts.
         attention = "sdpa" if device == "cuda" else "eager"
@@ -63,13 +71,21 @@ class LocalPlanner(ModelResidency):
                 dtype=dtype, attn_implementation=attention, weights_only=True).to("cpu" if self.cpu_offload else device)
             self.model.eval()
             count = parameter_count(self.model, 5_000_000_000)
+            self.example_overhead_tokens = self._measure_example_overhead() if self.examples else None
+            if (self.examples and few_shot_token_budget is not None
+                    and self.example_overhead_tokens > few_shot_token_budget):
+                raise PipelineError("CONTEXT_LIMIT",
+                                    "Fixed demonstrations exceed the configured few-shot token budget", "configuration")
             self.metadata = metadata(path, count, device, dtype, seed) | {
                 "context_limit": limits.context_tokens, "max_new_tokens": limits.output_tokens,
                 "adapter": "qwen3-structured-react", "attention_implementation": attention,
                 "structured_output": self.constraint.metadata,
                 "cpu_offload": self.cpu_offload,
                 "selection_filter": "task-completion-predicates-v1" if selection_filter else "disabled",
-                "cuda_cache_policy": "release_before_action" if device == "cuda" else "not_applicable"}
+                "cuda_cache_policy": "release_before_action" if device == "cuda" else "not_applicable",
+                "prompt_profile": profile_identity(self.profile),
+                "example_overhead_tokens": self.example_overhead_tokens,
+                "few_shot_token_budget": few_shot_token_budget}
         except PipelineError:
             raise
         except Exception as exc:
@@ -79,6 +95,10 @@ class LocalPlanner(ModelResidency):
         # A request's criteria stay fixed while its records change. Never reuse
         # model-derived criteria in another sample, even with identical text.
         self._selection_filters.clear()
+
+    def set_metrics_recorder(self, recorder) -> None:
+        super().set_metrics_recorder(recorder)
+        self._generation_index = 0
 
     def next_action(self, planner_input: JSON, remaining_seconds: float) -> str:
         started = time.monotonic()
@@ -131,6 +151,8 @@ class LocalPlanner(ModelResidency):
 
     def _select(self, value, selection, remaining_seconds):
         started = time.monotonic()
+        index = self._generation_index
+        self._generation_index += 1
         generated = None
         body = {k: value[k] for k in ("request", "context", "history")}
         body.update(records=selection["records"], proposed_tool=selection["tool"])
@@ -146,14 +168,28 @@ class LocalPlanner(ModelResidency):
                 self.torch.cuda.empty_cache()
             prefix = self.constraint.schema_prefix(filter_schema(selection["fields"]))
             stop = stopping_criteria(self.hf, remaining_seconds - (time.monotonic() - started))
-            with self.torch.inference_mode():
-                output = self.model.generate(**{k: v.to(self.device) for k, v in tokens.items()},
-                    do_sample=False, num_beams=1, max_new_tokens=self.limits.output_tokens,
-                    prefix_allowed_tokens_fn=prefix, stopping_criteria=stop,
-                    pad_token_id=self.tokenizer.eos_token_id)
-            if time.monotonic() - started >= remaining_seconds:
-                raise PipelineError("TIME_LIMIT", "Selection generation exceeded deadline", "planner")
+            generation_start = self._recorder.clock.offset() if self._recorder else None
+            try:
+                with self.torch.inference_mode():
+                    output = self.model.generate(**{k: v.to(self.device) for k, v in tokens.items()},
+                        do_sample=False, num_beams=1, max_new_tokens=self.limits.output_tokens,
+                        prefix_allowed_tokens_fn=prefix, stopping_criteria=stop,
+                        pad_token_id=self.tokenizer.eos_token_id)
+            except Exception:
+                if self._recorder:
+                    self._recorder.unfinished("generation", generation_start, index=index, parent_stage="planner_decision")
+                raise
+            timed_out = time.monotonic() - started >= remaining_seconds
             generated = output[0][length:]
+            if self._recorder:
+                span = self._recorder.mark("generation", generation_start, index=index, parent_stage="planner_decision")
+                stop_reason = ("deadline" if timed_out
+                              else "max_tokens" if len(generated) >= self.limits.output_tokens else "eos")
+                self._recorder.record_generation(Generation("selection_filter", index, seconds=span.duration,
+                                                             input_tokens=length, output_tokens=len(generated),
+                                                             stop_reason=stop_reason))
+            if timed_out:
+                raise PipelineError("TIME_LIMIT", "Selection generation exceeded deadline", "planner")
             raw = self.tokenizer.decode(generated, skip_special_tokens=True)
             if len(raw.encode("utf-8")) > self.limits.response_bytes:
                 raise ValueError("Oversized selection response")
@@ -166,13 +202,44 @@ class LocalPlanner(ModelResidency):
         except Exception as exc:
             raise PipelineError("PLANNER_ERROR", "Selection generation failed", "planner") from exc
 
+    def _measure_example_overhead(self) -> int:
+        """Actual added tokens from the deployed chat template, examples only.
+
+        Both renders share an identical neutral live-turn probe, so the delta is
+        exactly the demonstrations' own tokens plus their delimiters/guard text.
+        """
+        probe = {"request": "", "context": {"current_time": "1970-01-01T00:00:00+00:00", "timezone": "UTC",
+                 "location": {"lat": 0, "lng": 0},
+                 "user_profile": {"name": "", "home_address": "", "work_address": "", "city": ""},
+                 "installed_apps": {}}, "history": [], "available_tools": [], "observations": []}
+
+        def rendered_length(examples):
+            text = self.tokenizer.apply_chat_template(messages(probe, system=self.system, examples=examples),
+                tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            return self.tokenizer(text, return_tensors="pt", add_special_tokens=False)["input_ids"].shape[-1]
+
+        return rendered_length(self.examples) - rendered_length(())
+
     def _action(self, planner_input: JSON, remaining_seconds: float) -> str:
         started = time.monotonic()
+        index = self._generation_index
+        self._generation_index += 1
         try:
             rendered = self.tokenizer.apply_chat_template(
-                messages(planner_input), tokenize=False, add_generation_prompt=True, enable_thinking=False)
+                messages(planner_input, system=self.system, examples=self.examples),
+                tokenize=False, add_generation_prompt=True, enable_thinking=False)
             tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
             length = tokens["input_ids"].shape[-1]
+            if self.examples and self.few_shot_token_budget is not None:
+                # The cached init-time probe is a lower bound, not this decision's
+                # actual delta; verify every live render against the configured budget.
+                bare = self.tokenizer.apply_chat_template(
+                    messages(planner_input, system=self.system, examples=()),
+                    tokenize=False, add_generation_prompt=True, enable_thinking=False)
+                bare_length = self.tokenizer(bare, return_tensors="pt", add_special_tokens=False)["input_ids"].shape[-1]
+                if length - bare_length > self.few_shot_token_budget:
+                    raise PipelineError("CONTEXT_LIMIT",
+                                        "Fixed demonstrations exceed the configured few-shot token budget", "planner")
             if length + self.limits.output_tokens > self.limits.context_tokens:
                 raise PipelineError("CONTEXT_LIMIT", "Prompt plus output reservation exceeds context", "planner")
             if self.device == "cuda" and remaining_seconds > 0:
@@ -184,14 +251,28 @@ class LocalPlanner(ModelResidency):
             allowed = [tool["name"] for tool in planner_input["available_tools"]]
             prefix = self.constraint.prefix(planner_input["available_tools"])
             tokens = {k: v.to(self.device) for k, v in tokens.items()}
-            with self.torch.inference_mode():
-                output = self.model.generate(
-                    **tokens, do_sample=False, num_beams=1, max_new_tokens=self.limits.output_tokens,
-                    prefix_allowed_tokens_fn=prefix,
-                    stopping_criteria=stop, pad_token_id=self.tokenizer.eos_token_id)
-            if time.monotonic() - started >= remaining_seconds:
-                raise PipelineError("TIME_LIMIT", "Planner generation exceeded deadline", "planner")
+            generation_start = self._recorder.clock.offset() if self._recorder else None
+            try:
+                with self.torch.inference_mode():
+                    output = self.model.generate(
+                        **tokens, do_sample=False, num_beams=1, max_new_tokens=self.limits.output_tokens,
+                        prefix_allowed_tokens_fn=prefix,
+                        stopping_criteria=stop, pad_token_id=self.tokenizer.eos_token_id)
+            except Exception:
+                if self._recorder:
+                    self._recorder.unfinished("generation", generation_start, index=index, parent_stage="planner_decision")
+                raise
+            timed_out = time.monotonic() - started >= remaining_seconds
             generated = output[0][length:]
+            if self._recorder:
+                span = self._recorder.mark("generation", generation_start, index=index, parent_stage="planner_decision")
+                stop_reason = ("deadline" if timed_out
+                              else "max_tokens" if len(generated) >= self.limits.output_tokens else "eos")
+                self._recorder.record_generation(Generation("planner_action", index, seconds=span.duration,
+                                                             input_tokens=length, output_tokens=len(generated),
+                                                             stop_reason=stop_reason))
+            if timed_out:
+                raise PipelineError("TIME_LIMIT", "Planner generation exceeded deadline", "planner")
             raw = self.tokenizer.decode(generated, skip_special_tokens=True)
             try:
                 action = parse_action(raw, self.limits.response_bytes)

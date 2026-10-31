@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from lifemate.artifacts import RunStore, Trace, validate_prediction
 from lifemate.contracts import PipelineError, SampleOutcome
+from lifemate.metrics import METRICS_SCHEMA_VERSION
 from support import Fixture
 
 
@@ -151,6 +152,109 @@ class ArtifactTests(unittest.TestCase):
             store.finish()
         # A final filename alone must not establish successful publication.
         self.assertEqual(json.loads(store.manifest_path.read_text(encoding="utf-8"))["status"], "running")
+
+    def test_manifest_defaults_effective_prompt_to_null_not_missing(self):
+        store = self.store()
+        self.assertIn("effective_prompt", store.manifest)
+        self.assertIsNone(store.manifest["effective_prompt"])
+
+    def test_manifest_carries_the_metrics_schema_version(self):
+        store = self.store()
+        self.assertEqual(store.manifest["metrics_schema_version"], METRICS_SCHEMA_VERSION)
+        on_disk = json.loads(store.manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["metrics_schema_version"], METRICS_SCHEMA_VERSION)
+
+    def test_append_stamps_source_executed_and_stores_optional_measurements(self):
+        store = self.store()
+        store.append(self.outcome(), measurements={"spans": [], "generations": []})
+        record = store.manifest["samples"][0]
+        self.assertEqual(record["source"], "executed")
+        self.assertEqual(record["measurements"], {"spans": [], "generations": []})
+
+    def test_append_without_measurements_leaves_it_null_not_missing(self):
+        store = self.store()
+        store.append(self.outcome())
+        record = store.manifest["samples"][0]
+        self.assertEqual(record["source"], "executed")
+        self.assertIsNone(record["measurements"])
+
+    def test_append_rejects_a_non_object_measurements_payload(self):
+        store = self.store()
+        with self.assertRaises(PipelineError):
+            store.append(self.outcome(), measurements="not an object")
+
+    def test_write_prediction_then_record_sample_matches_append(self):
+        # cli.py measures the full attempt after this fsync, so it calls the two
+        # steps separately; splitting them must not change the persisted result.
+        store = self.store()
+        outcome = self.outcome()
+        store.write_prediction(outcome)
+        store.record_sample(outcome, measurements={"spans": [], "generations": []}, full_attempt_seconds=1.5)
+        record = store.manifest["samples"][0]
+        self.assertEqual(record["source"], "executed")
+        self.assertEqual(record["full_attempt_seconds"], 1.5)
+        self.assertEqual(json.loads(store.partial_path.read_text(encoding="utf-8")), outcome.result)
+
+    def test_record_sample_without_write_prediction_leaves_no_durable_row(self):
+        store = self.store()
+        with self.assertRaises(PipelineError):
+            store.write_prediction(self.outcome("unknown-id"))
+        self.assertEqual(store.partial_path.read_text(encoding="utf-8"), "")
+
+    def test_restore_marks_imported_rows_regardless_of_their_source_tag(self):
+        metadata = {"selected_ids": ["train_0001", "train_0002"], "coverage_scope": "subset",
+                    "dataset_sha256": "dataset", "catalog_sha256": "catalog"}
+        source = RunStore(self.fx.config())
+        source.selected(metadata, {})
+        source.append(self.outcome("train_0001"), measurements={"spans": [], "generations": []})
+        source.sample_failed({"code": "PLANNER_ERROR", "stage": "planner"}, "train_0002")
+
+        target = RunStore(self.fx.config(run_dir=self.fx.root / "run-2"))
+        target.selected(metadata, {})
+        target.restore(source.directory)
+        imported = target.manifest["samples"][0]
+        self.assertEqual(imported["id"], "train_0001")
+        self.assertEqual(imported["source"], "imported")
+        self.assertEqual(imported["source_run_id"], source.run_id)
+        # The source's own measurements survive the import unchanged.
+        self.assertEqual(imported["measurements"], {"spans": [], "generations": []})
+
+    def test_restore_from_a_legacy_manifest_without_source_or_measurements_still_imports(self):
+        metadata = {"selected_ids": ["train_0001"], "coverage_scope": "subset",
+                    "dataset_sha256": "dataset", "catalog_sha256": "catalog"}
+        source = RunStore(self.fx.config())
+        source.selected(metadata, {})
+        source.append(self.outcome())
+        legacy_sample = {k: v for k, v in source.manifest["samples"][0].items()
+                         if k not in ("source", "measurements")}
+        source.manifest["samples"] = [legacy_sample]
+        source.save()
+
+        target = RunStore(self.fx.config(run_dir=self.fx.root / "run-2"))
+        target.selected(metadata, {})
+        target.restore(source.directory)
+        imported = target.manifest["samples"][0]
+        self.assertEqual(imported["source"], "imported")
+        # Absence is an explicit null, not an ambiguous missing key.
+        self.assertIn("measurements", imported)
+        self.assertIsNone(imported["measurements"])
+        self.assertIn("full_attempt_seconds", imported)
+        self.assertIsNone(imported["full_attempt_seconds"])
+
+    def test_append_rejects_an_invalid_full_attempt_seconds(self):
+        store = self.store()
+        for bad in (-1.0, "1.0", float("nan"), True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(PipelineError):
+                    store.append(self.outcome(), full_attempt_seconds=bad)
+
+    def test_sample_failed_stores_measurements_and_full_attempt_seconds(self):
+        store = self.store(["train_0001"])
+        store.sample_failed({"code": "PLANNER_ERROR", "stage": "planner"}, "train_0001",
+                            measurements={"spans": [], "generations": []}, full_attempt_seconds=2.5)
+        failure = store.manifest["failures"][0]
+        self.assertEqual(failure["full_attempt_seconds"], 2.5)
+        self.assertEqual(failure["measurements"], {"spans": [], "generations": []})
 
     def test_capacity_failure_still_allows_terminal_metadata(self):
         trace = Trace(self.fx.root / "trace.jsonl", "run", "train_0001", event_limit=1024, total_limit=4096)

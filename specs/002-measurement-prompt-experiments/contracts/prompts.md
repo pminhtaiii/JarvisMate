@@ -67,10 +67,15 @@ prefix, following the existing [conversion rules](../../../docs/design/train-to-
 Ordinary/empty-gold finish rows and terminal missing-information calls follow those
 rules; never append a finish after a terminal missing-information call. Reject
 unverifiable, changed or fabricated inputs/targets, not just malformed grammar.
-The audit records source/dataset/catalog/partition hashes and conversion version.
-Run preflight verifies these identities against the visible inputs; audited bundles
-are immutable. Parsing Train labels belongs only to this separate offline command.
-It never reads environment files and never feeds a raw labeled row to inference.
+The audit records source/dataset/catalog/partition hashes, conversion version, and
+a `verified_content_sha256` over each example's exact verified input/target. Run
+preflight verifies the source/dataset/catalog/partition identities against the
+visible inputs, then recomputes `verified_content_sha256` from the bundle's current
+examples and rejects a mismatch: copying the scalar identity fields onto edited or
+fabricated content does not reproduce this digest, so the run path never needs to
+parse Train labels itself to catch that case. Audited bundles are immutable.
+Parsing Train labels belongs only to this separate offline command. It never reads
+environment files and never feeds a raw labeled row to inference.
 
 Render 1-3 examples in pinned file order between system instructions and the live
 request. Each is a separate user demonstration (same allowed input fields and prior

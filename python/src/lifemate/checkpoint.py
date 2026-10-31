@@ -44,8 +44,20 @@ def read_checkpoint(source: Path, current: JSON, *, allow_mixed: bool = False) -
                     "dataset_sha256", "catalog_sha256", "runtime"):
             if key not in previous or previous[key] != current[key]:
                 reject(f"Resume source differs from current {key}")
-        differences = [key for key in ("execution_identity", "prompt_sha256", "prompt_version", "limits", "seed", "device", "selection_filter", "model_offload")
+        def comparable_prompt(value):
+            # `example_overhead_tokens` is only known after the planner loads, so it is
+            # absent from `current` before a strict-resume check that runs beforehand.
+            # It is informational, not a configuration input; exclude it from identity.
+            if not isinstance(value, dict):
+                return value
+            return {k: v for k, v in value.items() if k != "example_overhead_tokens"}
+
+        differences = [key for key in ("execution_identity", "prompt_sha256", "prompt_version", "limits", "seed",
+                                       "device", "selection_filter", "model_offload")
                        if key not in previous or previous[key] != current.get(key)]
+        if ("effective_prompt" not in previous
+                or comparable_prompt(previous["effective_prompt"]) != comparable_prompt(current.get("effective_prompt"))):
+            differences.append("effective_prompt")
         resume = previous.get("resume", {})
         if not isinstance(resume, dict):
             reject("Invalid resume provenance in source manifest")

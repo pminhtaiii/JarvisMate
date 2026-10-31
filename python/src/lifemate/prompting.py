@@ -34,19 +34,31 @@ Khi hoàn tất, finish. Không gọi công cụ dư chỉ để xác nhận ho�
 Mọi call thực sự, kể cả sai schema, đều được ghi lại; không lặp thao tác đã thành công.
 """
 PROMPT_HASH = hashlib.sha256(SYSTEM.encode()).hexdigest()
+ALLOWED_INPUT_FIELDS = ("request", "context", "history", "available_tools")
+EXAMPLE_GUARD = (
+    "Các minh họa dưới đây được đánh dấu demonstration: true, chỉ để tham khảo cách quyết định, "
+    "không phải lịch sử hay quan sát của mẫu hiện tại. Không thực hiện lại hành động minh họa, "
+    "không suy ra trạng thái hiện tại từ minh họa, và không sao chép ID/tên trong minh họa sang mẫu "
+    "hiện tại. ID và ứng dụng trong minh họa chỉ thuộc về minh họa đó; available_tools của mẫu hiện "
+    "tại mới quyết định công cụ được dùng."
+)
 
 
 def planner_input(prepared: JSON, observations: list[JSON]) -> JSON:
     return {key: copy.deepcopy(prepared[key])
-            for key in ("request", "context", "history", "available_tools")} | {
-                "observations": copy.deepcopy(observations)}
+            for key in ALLOWED_INPUT_FIELDS} | {"observations": copy.deepcopy(observations)}
 
 
-def messages(value: JSON) -> list[JSON]:
+def messages(value: JSON, *, system: str = SYSTEM, examples: tuple[JSON, ...] = ()) -> list[JSON]:
     # Even an adapter caller cannot inject an unexpected top-level label field.
-    allowed = ("request", "context", "history", "available_tools")
-    turns = [{"role": "system", "content": SYSTEM},
-             {"role": "user", "content": dumps({k: value[k] for k in allowed})}]
+    content = system if not examples else system + "\n" + EXAMPLE_GUARD
+    turns = [{"role": "system", "content": content}]
+    for example in examples:
+        demonstration = {"demonstration": True} | {k: example["input"][k] for k in ALLOWED_INPUT_FIELDS}
+        demonstration["observations"] = example["input"]["observations"]
+        turns.append({"role": "user", "content": dumps(demonstration)})
+        turns.append({"role": "assistant", "content": dumps(example["target"])})
+    turns.append({"role": "user", "content": dumps({k: value[k] for k in ALLOWED_INPUT_FIELDS})})
     for observation in value["observations"]:
         if observation["kind"] == "tool_result":
             turns.append({"role": "assistant", "content": dumps({

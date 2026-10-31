@@ -39,7 +39,7 @@ def authoritative(env, sample_id: str) -> JSON:
 def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                environment_factory: EnvironmentFactory, trace: TraceSink,
                limits: Limits, *, split: str, data_root,
-               clock=time.monotonic) -> SampleOutcome:
+               clock=time.monotonic, recorder=None) -> SampleOutcome:
     deadline = Deadline(limits.timeout, clock)
     env, steps, stage = None, 0, "request"
     timings = {"request": 0.0, "planner": 0.0, "tools": 0.0}
@@ -48,9 +48,21 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
             trace.emit("sample_started", input_mode=sample.mode)
             if hasattr(planner, "start_sample"):
                 planner.start_sample(sample.id)
+            if recorder is not None:
+                for adapter in (planner, asr):
+                    if adapter is not None and hasattr(adapter, "set_metrics_recorder"):
+                        adapter.set_metrics_recorder(recorder)
             started = clock()
-            with inference_session(asr):
-                prepared = prepare_request(sample, asr, deadline)
+            request_start = recorder.clock.offset() if recorder else None
+            try:
+                with inference_session(asr):
+                    prepared = prepare_request(sample, asr, deadline, recorder)
+            except Exception:
+                if recorder:
+                    recorder.unfinished("request", request_start)
+                raise
+            if recorder:
+                recorder.mark("request", request_start)
             timings["request"] = clock() - started
             trace.emit("request_prepared", payload={"request": prepared["request"], "history": prepared["history"]},
                        available_tools=[t["name"] for t in sample.tools])
@@ -58,7 +70,15 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
             model_sessions.enter_context(inference_session(planner))
             deadline.remaining()
             stage = "environment"
-            env = environment_factory(split, sample.id, data_root)
+            env_start = recorder.clock.offset() if recorder else None
+            try:
+                env = environment_factory(split, sample.id, data_root)
+            except Exception:
+                if recorder:
+                    recorder.unfinished("environment_open", env_start)
+                raise
+            if recorder:
+                recorder.mark("environment_open", env_start)
             deadline.remaining()
             allowed = {t["name"] for t in sample.tools}
             observations: list[JSON] = []
@@ -68,11 +88,19 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
             for steps in range(1, limits.max_steps + 1):
                 stage = "planner"
                 started = clock()
+                decision_start = recorder.clock.offset() if recorder else None
                 try:
-                    raw = planner.next_action(planner_input(prepared, observations), deadline.remaining())
-                finally:
-                    for detail in getattr(planner, "last_decision_details", ()):
-                        trace.emit("planner_selection", step=steps, payload=detail)
+                    try:
+                        raw = planner.next_action(planner_input(prepared, observations), deadline.remaining())
+                    finally:
+                        for detail in getattr(planner, "last_decision_details", ()):
+                            trace.emit("planner_selection", step=steps, payload=detail)
+                except Exception:
+                    if recorder:
+                        recorder.unfinished("planner_decision", decision_start, index=steps)
+                    raise
+                if recorder:
+                    recorder.mark("planner_decision", decision_start, index=steps)
                 timings["planner"] += clock() - started
                 deadline.remaining()
                 # Bound raw output before even debug tracing it.
@@ -115,11 +143,16 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                 trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
                 deadline.remaining()
                 started = clock()
+                call_start = recorder.clock.offset() if recorder else None
                 # Arguments, including schema-invalid ones, reach the authoritative logger.
                 try:
                     result = env.call(action["name"], action["arguments"])
                 except Exception as exc:
+                    if recorder:
+                        recorder.unfinished("tool_call", call_start, index=steps)
                     raise PipelineError("EXECUTION_UNCERTAIN", "Tool execution raised; do not retry", stage) from exc
+                if recorder:
+                    recorder.mark("tool_call", call_start, index=steps)
                 timings["tools"] += clock() - started
                 if not isinstance(result, dict):
                     raise PipelineError("EXECUTION_UNCERTAIN", "Invalid tool response; do not retry", stage)
@@ -145,7 +178,15 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                 raise PipelineError("STEP_LIMIT", "Planner decision budget exhausted", "planner")
             stage = "collection"
             deadline.remaining()
-            result = authoritative(env, sample.id)
+            collection_start = recorder.clock.offset() if recorder else None
+            try:
+                result = authoritative(env, sample.id)
+            except Exception:
+                if recorder:
+                    recorder.unfinished("final_collection", collection_start)
+                raise
+            if recorder:
+                recorder.mark("final_collection", collection_start)
             deadline.remaining()
             model_sessions.close()
             deadline.remaining()

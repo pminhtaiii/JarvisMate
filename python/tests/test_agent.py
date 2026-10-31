@@ -1,8 +1,9 @@
 import unittest
 
 from lifemate.agent import parse_action, run_sample
-from lifemate.contracts import Limits
+from lifemate.contracts import Limits, PipelineError
 from lifemate.dataset import preflight
+from lifemate.metrics import SpanRecorder
 from support import (FINISH, ControlledEnvironment, ControlledPlanner,
                      Fixture, MemoryTrace, call)
 
@@ -13,18 +14,20 @@ class AgentTests(unittest.TestCase):
         self.addCleanup(self.fx.close)
         self.sample = preflight(self.fx.config()).samples[0]
 
-    def execute(self, actions, env=None, trace=None, limits=None, clock=None):
+    def execute(self, actions, env=None, trace=None, limits=None, clock=None, recorder=None, factory=None):
         self.env, self.trace = env or ControlledEnvironment(), trace or MemoryTrace()
         self.opened = []
 
-        def factory(*args):
+        def default_factory(*args):
             self.opened.append(args)
             return self.env
 
         self.planner = ControlledPlanner(actions)
         options = {"clock": clock} if clock else {}
-        return run_sample(self.sample, self.planner, None, factory, self.trace, limits or Limits(),
-                          split="train", data_root=self.fx.data, **options)
+        if recorder is not None:
+            options["recorder"] = recorder
+        return run_sample(self.sample, self.planner, None, factory or default_factory, self.trace,
+                          limits or Limits(), split="train", data_root=self.fx.data, **options)
 
     def test_lookup_result_binds_the_action_id(self):
         def send(value):
@@ -102,6 +105,61 @@ class AgentTests(unittest.TestCase):
         outcome = self.execute([call("contacts.search")], trace=MemoryTrace("tool_call_started"))
         self.assertEqual(outcome.error["code"], "TRACE_IO")
         self.assertEqual(self.env.calls, [])
+
+    def test_recorder_captures_the_full_span_sequence_on_success(self):
+        recorder = SpanRecorder()
+        outcome = self.execute([call("contacts.search", query="Lan"), FINISH], recorder=recorder)
+        self.assertEqual(outcome.status, "completed")
+        stages = [(s.stage, s.index, s.status) for s in recorder.spans]
+        self.assertEqual(stages, [
+            ("request", None, "completed"),
+            ("environment_open", None, "completed"),
+            ("planner_decision", 1, "completed"),
+            ("tool_call", 1, "completed"),
+            ("planner_decision", 2, "completed"),
+            ("final_collection", None, "completed"),
+        ])
+        self.assertTrue(all(s.duration is not None and s.duration >= 0 for s in recorder.spans))
+
+    def test_recorder_marks_tool_call_unfinished_on_uncertain_execution(self):
+        def explode(*_):
+            raise RuntimeError("Possibly changed state")
+
+        recorder = SpanRecorder()
+        outcome = self.execute([call("sms.send", contact_id="c1", content="x"), FINISH],
+                               env=ControlledEnvironment(explode), recorder=recorder)
+        self.assertEqual(outcome.error["code"], "EXECUTION_UNCERTAIN")
+        self.assertEqual([s.stage for s in recorder.spans], ["request", "environment_open", "planner_decision", "tool_call"])
+        self.assertEqual(recorder.spans[-1].status, "unfinished")
+        self.assertIsNone(recorder.spans[-1].end_offset)
+
+    def test_recorder_marks_environment_open_unfinished_when_factory_raises(self):
+        def failing_factory(*_):
+            raise PipelineError("CATALOG_INVALID", "runtime mismatch")
+
+        recorder = SpanRecorder()
+        outcome = self.execute([FINISH], factory=failing_factory, recorder=recorder)
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual([s.stage for s in recorder.spans], ["request", "environment_open"])
+        self.assertEqual(recorder.spans[-1].status, "unfinished")
+
+    def test_recorder_presence_never_changes_the_authoritative_outcome(self):
+        """SC-003: with a generous deadline, attaching a SpanRecorder must not
+        change the authoritative prediction, status, steps, timings, or stop
+        reason. Uses a deterministic fake clock so timings are comparable."""
+        actions = [call("contacts.search", query="Lan"),
+                  lambda value: call("sms.send", contact_id=value["observations"][0]["result"]["contacts"][0]["id"],
+                                     content="Đến trễ"), FINISH]
+        fake_clock = lambda: next(ticks)
+        ticks = iter(float(i) for i in range(1000))
+        baseline = self.execute(list(actions), clock=fake_clock)
+        ticks = iter(float(i) for i in range(1000))
+        instrumented = self.execute(list(actions), clock=fake_clock, recorder=SpanRecorder())
+        self.assertEqual(baseline.result, instrumented.result)
+        self.assertEqual(baseline.status, instrumented.status)
+        self.assertEqual(baseline.steps, instrumented.steps)
+        self.assertEqual(baseline.stop_reason, instrumented.stop_reason)
+        self.assertEqual(baseline.timings, instrumented.timings)
 
     def test_step_and_deadline_exhaustion_have_no_fake_success(self):
         outcome = self.execute(['bad'], limits=Limits(max_steps=1))

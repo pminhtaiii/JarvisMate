@@ -1,6 +1,7 @@
 """Durable predictions, bounded opt-in traces, and explicit run publication."""
 from __future__ import annotations
 
+import math
 import os
 import platform
 import re
@@ -14,6 +15,7 @@ from typing import Any
 from . import __version__
 from .contracts import JSON, PipelineError, RunConfig
 from .jsonio import dumps, loads, safe_id
+from .metrics import METRICS_SCHEMA_VERSION
 from .prompting import PROMPT_HASH, PROMPT_VERSION
 
 SCHEMA_VERSION = 1
@@ -44,6 +46,12 @@ def sanitize(value: Any) -> Any:
                 pass  # Malformed model text still receives the textual redaction below.
         return SECRET_TEXT.sub(r"\1[REDACTED]", BEARER.sub("Bearer [REDACTED]", value))
     return value
+
+
+def _valid_attempt_seconds(value) -> None:
+    if (value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 0)):
+        raise PipelineError("OUTPUT_IO", "full_attempt_seconds must be a nonnegative finite number", "output")
 
 
 def validate_prediction(row: JSON) -> None:
@@ -157,14 +165,15 @@ class RunStore:
         self.payloads = config.trace_payloads
         self.config = config
         self.manifest = {
-            "schema_version": SCHEMA_VERSION, "run_id": self.run_id,
+            "schema_version": SCHEMA_VERSION, "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "run_id": self.run_id,
             "status": "running", "started_at": utc_now(), "ended_at": None,
             "split": config.split, "input_mode": config.input_mode,
             "requested_ids": list(config.selected_ids), "select_all": config.select_all,
             "selected_ids": [], "completed_ids": [], "failed_ids": [], "not_started_ids": [],
             "submission_ready": False, "code": code_provenance(),
             "python": platform.python_version(), "package_version": __version__,
-            "prompt_version": PROMPT_VERSION, "prompt_sha256": PROMPT_HASH,
+            "prompt_version": PROMPT_VERSION, "prompt_sha256": PROMPT_HASH, "effective_prompt": None,
             "seed": config.seed, "device": config.device,
             "selection_filter": config.selection_filter,
             "model_offload": config.model_offload,
@@ -222,6 +231,13 @@ class RunStore:
                                                   "timing_unavailable": True}))
             record.setdefault("source_run_id", previous["run_id"])
             record.setdefault("trace_path", str(source.resolve() / "traces" / f"{sample_id}.jsonl"))
+            # A pre-measurement source manifest has neither key: make that absence
+            # an explicit null rather than an ambiguous missing key, so a reader
+            # never has to distinguish "not implemented yet" from "unavailable".
+            record.setdefault("measurements", None)
+            record.setdefault("full_attempt_seconds", None)
+            # Always this run's perspective, even if the source manifest had it as executed there.
+            record["source"] = "imported"
             imported.append(record)
         # Provenance must survive a crash during the row import, too. Completion is
         # committed only by the subsequent newline-terminated, fsynced journal rows.
@@ -251,7 +267,12 @@ class RunStore:
             raise PipelineError("INPUT_INVALID", "Pipeline code changed during this run; restart with a fixed version",
                                 "configuration")
 
-    def append(self, outcome) -> None:
+    def write_prediction(self, outcome) -> None:
+        """Fsync the prediction row only; call `record_sample` to commit the manifest entry.
+
+        Split out so a caller can measure the full attempt, including this fsync,
+        before recording `full_attempt_seconds` (the row write is the commit point).
+        """
         if outcome.result is None or outcome.status == "failed":
             raise PipelineError("OUTPUT_IO", "Failure cannot become a prediction", "output")
         validate_prediction(outcome.result)
@@ -263,25 +284,52 @@ class RunStore:
                 sync_write(stream, dumps(outcome.result) + "\n")
         except OSError as exc:
             raise PipelineError("OUTPUT_IO", "Cannot persist prediction row", "output") from exc
+
+    def record_sample(self, outcome, *, measurements: JSON | None = None,
+                      full_attempt_seconds: float | None = None) -> None:
+        if measurements is not None and not isinstance(measurements, dict):
+            raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
+        _valid_attempt_seconds(full_attempt_seconds)
         self.manifest["completed_ids"].append(outcome.id)
         self.manifest["not_started_ids"].remove(outcome.id)
         self.manifest["samples"].append({"id": outcome.id, "status": outcome.status,
                                          "elapsed": outcome.elapsed, "steps": outcome.steps,
-                                         "timings": outcome.timings, "stop_reason": outcome.stop_reason})
+                                         "timings": outcome.timings, "stop_reason": outcome.stop_reason,
+                                         "source": "executed", "measurements": measurements,
+                                         "full_attempt_seconds": full_attempt_seconds})
         self.save()
 
-    def sample_failed(self, error: JSON, sample_id: str) -> None:
+    def append(self, outcome, *, measurements: JSON | None = None,
+              full_attempt_seconds: float | None = None) -> None:
+        self.write_prediction(outcome)
+        self.record_sample(outcome, measurements=measurements, full_attempt_seconds=full_attempt_seconds)
+
+    def sample_failed(self, error: JSON, sample_id: str, *, measurements: JSON | None = None,
+                      full_attempt_seconds: float | None = None, agent_loop: JSON | None = None) -> None:
+        if measurements is not None and not isinstance(measurements, dict):
+            raise PipelineError("OUTPUT_IO", "Measurements payload must be an object", "output")
+        if agent_loop is not None and not isinstance(agent_loop, dict):
+            raise PipelineError("OUTPUT_IO", "agent_loop summary must be an object", "output")
+        _valid_attempt_seconds(full_attempt_seconds)
         if sample_id not in self.manifest["failed_ids"]:
             self.manifest["failed_ids"].append(sample_id)
-            self.manifest["failures"].append({"id": sample_id, "error": sanitize(error)})
+            # agent_loop is only ever set when run_sample itself reported
+            # completed/needs_info and a *later* step (durable output) failed;
+            # it distinguishes that case from the loop having failed outright.
+            self.manifest["failures"].append({"id": sample_id, "error": sanitize(error),
+                                              "measurements": sanitize(measurements) if measurements else measurements,
+                                              "full_attempt_seconds": full_attempt_seconds,
+                                              "agent_loop": agent_loop})
         if sample_id in self.manifest["not_started_ids"]:
             self.manifest["not_started_ids"].remove(sample_id)
         self.save()
 
-    def fail(self, error: JSON, sample_id: str | None = None) -> None:
+    def fail(self, error: JSON, sample_id: str | None = None, *, measurements: JSON | None = None,
+            full_attempt_seconds: float | None = None, agent_loop: JSON | None = None) -> None:
         self.manifest.update(status="failed", ended_at=utc_now(), error=sanitize(error))
         if sample_id is not None:
-            self.sample_failed(error, sample_id)
+            self.sample_failed(error, sample_id, measurements=measurements,
+                              full_attempt_seconds=full_attempt_seconds, agent_loop=agent_loop)
             return
         self.save()
 
