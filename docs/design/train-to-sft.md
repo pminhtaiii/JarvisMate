@@ -4,6 +4,12 @@
 training run, or tuned model is implemented by this document. Implementation is a
 later feature, conditional on the [roadmap's error-analysis gate](../../context/roadmap.md).
 
+The accepted [native Qwen and SFT plan](../../specs/003-native-qwen-planner-sft/plan.md)
+defines the model-facing protocol and training method for that feature. JSON call/
+finish examples below describe canonical executor decisions; its exporter renders
+them as native Qwen calls or the declared native final response. Conversion and
+leakage invariants on this page remain authoritative.
+
 ## Objective and architectural boundary
 
 Train the single general planner to predict one next action from information available
@@ -213,9 +219,10 @@ Future exporter tests must establish:
 ## Evaluation and checkpoint promotion
 
 After the roadmap gate, start from the same eligible pretrained planner baseline.
-Select full fine-tuning or parameter-efficient tuning only after measuring hardware
-and data needs; do not add a trainer dependency or choose hyperparameters in this
-documentation change. Record base snapshot, trainable and deployed parameter counts,
+Use all-linear LoRA, or QLoRA when measured training memory requires it, following
+the native Qwen feature's training contract. Exact package locks and numerical
+settings require its compatibility smoke and controlled experiments; this document
+does not implement a trainer. Record base snapshot, trainable and deployed parameter counts,
 method, seeds, data identity, hyperparameters, packages, checkpoint selection, and export.
 
 Keep the validation partition out of fitting. Compare candidates with the unchanged
