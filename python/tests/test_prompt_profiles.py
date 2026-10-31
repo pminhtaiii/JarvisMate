@@ -383,3 +383,24 @@ class AuditBundleTests(AuditFixture):
         self.assertFalse(output_path.exists())
         # A rerun with the same --output must succeed once the failure clears.
         write_audited_bundle(output_path, audited)
+
+    def test_write_failure_cleanup_never_deletes_a_different_file_at_the_same_path(self):
+        row = self.add_row("train_0001", "g1", [], [])
+        example = self.example(row, "g1", 0, {"action": "finish"})
+        audited = self.audit(self.write_bundle([example]))
+        output_path = self.root / "audited.json"
+
+        def swap_then_fail(stream, content):
+            # Simulate another process replacing this exact path with a
+            # different, complete file between our create and our write.
+            stream.close()
+            output_path.unlink()
+            output_path.write_text("someone else's bundle", encoding="utf-8")
+            raise OSError("disk full")
+
+        with patch("lifemate.example_audit.sync_write", side_effect=swap_then_fail):
+            with self.assertRaises(PipelineError):
+                write_audited_bundle(output_path, audited)
+        # The cleanup must leave the replacement alone: it is not the file this
+        # call created, even though it sits at the same pathname.
+        self.assertEqual(output_path.read_text(encoding="utf-8"), "someone else's bundle")

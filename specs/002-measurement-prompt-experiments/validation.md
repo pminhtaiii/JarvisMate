@@ -28,7 +28,7 @@ command above. Results:
 |---|---|---|
 | `test_metrics.py` | 20 | OK |
 | `test_reporting.py` | 44 | OK |
-| `test_prompt_profiles.py` | 36 | OK |
+| `test_prompt_profiles.py` | 37 | OK |
 | `test_agent.py` | 15 | OK |
 | `test_artifacts.py` | 25 | OK |
 | `test_cli.py` | 33 | OK |
@@ -45,7 +45,7 @@ this feature touches or that exercise the same manifest/checkpoint surface:
 | `test_audio.py` | 13 | OK |
 | `test_inference.py` | 25 | OK |
 
-239 tests ran, 239 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
+240 tests ran, 240 passed, 2 skipped (real-sample-only cases inside `test_dataset.py`
 that require `LIFEMATE_REAL_*` data). `test_real_samples.py` was not invoked: it needs
 `LIFEMATE_REAL_DATA_ROOT`/`LIFEMATE_REAL_SAMPLE_ID`/`LIFEMATE_RUNTIME_DIR`, none of which
 exist in this environment. This confirms the controlled behaviors in
@@ -98,6 +98,17 @@ now it serializes first and unlinks the file on failure; `_journal_ids` had
 regressed from streaming the prediction journal to loading it whole with
 `read_bytes()` when the unterminated-tail fix was added — restored to line-by-line
 streaming, stopping at the first line without a trailing newline.
+
+A fourth review round after that push posted 1 more Minor finding, fixed and
+tested: the cleanup added in the third round (`write_audited_bundle` unlinking a
+partial file on write failure) deleted `output_path` by name alone, so a
+different process replacing that exact path with a complete bundle between this
+call's create and its cleanup would have its file deleted too. `write_audited_bundle`
+now captures `(st_dev, st_ino)` from the open file descriptor at create time and
+only unlinks on failure if `output_path` still resolves to that same identity;
+otherwise it leaves whatever is there alone. On filesystems without meaningful
+inode identity (FAT/exFAT) this degrades to the previous unconditional cleanup,
+which the finding itself called a narrow window.
 
 ## Real instrumented control, prompt arms, failure/compatibility checks — NOT RUN
 

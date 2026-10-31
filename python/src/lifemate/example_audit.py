@@ -9,6 +9,7 @@ labeled row to inference; only this separate command parses Train labels.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 from .artifacts import sync_write
@@ -135,22 +136,30 @@ def write_audited_bundle(output_path: Path, audited_bundle: JSON) -> None:
     except OSError as exc:
         raise PipelineError("OUTPUT_IO", "Cannot create audited bundle output directory", "audit") from exc
     payload = dumps(audited_bundle) + "\n"
-    created = False
+    created_identity = None
     try:
         # Exclusive create (O_CREAT|O_EXCL) is atomically exclusive on every
         # filesystem, unlike a hard link, which some (FAT/exFAT) do not support;
         # it closes the same exists()-check/later-write race without that limit.
         with output_path.open("x", encoding="utf-8", newline="\n") as stream:
-            created = True
+            fstat = os.fstat(stream.fileno())
+            created_identity = (fstat.st_dev, fstat.st_ino)
             sync_write(stream, payload)
     except FileExistsError as exc:
         raise PipelineError("OUTPUT_IO", "Audited bundle output must be new; audited bundles are immutable",
                             "audit") from exc
     except OSError as exc:
-        if created:
+        if created_identity is not None:
             # Leave no partial/empty file behind; a rerun with the same --output
-            # must not be blocked by a failed previous attempt.
-            output_path.unlink(missing_ok=True)
+            # must not be blocked by a failed previous attempt. Only unlink if
+            # `output_path` still identifies the file this call just created —
+            # never a different file another process put there in the meantime.
+            try:
+                current = output_path.stat()
+                if (current.st_dev, current.st_ino) == created_identity:
+                    output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise PipelineError("OUTPUT_IO", "Cannot persist audited bundle", "audit") from exc
 
 
