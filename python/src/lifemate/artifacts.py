@@ -16,7 +16,7 @@ from . import __version__
 from .contracts import JSON, PipelineError, RunConfig
 from .jsonio import dumps, loads, safe_id
 from .metrics import METRICS_SCHEMA_VERSION
-from .prompting import PROMPT_HASH, PROMPT_VERSION
+from .prompting import PROTOCOL_PROMPTS
 
 SCHEMA_VERSION = 1
 SECRET_KEY = re.compile(r"password|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|^token$", re.I)
@@ -164,6 +164,7 @@ class RunStore:
         self.run_id = uuid.uuid4().hex
         self.payloads = config.trace_payloads
         self.config = config
+        prompt_version, prompt_sha256 = PROTOCOL_PROMPTS[config.planner_protocol]
         self.manifest = {
             "schema_version": SCHEMA_VERSION, "metrics_schema_version": METRICS_SCHEMA_VERSION,
             "run_id": self.run_id,
@@ -173,7 +174,8 @@ class RunStore:
             "selected_ids": [], "completed_ids": [], "failed_ids": [], "not_started_ids": [],
             "submission_ready": False, "code": code_provenance(),
             "python": platform.python_version(), "package_version": __version__,
-            "prompt_version": PROMPT_VERSION, "prompt_sha256": PROMPT_HASH, "effective_prompt": None,
+            "planner_protocol": config.planner_protocol,
+            "prompt_version": prompt_version, "prompt_sha256": prompt_sha256, "effective_prompt": None,
             "seed": config.seed, "device": config.device,
             "selection_filter": config.selection_filter,
             "model_offload": config.model_offload,

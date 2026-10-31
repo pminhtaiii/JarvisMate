@@ -161,6 +161,45 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(baseline.stop_reason, instrumented.stop_reason)
         self.assertEqual(baseline.timings, instrumented.timings)
 
+    def native_planner(self, actions, outputs):
+        planner = ControlledPlanner(actions)
+        pending, controlled = list(outputs), planner.next_action
+
+        def next_action(value, remaining_seconds):
+            planner.last_native_outputs = [pending.pop(0)]
+            return controlled(value, remaining_seconds)
+
+        planner.next_action = next_action
+        return planner
+
+    def test_native_output_trace_keeps_raw_text_as_payload_and_stop_as_metadata(self):
+        search = call("contacts.search", query="Lan")
+        outputs = [{"text": "<tool_call>…</tool_call>", "stop_reason": "eos", "output_tokens": 9,
+                    "decision": "call", "canonical_action": search},
+                   {"text": "Mình hiểu.", "stop_reason": "eos", "output_tokens": 4,
+                    "decision": "finish", "canonical_action": FINISH}]
+        self.env, self.trace = ControlledEnvironment(), MemoryTrace()
+        outcome = run_sample(self.sample, self.native_planner([search, FINISH], outputs), None,
+                             lambda *a: self.env, self.trace, Limits(), split="train", data_root=self.fx.data)
+        self.assertEqual(outcome.status, "completed")
+        native = [fields for kind, fields in self.trace.events if kind == "planner_native_output"]
+        self.assertEqual([(f["step"], f["stop_reason"], f["decision"], f["output_tokens"]) for f in native],
+                         [(1, "eos", "call", 9), (2, "eos", "finish", 4)])
+        self.assertEqual(native[0]["payload"], {"response": outputs[0]["text"], "canonical_action": search})
+        self.assertEqual(outcome.result["tool_calls"], self.env.calls)
+
+    def test_native_output_of_a_rejected_decision_is_traced_and_never_dispatched(self):
+        rejected = {"text": "Được.", "stop_reason": "eos", "output_tokens": 3,
+                    "decision": "rejected", "canonical_action": None}
+        self.env, self.trace = ControlledEnvironment(), MemoryTrace()
+        failure = PipelineError("PLANNER_FORMAT", "not one decision", "planner")
+        outcome = run_sample(self.sample, self.native_planner([failure], [rejected]), None,
+                             lambda *a: self.env, self.trace, Limits(), split="train", data_root=self.fx.data)
+        self.assertEqual((outcome.status, outcome.stop_reason), ("failed", "PLANNER_FORMAT"))
+        self.assertEqual(self.env.calls, [])
+        native = [fields for kind, fields in self.trace.events if kind == "planner_native_output"]
+        self.assertEqual([(f["decision"], f["payload"]["canonical_action"]) for f in native], [("rejected", None)])
+
     def test_step_and_deadline_exhaustion_have_no_fake_success(self):
         outcome = self.execute(['bad'], limits=Limits(max_steps=1))
         self.assertEqual(outcome.error["code"], "STEP_LIMIT")

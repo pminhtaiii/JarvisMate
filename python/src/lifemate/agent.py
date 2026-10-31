@@ -95,6 +95,12 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                     finally:
                         for detail in getattr(planner, "last_decision_details", ()):
                             trace.emit("planner_selection", step=steps, payload=detail)
+                        # Native model text is payload (opt-in); its stop/decision kind is metadata.
+                        for output in getattr(planner, "last_native_outputs", ()):
+                            trace.emit("planner_native_output", step=steps,
+                                       payload={"response": output["text"], "canonical_action": output["canonical_action"]},
+                                       stop_reason=output["stop_reason"], output_tokens=output["output_tokens"],
+                                       decision=output["decision"])
                 except Exception:
                     if recorder:
                         recorder.unfinished("planner_decision", decision_start, index=steps)

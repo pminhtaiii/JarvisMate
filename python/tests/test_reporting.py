@@ -476,6 +476,30 @@ class CompareRunsTests(RunFixture):
         with self.assertRaises(PipelineError):
             build_comparison(baseline.directory, candidate.directory, "few-shot")
 
+    def test_existing_factors_reject_a_protocol_change(self):
+        # Otherwise an instruction-profile change would hide a protocol change.
+        baseline, candidate = self.two_runs()
+        baseline.manifest["effective_prompt"] = {
+            "profile": {"profile": "precise-v1", "version": "v2", "sha256": "h2"},
+            "bundle": None, "few_shot_token_budget": None}
+        baseline.save()
+        candidate.manifest["planner_protocol"] = "qwen-native-v1"
+        candidate.manifest["effective_prompt"] = {
+            "profile": {"profile": "baseline", "version": "n1", "sha256": "n1"},
+            "bundle": None, "few_shot_token_budget": None}
+        candidate.save()
+        for factor in ("harness", "instructions", "few-shot"):
+            with self.subTest(factor=factor):
+                with self.assertRaises(PipelineError) as caught:
+                    build_comparison(baseline.directory, candidate.directory, factor)
+                self.assertIn("planner_protocol", str(caught.exception))
+
+    def test_pre_protocol_manifest_compares_as_structured(self):
+        baseline, candidate = self.two_runs()
+        del baseline.manifest["planner_protocol"]
+        baseline.save()
+        self.assertEqual(build_comparison(baseline.directory, candidate.directory, "harness")["factor"], "harness")
+
     def test_factor_comparison_with_an_unchanged_prompt_is_rejected(self):
         baseline, candidate = self.two_runs()
         identical = {"profile": {"profile": "baseline", "version": "v1", "sha256": "h1"},

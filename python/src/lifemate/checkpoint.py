@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from .contracts import JSON, PipelineError
+from .contracts import JSON, LEGACY_PLANNER_PROTOCOL, PipelineError
 from .jsonio import loads, visible_path
 
 
@@ -44,6 +44,11 @@ def read_checkpoint(source: Path, current: JSON, *, allow_mixed: bool = False) -
                     "dataset_sha256", "catalog_sha256", "runtime"):
             if key not in previous or previous[key] != current[key]:
                 reject(f"Resume source differs from current {key}")
+        # Rows decided under another model protocol are a different population;
+        # --allow-mixed-resume never admits them.
+        if (previous.get("planner_protocol", LEGACY_PLANNER_PROTOCOL)
+                != current.get("planner_protocol", LEGACY_PLANNER_PROTOCOL)):
+            reject("Resume source differs from current planner_protocol")
         def comparable_prompt(value):
             # `example_overhead_tokens` is only known after the planner loads, so it is
             # absent from `current` before a strict-resume check that runs beforehand.
