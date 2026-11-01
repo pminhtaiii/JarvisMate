@@ -237,8 +237,11 @@ manifest comes from the separate `partition` command:
     export_manifest.json
 ```
 
-The directory is staged and published in one rename; an existing export is never
-replaced. Fit rows carry `prompt`, `completion`, token counts, provenance and
+Artifacts are written to a staging directory first. The export then claims the output
+path with an exclusive `mkdir`, so no existing path is ever replaced, not even an empty
+directory. It moves the files in and publishes `export_manifest.json` last, so a directory
+without the manifest is incomplete and must not be used. A failed publication removes
+the files and directory it created. Fit rows carry `prompt`, `completion`, token counts, provenance and
 `canonical_target`. The validation rows are optional teacher-forced diagnostics, not the
 end-to-end validation prediction file. The export fails without writing artifacts when no
 fit row is accepted or when the leakage or partition audit fails.

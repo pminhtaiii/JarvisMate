@@ -775,6 +775,42 @@ class ExportArtifactTests(ExportCase):
                     self.export()
                 self.assertEqual(caught.exception.code, "INPUT_INVALID")
 
+    def test_publication_never_replaces_an_output_created_after_the_early_check(self):
+        self.write(self.rows())
+        real_mkdir = os.mkdir
+
+        def racing_mkdir(path, *args, **kwargs):
+            # Another process creates the empty output just before this export claims it.
+            if Path(path).name == "sft-1":
+                real_mkdir(path)
+            return real_mkdir(path, *args, **kwargs)
+
+        with patch.object(os, "mkdir", racing_mkdir), self.assertRaises(PipelineError) as caught:
+            self.export()
+        self.assertEqual(caught.exception.code, "INPUT_INVALID")
+        exports = self.fx.root / "exports"
+        self.assertEqual([p.name for p in exports.iterdir()], ["sft-1"])
+        self.assertEqual(list((exports / "sft-1").iterdir()), [])
+
+    def test_failed_publication_removes_what_it_published_and_allows_a_retry(self):
+        self.write(self.rows())
+        real_publish = training_data._publish_new_file
+
+        def fail_on_manifest(source, destination):
+            if destination.name == "export_manifest.json":
+                raise OSError("disk full")
+            real_publish(source, destination)
+
+        with patch.object(training_data, "_publish_new_file", fail_on_manifest), \
+                self.assertRaises(PipelineError) as caught:
+            self.export()
+        self.assertEqual(caught.exception.code, "OUTPUT_IO")
+        self.assertEqual(list((self.fx.root / "exports").iterdir()), [])
+        self.exports = 0
+        manifest, files = self.export()
+        self.assertEqual(sorted(p.name for p in (self.fx.root / "exports").iterdir()), ["sft-1"])
+        self.assertEqual(manifest["rows"]["fit"]["rows"], len(files["fit.jsonl"]))
+
     def test_zero_accepted_fit_rows_fail_without_artifacts(self):
         with self.assertRaises(PipelineError) as caught:
             self.export([sample("train_0001", calls=[SEARCH], results=[])])

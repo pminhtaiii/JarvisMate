@@ -359,6 +359,15 @@ def read_train(data_root: Path) -> tuple[list[JSON], str, JSON, str]:
             hashlib.sha256(catalog_bytes).hexdigest())
 
 
+def _publish_new_file(source: Path, destination: Path) -> None:
+    """Move a fully written file to `destination`; raises FileExistsError instead of replacing.
+
+    Windows rename refuses an existing destination and a POSIX link cannot replace one.
+    On POSIX the caller removes `source` afterwards.
+    """
+    (os.rename if os.name == "nt" else os.link)(source, destination)
+
+
 def write_partition(output: Path, manifest: JSON) -> None:
     """Publish the complete manifest at once; an existing partition is never overwritten.
 
@@ -371,8 +380,7 @@ def write_partition(output: Path, manifest: JSON) -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         with staging.open("x", encoding="utf-8", newline="\n") as stream:
             sync_write(stream, dumps(manifest) + "\n")
-        # Neither call replaces an existing destination: Windows rename refuses one, a link cannot.
-        (os.rename if os.name == "nt" else os.link)(staging, output)
+        _publish_new_file(staging, output)
     except FileExistsError as exc:
         raise _invalid("Partition already exists; a new split needs a new experiment path") from exc
     except OSError as exc:
@@ -733,20 +741,40 @@ def _side_summary(rows: list[JSON]) -> JSON:
 
 
 def write_export(output: Path, files: dict[str, str]) -> None:
-    """Publish every artifact at once; an existing export is never replaced or left partial."""
+    """Stage every artifact, then publish into a freshly claimed output directory.
+
+    `os.mkdir` claims the output path atomically and never replaces anything, including
+    an empty directory created by another process. Files move in `files` order and the
+    last one is the completion marker, so a directory without it is incomplete. On a
+    failure the files this call published, and the directory itself, are removed.
+    """
     staging = output.with_name(f".{output.name}.partial-{uuid.uuid4().hex}")
+    published = []
     try:
         staging.mkdir(parents=True)
         for name, content in files.items():
             with (staging / name).open("x", encoding="utf-8", newline="\n") as stream:
                 sync_write(stream, content)
-        os.rename(staging, output)
+        os.mkdir(output)
+        try:
+            for name in files:
+                _publish_new_file(staging / name, output / name)
+                published.append(output / name)
+        except OSError:
+            for path in published:
+                path.unlink(missing_ok=True)
+            try:
+                # rmdir removes the directory only while it is empty, so others' files are never deleted.
+                output.rmdir()
+            except OSError:
+                pass
+            raise
     except FileExistsError as exc:
-        shutil.rmtree(staging, ignore_errors=True)
         raise _export_invalid("Export output already exists; exports are immutable") from exc
     except OSError as exc:
-        shutil.rmtree(staging, ignore_errors=True)
         raise PipelineError("OUTPUT_IO", "Cannot write the export", "export") from exc
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def export(data_root: Path, partition_path: Path, base_model: Path, output: Path, *,
@@ -860,6 +888,7 @@ def export(data_root: Path, partition_path: Path, base_model: Path, output: Path
                          "rows": content.count("\n")} for name, content in contents.items()},
         "limitations": list(EXPORT_LIMITATIONS),
     }
+    # Published last: a directory without the manifest is an incomplete export.
     contents["export_manifest.json"] = dumps(manifest) + "\n"
     write_export(output, contents)
     return manifest

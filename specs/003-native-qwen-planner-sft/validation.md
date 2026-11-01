@@ -252,12 +252,15 @@ the task dependencies allow; this record is not SFT eligibility.
 PYTHONPATH=src python -X utf8 -m unittest discover -s tests -p "test_*.py"
 ```
 
-Exit `0`: 359 tests, OK, 15 skipped (the same skips as above).
-`test_training_data.py` has 50 tests, OK: 24 partition tests and 26 export tests. The counts
-include the PR #13 review fixes: a chat-template exception now excludes only its row
-(`template_render_failed`); `train.jsonl` reads are capped at 256 MiB; and the partition
-manifest is written to a staging file and then published without replacing an existing
-path, so an interrupted write leaves no partial manifest.
+Exit `0`: 361 tests, OK, 15 skipped (the same skips as above).
+`test_training_data.py` has 52 tests, OK: 24 partition tests and 28 export tests. The counts
+include the PR #13 review fixes:
+- a chat-template exception now excludes only its row (`template_render_failed`);
+- `train.jsonl` reads are capped at 256 MiB;
+- the partition manifest is written to a staging file and then published without
+  replacing an existing path, so an interrupted write leaves no partial manifest;
+- the export claims its output with an exclusive `mkdir`, so it never replaces even an
+  empty directory created after the early check.
 The same file and `test_qwen_protocol.py` were also run in an isolated temporary venv
 with `lm-format-enforcer==0.11.3`, outside the repository:
 
@@ -292,8 +295,10 @@ Exit `0`: 47 OK with the real grammar deciding target admission; 30 OK, 5 skippe
   touches `*_environment/`; inference preflight still checks each selected sample.
 - **T022**: `python -m lifemate.training export` validates the partition's dataset/catalog
   hashes, membership and per-row source hashes. It writes `fit.jsonl`, optional
-  `validation.next_action.jsonl`, `exclusions.jsonl` and `export_manifest.json` through one
-  staged rename. It refuses existing outputs and outputs inside the data root or base model.
+  `validation.next_action.jsonl`, `exclusions.jsonl` and `export_manifest.json`. All are
+  staged first, then moved into an exclusively created output directory with the manifest
+  last, so a directory without it is incomplete. It refuses existing outputs and outputs
+  inside the data root or base model.
 - **T023**: the planner and exporter share `qwen_protocol.render_prompt`. `render_row`
   checks grammar admission, template extension, token-boundary separability, EOS-only
   completion labels, the runtime budget rule and decode round-trip.
