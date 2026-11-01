@@ -8,6 +8,7 @@ sample_score, only validates and reports the evaluator-supplied value.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 from . import artifacts
@@ -421,13 +422,71 @@ def write_report(run_dir: Path, report: JSON) -> None:
 # Controlled comparisons (T010)
 # ---------------------------------------------------------------------------
 
-FACTORS = ("harness", "instructions", "few-shot")
+FACTORS = ("harness", "instructions", "few-shot", "protocol", "planner-model")
+MODEL_FACTORS = ("protocol", "planner-model")
 FIXED_IDENTITY_KEYS = ("device", "seed", "selection_filter", "model_offload")
+# Planner files that define tokenization and the chat template, as opposed to weights/config.
+TOKENIZER_FILE = re.compile(r"(?:^|/)(?:tokenizer[^/]*|vocab[^/]*|merges\.txt|special_tokens_map\.json"
+                            r"|added_tokens\.json|chat_template[^/]*|[^/]*\.tiktoken|[^/]*\.model)$")
 
 
 def _model_identity(manifest: JSON) -> JSON:
     identity = manifest.get("execution_identity") or {}
     return {"planner": identity.get("planner"), "asr": identity.get("asr"), "packages": identity.get("packages")}
+
+
+def _planner_files(manifest: JSON, *, tokenizer: bool) -> JSON:
+    files = ((manifest.get("execution_identity") or {}).get("planner") or {}).get("files") or {}
+    return {name: value for name, value in files.items() if bool(TOKENIZER_FILE.search(name)) == tokenizer}
+
+
+def _planner_metadata(manifest: JSON) -> JSON:
+    return ((manifest.get("models") or {}).get("planner")) or {}
+
+
+def _protocol(manifest: JSON) -> str:
+    return manifest.get("planner_protocol", LEGACY_PLANNER_PROTOCOL)
+
+
+def _validate_model_factor(factor: str, baseline: JSON, candidate: JSON,
+                           baseline_prompt: JSON, candidate_prompt: JSON) -> None:
+    """Each model factor may change exactly one identity; everything else stays fixed."""
+    def reject(message):
+        raise PipelineError("INPUT_INVALID", message, "compare")
+
+    if _planner_metadata(baseline).get("dtype") != _planner_metadata(candidate).get("dtype"):
+        reject("Baseline/candidate planner dtype differ")
+    for prompt in (baseline_prompt, candidate_prompt):
+        if (prompt.get("profile") or {}).get("profile") != "baseline" or prompt.get("bundle") is not None:
+            reject(f"Factor {factor!r} requires the baseline instruction policy and no examples")
+    if baseline_prompt.get("few_shot_token_budget") != candidate_prompt.get("few_shot_token_budget"):
+        reject("Baseline/candidate few-shot budget differ")
+    if factor == "protocol":
+        if (_protocol(baseline), _protocol(candidate)) != ("structured-v1", "qwen-native-v1"):
+            reject("A protocol factor compares a structured-v1 baseline with a qwen-native-v1 candidate")
+        if baseline.get("selection_filter") or candidate.get("selection_filter"):
+            reject("A protocol factor requires the selection filter to be off")
+        if _model_identity(baseline) != _model_identity(candidate):
+            reject("A protocol factor requires the identical planner checkpoint/tokenizer, ASR and packages")
+        return
+    # planner-model: only planner weights/config may change.
+    if (_protocol(baseline), _protocol(candidate)) != ("qwen-native-v1", "qwen-native-v1"):
+        reject("A planner-model factor compares native-protocol runs")
+    if (baseline["prompt_version"], baseline["prompt_sha256"]) != (candidate["prompt_version"], candidate["prompt_sha256"]):
+        reject("A planner-model factor must not change the prompt")
+    if baseline_prompt != candidate_prompt:
+        reject("A planner-model factor must not change the effective prompt configuration")
+    identity = lambda m: (m.get("execution_identity") or {})
+    if (identity(baseline).get("asr"), identity(baseline).get("packages")) != (
+            identity(candidate).get("asr"), identity(candidate).get("packages")):
+        reject("A planner-model factor requires identical ASR and packages")
+    if _planner_files(baseline, tokenizer=True) != _planner_files(candidate, tokenizer=True):
+        reject("A planner-model factor requires the identical tokenizer and chat template")
+    template = lambda m: (_planner_metadata(m).get("native_protocol") or {}).get("chat_template_sha256")
+    if template(baseline) != template(candidate):
+        reject("A planner-model factor requires the identical loaded chat template")
+    if _planner_files(baseline, tokenizer=False) == _planner_files(candidate, tokenizer=False):
+        reject("A planner-model factor must change the planner weights/config")
 
 
 def _comparable_prompt(manifest: JSON) -> JSON:
@@ -448,15 +507,14 @@ def validate_factor_identity(factor: str, baseline: JSON, candidate: JSON) -> No
     for manifest in (baseline, candidate):
         if bool((manifest.get("resume") or {}).get("development_composite")):
             raise PipelineError("INPUT_INVALID", "A mixed-resume run cannot support acceptance comparison", "compare")
-    if _model_identity(baseline) != _model_identity(candidate):
+    if factor not in MODEL_FACTORS and _model_identity(baseline) != _model_identity(candidate):
         raise PipelineError("INPUT_INVALID", "Baseline/candidate model identity differs", "compare")
     for key in FIXED_IDENTITY_KEYS:
         if baseline.get(key) != candidate.get(key):
             raise PipelineError("INPUT_INVALID", f"Baseline/candidate {key} differ", "compare")
     if baseline["limits"] != candidate["limits"]:
         raise PipelineError("INPUT_INVALID", "Baseline/candidate limits differ", "compare")
-    if (baseline.get("planner_protocol", LEGACY_PLANNER_PROTOCOL)
-            != candidate.get("planner_protocol", LEGACY_PLANNER_PROTOCOL)):
+    if factor != "protocol" and _protocol(baseline) != _protocol(candidate):
         raise PipelineError("INPUT_INVALID", "Baseline/candidate planner_protocol differ", "compare")
     baseline_prompt, candidate_prompt = _comparable_prompt(baseline), _comparable_prompt(candidate)
     if factor == "harness":
@@ -466,9 +524,12 @@ def validate_factor_identity(factor: str, baseline: JSON, candidate: JSON) -> No
             raise PipelineError(
                 "INPUT_INVALID", "A harness factor must not change the effective prompt configuration", "compare")
         return
-    # Instructions/few-shot trials declare an unchanged harness: require identical code.
+    # Every non-harness trial declares an unchanged harness: require identical code.
     if baseline["execution_identity"]["code"] != candidate["execution_identity"]["code"]:
         raise PipelineError("INPUT_INVALID", f"Factor {factor!r} requires identical execution code", "compare")
+    if factor in MODEL_FACTORS:
+        _validate_model_factor(factor, baseline, candidate, baseline_prompt, candidate_prompt)
+        return
     # Each trial isolates exactly one prompt factor; the other must stay fixed.
     if factor == "instructions":
         other = lambda prompt: {k: v for k, v in prompt.items() if k != "profile"}
@@ -593,6 +654,16 @@ def _classify_final_budget(baseline: JSON, candidate: JSON) -> JSON:
     }
 
 
+def _classify_model_change(baseline: JSON, candidate: JSON, paired_scores: list[JSON] | None) -> JSON:
+    """Protocol/model evidence is diagnostic; it never declares benchmark promotion by itself."""
+    return _classify_prompt(baseline, candidate, paired_scores) | {
+        "default_automatic_recommendation": False,
+        "promotion_status": "exploratory",
+        "limitation": "A development-diagnostic gain can select a candidate for review only. Promotion "
+                      "requires organizer-supported aggregation, full coverage and A30 final-budget evidence.",
+    }
+
+
 def build_comparison(baseline_dir: Path, candidate_dir: Path, factor: str,
                       baseline_evaluation: Path | None = None,
                       candidate_evaluation: Path | None = None) -> JSON:
@@ -610,11 +681,14 @@ def build_comparison(baseline_dir: Path, candidate_dir: Path, factor: str,
         "paired": {"rows": paired_rows,
                    "delta_total_seconds": distribution([row["delta_total_seconds"] for row in paired_rows]),
                    "scores": paired_scores},
-        "acceptance": {
+        "acceptance": ({
+            factor: _classify_model_change(baseline_report, candidate_report, paired_scores),
+            "final_budget": _classify_final_budget(baseline_report, candidate_report),
+        } if factor in MODEL_FACTORS else {
             "harness": _classify_harness(baseline_report, candidate_report, paired_scores),
             "prompt": _classify_prompt(baseline_report, candidate_report, paired_scores),
             "final_budget": _classify_final_budget(baseline_report, candidate_report),
-        },
+        }),
     }
 
 

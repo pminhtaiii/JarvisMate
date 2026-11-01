@@ -346,6 +346,18 @@ class ReportAndCompareCLITests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(self.stdout.getvalue())["status"], "failed")
 
+    def test_compare_runs_offers_model_factors_and_validates_their_identity(self):
+        baseline_dir, candidate_dir = self.fx.root / "baseline", self.fx.root / "candidate"
+        self.run_batch(baseline_dir)
+        self.run_batch(candidate_dir)
+        for factor, phrase in (("protocol", "structured-v1 baseline"), ("planner-model", "native-protocol runs")):
+            with self.subTest(factor=factor):
+                code = self.execute(["compare-runs", "--baseline-run", str(baseline_dir),
+                                     "--candidate-run", str(candidate_dir), "--factor", factor,
+                                     "--output-dir", str(self.fx.root / f"comparison-{factor}")])
+                self.assertEqual(code, 1)
+                self.assertIn(phrase, json.loads(self.stdout.getvalue())["error"]["message"])
+
 
 class FewShotCLITests(unittest.TestCase):
     """Few-shot/prompt-profile preflight wiring (T015): rejections before any model load."""

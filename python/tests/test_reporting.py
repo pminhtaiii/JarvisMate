@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import unittest
 
 from lifemate.artifacts import RunStore
 from lifemate.contracts import PipelineError, SampleOutcome
 from lifemate.jsonio import digest
+from lifemate.prompting import PROTOCOL_PROMPTS
 from lifemate.reporting import (
     build_comparison, build_report, distribution, nearest_rank, validate_comparison_output, write_comparison,
     write_report,
@@ -516,6 +518,104 @@ class CompareRunsTests(RunFixture):
                 with self.assertRaises(PipelineError) as caught:
                     build_comparison(baseline.directory, candidate.directory, "harness")
                 self.assertIn("planner_protocol", str(caught.exception))
+
+    def model_runs(self, baseline_protocol="structured-v1", candidate_protocol="qwen-native-v1"):
+        baseline, candidate = self.two_runs()
+        files = {"config.json": "c1", "model.safetensors": "w1", "tokenizer.json": "t1",
+                 "tokenizer_config.json": "tc1", "chat_template.jinja": "j1"}
+        for store, protocol in ((baseline, baseline_protocol), (candidate, candidate_protocol)):
+            version, sha256 = PROTOCOL_PROMPTS[protocol]
+            store.manifest.update(planner_protocol=protocol, prompt_version=version, prompt_sha256=sha256)
+            store.manifest["effective_prompt"] = {"profile": {"profile": "baseline", "version": version, "sha256": sha256},
+                                                  "bundle": None, "few_shot_token_budget": None}
+            store.manifest["execution_identity"]["planner"] = {"path": "/models/base", "files": dict(files)}
+            store.manifest["models"] = {"planner": {"dtype": "torch.float16", "native_protocol": (
+                {"chat_template_sha256": "tpl"} if protocol == "qwen-native-v1" else None)}, "asr": None}
+            store.save()
+        return baseline, candidate
+
+    def assert_rejected(self, baseline, candidate, factor, phrase):
+        with self.assertRaises(PipelineError) as caught:
+            build_comparison(baseline.directory, candidate.directory, factor)
+        self.assertIn(phrase, str(caught.exception))
+
+    def discard(self, *stores):
+        for store in stores:
+            shutil.rmtree(store.directory)
+
+    def edit(self, store, change):
+        change(store.manifest)
+        store.save()
+
+    def test_protocol_factor_accepts_only_the_protocol_change_and_stays_exploratory(self):
+        baseline, candidate = self.model_runs()
+        comparison = build_comparison(baseline.directory, candidate.directory, "protocol")
+        self.assertEqual(set(comparison["acceptance"]), {"protocol", "final_budget"})
+        verdict = comparison["acceptance"]["protocol"]
+        self.assertEqual((verdict["promotion_status"], verdict["default_automatic_recommendation"]),
+                         ("exploratory", False))
+
+    def test_protocol_factor_rejects_any_other_difference(self):
+        cases = [
+            ("reversed direction", None, "structured-v1 baseline"),
+            ("selection filter", lambda m: m.update(selection_filter=True), "selection filter"),
+            ("precise profile", lambda m: m["effective_prompt"]["profile"].update(profile="precise-v1"),
+             "baseline instruction policy"),
+            ("example bundle", lambda m: m["effective_prompt"].update(bundle={"bundle_sha256": "x"}),
+             "no examples"),
+            ("changed weights", lambda m: m["execution_identity"]["planner"]["files"].update(
+                {"model.safetensors": "w2"}), "identical planner checkpoint"),
+            ("changed code", lambda m: m["execution_identity"].update(code={"other": "hash"}), "identical execution code"),
+            ("changed dtype", lambda m: m["models"]["planner"].update(dtype="torch.float32"), "dtype"),
+        ]
+        for label, change, phrase in cases:
+            with self.subTest(label):
+                if change is None:
+                    baseline, candidate = self.model_runs("qwen-native-v1", "structured-v1")
+                else:
+                    baseline, candidate = self.model_runs()
+                    if label == "selection filter":
+                        self.edit(baseline, change)
+                    self.edit(candidate, change)
+                self.assert_rejected(baseline, candidate, "protocol", phrase)
+                self.discard(baseline, candidate)
+
+    def test_planner_model_factor_accepts_only_changed_weights(self):
+        baseline, candidate = self.model_runs("qwen-native-v1", "qwen-native-v1")
+        self.edit(candidate, lambda m: m["execution_identity"]["planner"].update(
+            path="/models/tuned", files=dict(m["execution_identity"]["planner"]["files"],
+                                             **{"model.safetensors": "w2", "config.json": "c2"})))
+        comparison = build_comparison(baseline.directory, candidate.directory, "planner-model")
+        self.assertEqual(set(comparison["acceptance"]), {"planner-model", "final_budget"})
+        self.assertFalse(comparison["acceptance"]["planner-model"]["default_automatic_recommendation"])
+        # Existing factors still cannot compare changed planner weights.
+        self.assert_rejected(baseline, candidate, "harness", "model identity")
+
+    def test_planner_model_factor_rejects_any_other_difference(self):
+        weights = lambda m: m["execution_identity"]["planner"]["files"].update({"model.safetensors": "w2"})
+        cases = [
+            ("unchanged weights", lambda m: None, "must change the planner weights"),
+            ("tokenizer", lambda m: (weights(m), m["execution_identity"]["planner"]["files"].update(
+                {"tokenizer.json": "t2"})), "identical tokenizer"),
+            ("template file", lambda m: (weights(m), m["execution_identity"]["planner"]["files"].update(
+                {"chat_template.jinja": "j2"})), "identical tokenizer"),
+            ("loaded template", lambda m: (weights(m), m["models"]["planner"]["native_protocol"].update(
+                chat_template_sha256="other")), "loaded chat template"),
+            ("context budget", lambda m: (weights(m), m["limits"].update(context_tokens=8192)), "limits"),
+            ("instruction policy", lambda m: (weights(m), m["effective_prompt"]["profile"].update(
+                profile="precise-v1")), "baseline instruction policy"),
+            ("packages", lambda m: (weights(m), m["execution_identity"].update(packages={"torch": "x"})),
+             "identical ASR and packages"),
+        ]
+        for label, change, phrase in cases:
+            with self.subTest(label):
+                baseline, candidate = self.model_runs("qwen-native-v1", "qwen-native-v1")
+                self.edit(candidate, change)
+                self.assert_rejected(baseline, candidate, "planner-model", phrase)
+                self.discard(baseline, candidate)
+        baseline, candidate = self.model_runs("structured-v1", "structured-v1")
+        self.edit(candidate, weights)
+        self.assert_rejected(baseline, candidate, "planner-model", "native-protocol runs")
 
     def test_factor_comparison_with_an_unchanged_prompt_is_rejected(self):
         baseline, candidate = self.two_runs()
