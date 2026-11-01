@@ -5,9 +5,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from ..contracts import PipelineError
+from ..contracts import Limits, PipelineError
 from ..jsonio import dumps
-from .data import DEFAULT_SEED, DEFAULT_VALIDATION_FRACTION, partition
+from .data import DEFAULT_SEED, DEFAULT_VALIDATION_FRACTION, export, partition
 
 
 class Parser(argparse.ArgumentParser):
@@ -24,12 +24,29 @@ def parser() -> Parser:
     split.add_argument("--seed", default=DEFAULT_SEED, type=int)
     split.add_argument("--validation-fraction", default=DEFAULT_VALIDATION_FRACTION, type=float)
     split.add_argument("--decisions", type=Path, help="Reviewed group/separate decisions for candidate pairs")
+    rows = sub.add_parser("export", help="Export audited fit-only native next-action SFT rows")
+    rows.add_argument("--data-root", required=True, type=Path)
+    rows.add_argument("--partition", required=True, type=Path)
+    rows.add_argument("--base-model", required=True, type=Path)
+    rows.add_argument("--output", required=True, type=Path, help="New directory; never overwritten")
+    rows.add_argument("--validation-diagnostics", action="store_true",
+                      help="Also write teacher-forced validation rows to a separate diagnostic file")
+    rows.add_argument("--context-tokens", default=Limits.context_tokens, type=int)
+    rows.add_argument("--output-tokens", default=Limits.output_tokens, type=int)
     return root
 
 
 def main(argv=None) -> int:
     try:
         args = parser().parse_args(argv)
+        if args.command == "export":
+            limits = Limits(context_tokens=args.context_tokens, output_tokens=args.output_tokens)
+            manifest = export(args.data_root, args.partition, args.base_model, args.output,
+                              validation_diagnostics=args.validation_diagnostics, limits=limits)
+            print(dumps({"status": "completed", "output": str(args.output.resolve()),
+                         "rows": {side: summary["rows"] for side, summary in manifest["rows"].items()},
+                         "exclusions": manifest["exclusions"]["by_reason"]}))
+            return 0
         manifest = partition(args.data_root, args.output, seed=args.seed,
                              validation_fraction=args.validation_fraction, decisions_path=args.decisions)
         print(dumps({"status": "completed", "output": str(args.output.resolve()),

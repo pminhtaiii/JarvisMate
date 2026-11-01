@@ -1,22 +1,35 @@
-"""Frozen grouped Train partition. Standard library only; reads Train JSONL/catalog only.
+"""Frozen grouped Train partition and native next-action SFT export.
 
-Grouping uses visible inputs (requests, history, installed tools). Gold labels are
-read only for the coverage audit, never to decide groups. Environment files are
-never opened.
+Both read Train JSONL/catalog only; environment files are never opened. Grouping uses
+visible inputs (requests, history, installed tools); gold labels are read only for its
+coverage audit. The exporter turns fit gold into strict-prefix rows through the
+inference input whitelist and native rendering. Module imports are standard library
+only; the export loads its tokenizer and grammar lazily.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 import re
+import shutil
 import unicodedata
-from collections import defaultdict
+import uuid
+from collections import Counter, defaultdict
 from pathlib import Path
 
-from ..contracts import JSON, PipelineError
-from ..dataset import validate_catalog
-from ..jsonio import contained, dumps, loads, read_json, safe_id
-from ..prompt_profiles import PARTITION_SCHEMA_VERSION, validate_partition_manifest
+from ..adapters import qwen_protocol
+from ..adapters.common import model_directory
+from ..adapters.constrained import grammar_ordered_arguments
+from ..artifacts import sync_write
+from ..contracts import JSON, Deadline, Limits, PipelineError, RunConfig
+from ..dataset import normalize_record, prepare_request, validate_catalog
+from ..example_audit import CONVERSION_VERSION
+from ..jsonio import contained, digest, dumps, loads, read_json, safe_id
+from ..prompt_profiles import (PARTITION_SCHEMA_VERSION, profile_identity, protocol_profile, resolve_profile,
+                               validate_partition_manifest)
+from ..prompting import ALLOWED_INPUT_FIELDS, NATIVE_FINISH_TEXT, planner_input
+from ..provenance import code_identity
 
 GROUPING_VERSION = "lifemate-train-grouping-v1"
 JACCARD_THRESHOLD = 0.8
@@ -305,8 +318,8 @@ def build_partition(rows: list[JSON], *, dataset_sha256: str, catalog_sha256: st
     return manifest
 
 
-def read_train(data_root: Path) -> tuple[list[JSON], str, str]:
-    """Train rows plus dataset/catalog digests; the catalog is validated, environments untouched."""
+def read_train(data_root: Path) -> tuple[list[JSON], str, JSON, str]:
+    """Train rows, dataset digest, validated catalog and its digest; environments untouched."""
     split = Path(data_root) / "train"
     if not split.is_dir():
         raise PipelineError("ASSET_MISSING", "Train split directory is missing", "partition")
@@ -316,7 +329,8 @@ def read_train(data_root: Path) -> tuple[list[JSON], str, str]:
     # pair one file's rows with another file's identity.
     try:
         catalog_bytes = catalog.read_bytes()
-        validate_catalog(loads(catalog_bytes.decode("utf-8")))
+        catalog_value = loads(catalog_bytes.decode("utf-8"))
+        validate_catalog(catalog_value)
     except PipelineError:
         raise
     except (OSError, ValueError, UnicodeError, RecursionError) as exc:
@@ -336,7 +350,8 @@ def read_train(data_root: Path) -> tuple[list[JSON], str, str]:
         raise
     except (OSError, ValueError, UnicodeError, RecursionError) as exc:
         raise _invalid("Train JSONL is unreadable or invalid") from exc
-    return rows, hashlib.sha256(jsonl_bytes).hexdigest(), hashlib.sha256(catalog_bytes).hexdigest()
+    return (rows, hashlib.sha256(jsonl_bytes).hexdigest(), catalog_value,
+            hashlib.sha256(catalog_bytes).hexdigest())
 
 
 def write_partition(output: Path, manifest: JSON) -> None:
@@ -367,11 +382,469 @@ def partition(data_root: Path, output: Path, *, seed: int = DEFAULT_SEED,
         raise _invalid("Partition output must be outside the organizer data root")
     if output.exists():
         raise _invalid("Partition already exists; a new split needs a new experiment path")
-    rows, dataset_sha256, catalog_sha256 = read_train(data_root)
+    rows, dataset_sha256, _, catalog_sha256 = read_train(data_root)
     decisions = read_json(decisions_path) if decisions_path is not None else None
     if decisions_path is not None and decisions is None:
         raise _invalid("Decisions file needs a 'decisions' list")
     manifest = build_partition(rows, dataset_sha256=dataset_sha256, catalog_sha256=catalog_sha256,
                                seed=seed, validation_fraction=validation_fraction, decisions=decisions)
     write_partition(output, manifest)
+    return manifest
+
+
+# ---------------------------------------------------------------------------
+# Native next-action SFT export (spec 003 US3; docs/design/train-to-sft.md)
+# ---------------------------------------------------------------------------
+
+EXPORT_SCHEMA_VERSION = 1
+EXPORTER_VERSION = "lifemate-native-sft-export-v1"
+IGNORE_INDEX = -100
+WAITING_TOOL = "sys.ask_missing_info"
+EXPORT_FILES = {"fit": "fit.jsonl", "validation": "validation.next_action.jsonl"}
+EXPORT_LIMITATIONS = (
+    "Rows use supplied Train transcripts and gold observations; teacher-forced rows are not closed-loop evidence.",
+    "ID grounding is lexical: a reference value must occur in the request, context, history or an earlier "
+    "result. It cannot prove the value came from the right record.",
+    "Grammar parity is checked character by character against the inference grammar; token-level EOS "
+    "admission is covered by the opt-in real-tokenizer smoke tests.",
+)
+
+
+class Quarantine(Exception):
+    """A sample or row excluded from training with an explicit, reviewable reason."""
+
+    def __init__(self, reason: str, detail: str, step: int | None = None, target_name: str | None = None):
+        super().__init__(detail)
+        self.reason, self.detail, self.step, self.target_name = reason, detail, step, target_name
+
+
+def _export_invalid(message: str) -> PipelineError:
+    return PipelineError("INPUT_INVALID", message, "export")
+
+
+def _exclusion(member: JSON, error: Quarantine) -> JSON:
+    return {"source_id": member["id"], "group_id": member["group_id"], "partition": member["partition"],
+            "step": error.step, "target_name": error.target_name, "reason": error.reason, "detail": error.detail}
+
+
+def _gold(row: JSON) -> tuple[list[JSON], list[JSON]]:
+    label = row.get("label")
+    calls = label.get("tool_calls") if isinstance(label, dict) else None
+    results = label.get("tool_results") if isinstance(label, dict) else None
+    if not isinstance(calls, list) or not isinstance(results, list):
+        raise Quarantine("label_missing", "label.tool_calls/tool_results are absent")
+    if len(calls) != len(results):
+        raise Quarantine("pairing_mismatch", f"{len(calls)} gold calls but {len(results)} gold results")
+    for index, (call, result) in enumerate(zip(calls, results)):
+        if not (isinstance(call, dict) and isinstance(call.get("name"), str) and call["name"]
+                and isinstance(call.get("arguments"), dict) and isinstance(result, dict)):
+            raise Quarantine("invalid_gold_shape", "A gold call needs a name and object arguments, "
+                             "paired with an object result", index)
+    return calls, results
+
+
+def _terminal_wait(call: JSON, result: JSON) -> bool:
+    # The runner stops only on this exact result; any other missing-info result is observed.
+    return call["name"] == WAITING_TOOL and result.get("ok") is True and result.get("waiting_for_user") is True
+
+
+def _reference_values(value, schema):
+    """Argument values whose catalog schema marks them as references (`x-ref`)."""
+    if not isinstance(schema, dict):
+        return
+    if "x-ref" in schema:
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, (str, int, float)) and not isinstance(item, bool):
+                yield item
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _reference_values(item, schema.get("properties", {}).get(key))
+    elif isinstance(value, list):
+        for item in value:
+            yield from _reference_values(item, schema.get("items"))
+
+
+def _evidence(value: JSON) -> tuple[str, set[str]]:
+    """Text and numbers a reference may be grounded in: request, context, history, earlier results."""
+    texts, numbers = [value["request"]], set()
+
+    def walk(item):
+        if isinstance(item, dict):
+            texts.extend(str(key) for key in item)
+            for child in item.values():
+                walk(child)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child)
+        elif isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, (int, float)) and not isinstance(item, bool):
+            numbers.add(dumps(item))
+
+    walk(value["context"])
+    walk(value["history"])
+    for observation in value["observations"]:
+        walk(observation["result"])
+    return "\n".join(texts), numbers
+
+
+def _grounded(reference, evidence: tuple[str, set[str]]) -> bool:
+    text, numbers = evidence
+    if isinstance(reference, str):
+        return reference in text
+    return dumps(reference) in numbers or dumps(reference) in text
+
+
+def gold_rows(row: JSON, member: JSON, specs: dict[str, JSON], data_root: Path) -> tuple[list[JSON], list[JSON]]:
+    """Strict-prefix next-action rows from one Train sample's gold, plus explicit exclusions.
+
+    Inputs come from the inference whitelist (`normalize_record`, `prepare_request`,
+    `planner_input`); labels supply only the target and earlier paired observations.
+    No environment is opened, no ID or target is invented.
+    """
+    try:
+        config = RunConfig(data_root=data_root, runtime_dir=data_root, split="train", input_mode="transcript",
+                           selected_ids=(member["id"],))
+        prepared = prepare_request(normalize_record(row, config, specs), None, Deadline(10 ** 6))
+    except PipelineError as exc:
+        return [], [_exclusion(member, Quarantine("visible_input_invalid", f"{exc.code}: {exc}"))]
+    tools = {tool["name"]: tool for tool in prepared["available_tools"]}
+    try:
+        calls, results = _gold(row)
+        for index, call in enumerate(calls):
+            if call["name"] not in tools:
+                raise Quarantine("unavailable_tool", "The gold call's tool is not installed for this sample",
+                                 index, call["name"])
+            if _terminal_wait(call, results[index]) and index < len(calls) - 1:
+                raise Quarantine("continues_after_terminal_wait",
+                                 "Gold continues after a waiting missing-info result", index, call["name"])
+    except Quarantine as error:
+        return [], [_exclusion(member, error)]
+
+    def converted(step: int, target: JSON, origin: str) -> JSON:
+        observations = [{"step": i + 1, "kind": "tool_result", "name": calls[i]["name"],
+                         # The runner re-reads executed arguments from canonical (sorted-key) JSON.
+                         "arguments": loads(dumps(calls[i]["arguments"])), "result": results[i]}
+                        for i in range(step)]
+        return {"row_id": f"{member['id']}:{step}",
+                "provenance": {"source_id": member["id"], "group_id": member["group_id"],
+                               "partition": member["partition"], "source_sha256": member["source_sha256"],
+                               "step": step, "gold_calls": len(calls), "target_kind": target["action"],
+                               "target_origin": origin},
+                "input": planner_input(prepared, observations), "target": target}
+
+    rows, exclusions = [], []
+    for step, call in enumerate(calls):
+        row_value = converted(step, {"action": "call", "name": call["name"], "arguments": call["arguments"]},
+                              "gold_call")
+        evidence = _evidence(row_value["input"])
+        if not all(_grounded(reference, evidence)
+                   for reference in _reference_values(call["arguments"], tools[call["name"]]["parameters"])):
+            exclusions.append(_exclusion(member, Quarantine(
+                "ungrounded_reference", "A reference argument is absent from the visible prefix; review the "
+                "sample", step, call["name"])))
+            continue
+        rows.append(row_value)
+    if not (calls and _terminal_wait(calls[-1], results[-1])):
+        # Gold has no final prose; the declared neutral final response ends the trajectory.
+        rows.append(converted(len(calls), {"action": "finish"}, "policy_finish"))
+    return rows, exclusions
+
+
+def leakage_audit(rows: list[JSON], source: JSON) -> int:
+    """Independently re-check that each input is whitelisted and holds exactly the strict gold prefix."""
+    if not rows:
+        return 0
+    calls, results = source["label"]["tool_calls"], source["label"]["tool_results"]
+    for row in rows:
+        step, value, target = row["provenance"]["step"], row["input"], row["target"]
+        expected = [(c["name"], dumps(c["arguments"]), dumps(r)) for c, r in zip(calls[:step], results[:step])]
+        actual = [(o["name"], dumps(o["arguments"]), dumps(o["result"])) for o in value["observations"]
+                  if o["kind"] == "tool_result"]
+        exact_target = (target == {"action": "finish"} and step == len(calls) if target["action"] == "finish"
+                        else step < len(calls) and dumps(target) == dumps(
+                            {"action": "call", "name": calls[step]["name"], "arguments": calls[step]["arguments"]}))
+        if (set(value) != set(ALLOWED_INPUT_FIELDS) | {"observations"} or len(value["observations"]) != step
+                or actual != expected or not exact_target):
+            raise _export_invalid(f"Leakage audit failed for {row['row_id']}; the exporter is defective")
+    return len(rows)
+
+
+def token_labels(tokenizer, prompt: str, completion: str) -> tuple[list[int], list[int]]:
+    """Input ids and labels that train only the final completion and its EOS.
+
+    Raises ValueError when separate prompt/completion tokenization differs from the
+    joined text, or when the completion does not end in exactly one EOS.
+    """
+    def ids(text):
+        return list(tokenizer(text, add_special_tokens=False)["input_ids"])
+
+    prompt_ids, completion_ids = ids(prompt), ids(completion)
+    if ids(prompt + completion) != prompt_ids + completion_ids:
+        raise ValueError("token_boundary_mismatch")
+    eos = tokenizer.eos_token_id
+    if not completion_ids or completion_ids[-1] != eos or eos in completion_ids[:-1]:
+        raise ValueError("completion_eos_invalid")
+    return prompt_ids + completion_ids, [IGNORE_INDEX] * len(prompt_ids) + completion_ids
+
+
+def render_row(row: JSON, tokenizer, admits, *, system: str, limits: Limits) -> JSON:
+    """The trainer-facing prompt/completion pair, rendered through the runtime path.
+
+    Raises Quarantine for a target the inference grammar cannot generate, a template that
+    does not extend the generation prompt with exactly that target, an inseparable
+    token boundary, or a prompt/target over the runtime budgets.
+    """
+    value, target, step = row["input"], row["target"], row["provenance"]["step"]
+    name = target.get("name")
+    if target["action"] == "call":
+        tool = next(tool for tool in value["available_tools"] if tool["name"] == name)
+        target = target | {"arguments": grammar_ordered_arguments(tool, target["arguments"])}
+    text = qwen_protocol.encode_decision(target)
+    if not admits(value["available_tools"], text):
+        raise Quarantine("grammar_rejected_target", "The native inference grammar cannot generate this gold "
+                         "target; review it as schema-invalid gold", step, name)
+    prompt = qwen_protocol.render_prompt(tokenizer, value, system=system)
+    full = qwen_protocol.render_prompt(tokenizer, value, system=system, target=target)
+    completion = text + tokenizer.eos_token
+    if not full.startswith(prompt):
+        raise Quarantine("template_prefix_mismatch", "The conversation ending in the target does not extend "
+                         "the generation prompt", step, name)
+    if not full[len(prompt):].startswith(completion):
+        raise Quarantine("template_target_mismatch", "The chat template renders the target differently from "
+                         "the grammar", step, name)
+    try:
+        input_ids, labels = token_labels(tokenizer, prompt, completion)
+    except ValueError as exc:
+        raise Quarantine(str(exc), "Prompt and completion tokens are not separable at the boundary", step,
+                         name) from exc
+    prompt_tokens = labels.count(IGNORE_INDEX)
+    completion_tokens = len(input_ids) - prompt_tokens
+    if prompt_tokens + limits.output_tokens > limits.context_tokens:
+        raise Quarantine("context_overflow", f"{prompt_tokens} prompt tokens plus {limits.output_tokens} reserved "
+                         f"output exceed {limits.context_tokens}", step, name)
+    if completion_tokens > limits.output_tokens:
+        raise Quarantine("target_overflow", f"{completion_tokens} target tokens exceed the "
+                         f"{limits.output_tokens}-token output budget", step, name)
+    try:
+        decoded = qwen_protocol.decode_decision(
+            tokenizer.decode(input_ids[prompt_tokens:], skip_special_tokens=True), limits.response_bytes)
+        if dumps(decoded) != dumps(row["target"]):
+            raise ValueError("Decoded decision differs from gold")
+    except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+        raise Quarantine("target_decode_mismatch", "Decoding the completion tokens does not return the gold "
+                         "decision", step, name) from exc
+    return {"row_id": row["row_id"], "provenance": row["provenance"], "prompt": prompt, "completion": completion,
+            "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+            "canonical_target": row["target"]}
+
+
+def partition_audit(accepted: dict[str, list[JSON]], members: dict[str, JSON]) -> JSON:
+    """Rows keep their source member's partition and group; no group feeds both sides."""
+    groups = {}
+    for side, rows in accepted.items():
+        for row in rows:
+            member = members.get(row["provenance"]["source_id"])
+            if (member is None or member["partition"] != side or row["provenance"]["partition"] != side
+                    or row["provenance"]["group_id"] != member["group_id"]):
+                raise _export_invalid(f"Partition audit failed for {row['row_id']}")
+        groups[side] = {row["provenance"]["group_id"] for row in rows}
+    if groups.get("validation", set()) & groups["fit"]:
+        raise _export_invalid("Partition audit failed: a group has rows on both sides")
+    return {"groups": {side: len(ids) for side, ids in groups.items()}, "shared_groups": 0,
+            "non_fit_rows_in_fit": 0}
+
+
+def load_tokenizer(base_model: Path):
+    """The base checkpoint's own tokenizer and chat template, offline."""
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    try:
+        from transformers import AutoTokenizer
+    except ImportError as exc:
+        raise PipelineError("MODEL_UNAVAILABLE", "Export needs the inference extra (transformers, "
+                            "lm-format-enforcer)", "export") from exc
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(base_model, local_files_only=True, trust_remote_code=False)
+    except Exception as exc:
+        raise PipelineError("MODEL_UNAVAILABLE", "Cannot load the base model tokenizer", "export") from exc
+    if not isinstance(getattr(tokenizer, "chat_template", None), str) or not tokenizer.eos_token:
+        raise PipelineError("MODEL_UNAVAILABLE", "Native export requires the checkpoint chat template and EOS",
+                            "export")
+    return tokenizer
+
+
+def native_grammar(tokenizer):
+    from ..adapters.constrained import ActionConstraint
+
+    return ActionConstraint(tokenizer).native_admits
+
+
+def base_identity(path: Path, tokenizer) -> JSON:
+    """Tokenizer/template/config identity of the base checkpoint; weights are verified by fit/merge."""
+    files = sorted(p for p in path.iterdir()
+                   if p.is_file() and p.suffix in {".json", ".jinja", ".txt", ".model", ".tiktoken"})
+    return {"path": str(path), "snapshot": path.name, "files": {p.name: digest(p) for p in files},
+            "weights_hashed": False, "tokenizer_class": type(tokenizer).__name__,
+            "chat_template_sha256": hashlib.sha256(tokenizer.chat_template.encode()).hexdigest(),
+            "eos_token": tokenizer.eos_token, "eos_token_id": tokenizer.eos_token_id}
+
+
+def _length_stats(values: list[int]) -> JSON:
+    if not values:
+        return {"count": 0}
+    ordered = sorted(values)
+
+    def rank(fraction):
+        # Nearest-rank percentile.
+        return ordered[max(0, -int(-len(ordered) * fraction // 1) - 1)]
+
+    return {"count": len(ordered), "min": ordered[0], "max": ordered[-1],
+            "mean": round(sum(ordered) / len(ordered), 2), "p50": rank(0.5), "p95": rank(0.95)}
+
+
+def _side_summary(rows: list[JSON]) -> JSON:
+    per_sample = Counter(row["provenance"]["source_id"] for row in rows)
+    targets = Counter(row["canonical_target"].get("name", "finish") for row in rows)
+    return {"rows": len(rows), "samples": len(per_sample),
+            "targets": {"calls": sum(n for name, n in targets.items() if name != "finish"),
+                        "policy_finish": targets.get("finish", 0), "missing_info": targets.get(WAITING_TOOL, 0),
+                        "by_tool": dict(sorted((k, v) for k, v in targets.items() if k != "finish"))},
+            "rows_per_sample": {str(k): v for k, v in sorted(Counter(per_sample.values()).items())},
+            "lengths": {"prompt_tokens": _length_stats([r["prompt_tokens"] for r in rows]),
+                        "completion_tokens": _length_stats([r["completion_tokens"] for r in rows]),
+                        "total_tokens": _length_stats([r["prompt_tokens"] + r["completion_tokens"] for r in rows])}}
+
+
+def write_export(output: Path, files: dict[str, str]) -> None:
+    """Publish every artifact at once; an existing export is never replaced or left partial."""
+    staging = output.with_name(f".{output.name}.partial-{uuid.uuid4().hex}")
+    try:
+        staging.mkdir(parents=True)
+        for name, content in files.items():
+            with (staging / name).open("x", encoding="utf-8", newline="\n") as stream:
+                sync_write(stream, content)
+        os.rename(staging, output)
+    except FileExistsError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise _export_invalid("Export output already exists; exports are immutable") from exc
+    except OSError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise PipelineError("OUTPUT_IO", "Cannot write the export", "export") from exc
+
+
+def export(data_root: Path, partition_path: Path, base_model: Path, output: Path, *,
+           validation_diagnostics: bool = False, limits: Limits | None = None,
+           tokenizer=None, admits=None) -> JSON:
+    """Audited fit-only native prompt/completion rows plus exclusions and a manifest.
+
+    Validation rows are written only on request, to a separate teacher-forced diagnostic
+    file. `tokenizer`/`admits` default to the base checkpoint's tokenizer and the
+    inference grammar; tests may inject doubles.
+    """
+    data_root, partition_path, output = (Path(p).resolve() for p in (data_root, partition_path, output))
+    base_model = model_directory(Path(base_model))
+    limits = limits or Limits()
+    if output.exists():
+        raise _export_invalid("Export output already exists; exports are immutable")
+    if output.is_relative_to(data_root) or output.is_relative_to(base_model):
+        raise _export_invalid("Export output must be outside the organizer data root and the base model")
+    rows, dataset_sha256, catalog, catalog_sha256 = read_train(data_root)
+    specs = validate_catalog(catalog)
+    try:
+        partition_bytes = partition_path.read_bytes()
+        partition = loads(partition_bytes.decode("utf-8"))
+    except (OSError, ValueError, UnicodeError, RecursionError) as exc:
+        raise _export_invalid("Partition manifest is unreadable or invalid") from exc
+    members = validate_partition_manifest(partition)
+    if partition["dataset_sha256"] != dataset_sha256 or partition.get("catalog_sha256") != catalog_sha256:
+        raise _export_invalid("Partition manifest belongs to a different Train dataset or catalog revision")
+    by_id = {}
+    for row in rows:
+        sample_id = safe_id(row.get("id"))
+        if sample_id in by_id:
+            raise _export_invalid("Train records have duplicate IDs")
+        by_id[sample_id] = row
+    if set(by_id) != set(members):
+        raise _export_invalid("Partition members and Train IDs differ")
+    for sample_id, member in members.items():
+        if hashlib.sha256(dumps(by_id[sample_id]).encode("utf-8")).hexdigest() != member["source_sha256"]:
+            raise _export_invalid(f"{sample_id} changed since partitioning")
+    if tokenizer is None:
+        tokenizer = load_tokenizer(base_model)
+    if admits is None:
+        admits = native_grammar(tokenizer)
+    profile = protocol_profile(resolve_profile("baseline"), qwen_protocol.PROTOCOL)
+
+    sides = ("fit", "validation") if validation_diagnostics else ("fit",)
+    accepted = {side: [] for side in sides}
+    exclusions, leakage_checked, rendered_checked = [], 0, 0
+    for sample_id in sorted(members):
+        member = members[sample_id]
+        if member["partition"] not in sides:
+            continue
+        converted, excluded = gold_rows(by_id[sample_id], member, specs, data_root)
+        exclusions += excluded
+        leakage_checked += leakage_audit(converted, by_id[sample_id])
+        for row in converted:
+            rendered_checked += 1
+            try:
+                accepted[member["partition"]].append(
+                    render_row(row, tokenizer, admits, system=profile["system"], limits=limits))
+            except Quarantine as error:
+                exclusions.append(_exclusion(member, error) | {"row_id": row["row_id"]})
+    partition_check = partition_audit(accepted, members)
+    reasons = dict(sorted(Counter(item["reason"] for item in exclusions).items()))
+    if not accepted["fit"]:
+        raise _export_invalid(f"No fit row passed the export audits; exclusions by reason: {reasons}")
+
+    uses = {"fit": "fit", "validation": "teacher_forced_diagnostic"}
+    contents = {EXPORT_FILES[side]: "".join(dumps(row | {"use": uses[side]}) + "\n" for row in accepted[side])
+                for side in sides}
+    contents["exclusions.jsonl"] = "".join(dumps(item) + "\n" for item in exclusions)
+    fit_ids = {sample_id for sample_id, m in members.items() if m["partition"] == "fit"}
+    accepted_rows = sum(len(side_rows) for side_rows in accepted.values())
+    manifest = {
+        "export_schema_version": EXPORT_SCHEMA_VERSION,
+        "exporter": {"version": EXPORTER_VERSION, "conversion": CONVERSION_VERSION,
+                     "code_sha256": hashlib.sha256(dumps(code_identity()).encode()).hexdigest()},
+        "protocol": {"protocol": qwen_protocol.PROTOCOL, "prompt": profile_identity(profile),
+                     "final_text": NATIVE_FINISH_TEXT, "constraint_schema": "lifemate-native-tool-call-v1",
+                     "target_key_order": "grammar order: a branch's required keys first, then schema order",
+                     "observation_arguments": "canonical sorted-key JSON, as the runner re-reads executed calls"},
+        "source": {"dataset_sha256": dataset_sha256, "catalog_sha256": catalog_sha256,
+                   "catalog_version": catalog["schema_version"], "input_mode": "transcript"},
+        "partition": {"path": str(partition_path), "sha256": hashlib.sha256(partition_bytes).hexdigest(),
+                      "grouping_method": partition["grouping_method"], "seed": partition.get("seed"),
+                      "fit_samples": len(fit_ids), "validation_samples": len(members) - len(fit_ids),
+                      "validation_diagnostics_exported": validation_diagnostics},
+        "base_model": base_identity(base_model, tokenizer),
+        "budgets": {"context_tokens": limits.context_tokens, "output_tokens": limits.output_tokens,
+                    "response_bytes": limits.response_bytes,
+                    "rule": "prompt tokens + reserved output <= context; target tokens <= output"},
+        "supervision": {"loss": "completion only: the final target text and its EOS; every prompt token is "
+                                "labelled ignore_index", "ignore_index": IGNORE_INDEX, "packing": False,
+                        "weighting": "ordinary row-level completion NLL; a sample yields one row per accepted "
+                                     "gold call plus its finish, so long trajectories weigh more",
+                        "finish_target": "policy_finish: the declared neutral final text, not gold prose",
+                        "augmentation": None},
+        "rows": {side: _side_summary(accepted[side]) for side in sides},
+        "exclusions": {"total": len(exclusions), "by_reason": reasons,
+                       "by_tool": dict(sorted(Counter(item["target_name"] for item in exclusions
+                                                      if item["target_name"]).items())),
+                       "fit_samples_with_exclusions": len({item["source_id"] for item in exclusions
+                                                           if item["partition"] == "fit"}),
+                       "fit_samples_without_rows": len(fit_ids - {r["provenance"]["source_id"]
+                                                                  for r in accepted["fit"]})},
+        "audits": {"leakage": {"rows_checked": leakage_checked, "failures": 0},
+                   "rendering_and_masks": {"rows_checked": rendered_checked, "accepted": accepted_rows,
+                                           "quarantined": rendered_checked - accepted_rows},
+                   "partition": partition_check},
+        "files": {name: {"sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                         "rows": content.count("\n")} for name, content in contents.items()},
+        "limitations": list(EXPORT_LIMITATIONS),
+    }
+    contents["export_manifest.json"] = dumps(manifest) + "\n"
+    write_export(output, contents)
     return manifest
