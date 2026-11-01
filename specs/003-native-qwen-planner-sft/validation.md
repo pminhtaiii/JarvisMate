@@ -59,19 +59,20 @@ Full suite, from `python/`, package not installed:
 PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Exit `0`: 297 tests, OK, 15 skipped (3 baseline skips from T001; 7 character-grammar
+Exit `0`: 301 tests, OK, 15 skipped (3 baseline skips from T001; 7 character-grammar
 tests because the inference extra is not installed globally; 5 opt-in real-tokenizer
-tests, see T013). Per file:
+tests, see T013). Counts include the PR #10 review fixes below. Per file:
 
 | File | Tests | Result |
 |---|---|---|
 | `test_qwen_protocol.py` (new) | 30 | OK, 12 skipped |
-| `test_inference.py` | 40 | OK |
+| `test_inference.py` | 41 | OK |
 | `test_agent.py` | 17 | OK |
 | `test_cli.py` | 36 | OK |
-| `test_checkpoint.py` | 9 | OK |
-| `test_reporting.py` | 46 | OK |
+| `test_checkpoint.py` | 10 | OK |
+| `test_reporting.py` | 47 | OK |
 | `test_selection.py` | 6 | OK |
+| `test_artifacts.py` | 26 | OK |
 
 Native grammar against the pinned library: `lm-format-enforcer==0.11.3` (with its
 declared dependencies) installed in an isolated temporary venv outside the repository;
@@ -93,12 +94,15 @@ What the evidence covers:
   prompt hash (pinned by a test). A protocol mismatch blocks resume even with
   `--allow-mixed-resume`; manifests written before this feature count as
   `structured-v1`, so existing structured runs remain resumable and comparable. Chat
-  template identity: the planner tokenizer files (including `tokenizer_config.json`)
-  are already hashed into `execution_identity`; a test shows a changed template changes
-  that identity and requires `--allow-mixed-resume`, which marks the run a development
-  composite that comparisons reject. `provenance.py` needed no change for this. The
-  existing `compare-runs` factors now also reject a protocol difference (the new
-  `protocol` factor itself is T017).
+  template identity: the planner tokenizer files are hashed into `execution_identity`.
+  That covers `tokenizer_config.json` and, after review, also a standalone
+  `chat_template.jinja`, which Transformers 4.57 loads when present. Tests show a
+  changed template changes that identity and requires `--allow-mixed-resume`, which
+  marks the run a development composite that comparisons reject. For native runs,
+  `effective_prompt` names the native system prompt, matching the top-level
+  `prompt_version`/`prompt_sha256`. The existing `compare-runs` factors now also
+  reject a protocol difference; report/compare reject an unknown `planner_protocol`
+  value. The new `protocol` factor itself is T017.
 - **T004–T006**: `adapters/qwen_protocol.py` renders eligible tools through `tools=`
   with catalog extensions verbatim. Executed observations render as assistant
   `tool_calls` plus `tool` results; validation rejections render only as user
@@ -129,7 +133,10 @@ What the evidence covers:
   renders as correction data, never as a native tool result. Each native generation
   is traced as `planner_native_output`: stop reason, token count and decision kind are
   always recorded as metadata; raw text and the canonical action are payload and
-  appear only with `--trace-payloads`. It is traced on failure too. Planner metadata
+  appear only with `--trace-payloads`. It is traced on failure too. Trace redaction now
+  removes whole quoted secret values inside non-JSON text such as a `<tool_call>`
+  block. Previously a multiword value kept everything after its first space; a test
+  covers this. Planner metadata
   records the adapter, constraint schema `lifemate-native-tool-call-v1`, final text,
   EOS id and chat-template SHA-256.
 - **T011/T012**: existing runner invariants are protocol-agnostic and still pass

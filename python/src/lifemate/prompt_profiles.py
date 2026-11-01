@@ -12,7 +12,8 @@ from pathlib import Path
 
 from .contracts import JSON, PipelineError
 from .jsonio import dumps, read_json
-from .prompting import ALLOWED_INPUT_FIELDS, PROMPT_HASH, PROMPT_VERSION, SYSTEM
+from .prompting import (ALLOWED_INPUT_FIELDS, NATIVE_PROMPT_HASH, NATIVE_PROMPT_VERSION, NATIVE_SYSTEM,
+                        PROMPT_HASH, PROMPT_VERSION, SYSTEM)
 
 PROFILES = ("baseline", "precise-v1")
 PRECISE_V1_VERSION = "lifemate-precise-v1"
@@ -41,6 +42,13 @@ def resolve_profile(name: str) -> JSON:
         return {"profile": "precise-v1", "version": PRECISE_V1_VERSION, "sha256": PRECISE_V1_HASH,
                 "system": PRECISE_V1_SYSTEM}
     raise PipelineError("INPUT_INVALID", "Unsupported prompt profile", "configuration")
+
+
+def protocol_profile(profile: JSON, protocol: str) -> JSON:
+    """The native protocol states the selected policy in its own wording and identity."""
+    if protocol != "qwen-native-v1":
+        return profile
+    return profile | {"version": NATIVE_PROMPT_VERSION, "sha256": NATIVE_PROMPT_HASH, "system": NATIVE_SYSTEM}
 
 
 def profile_identity(profile: JSON) -> JSON:

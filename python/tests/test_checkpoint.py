@@ -105,6 +105,17 @@ class CheckpointTests(unittest.TestCase):
         self.assertIn("execution_identity", provenance["configuration_differences"])
         self.assertTrue(provenance["development_composite"])
 
+    def test_standalone_jinja_chat_template_is_part_of_planner_identity(self):
+        weights = self.fx.root / "jinja-weights"
+        weights.mkdir()
+        template = weights / "chat_template.jinja"
+        template.write_text("{{ v1 }}", encoding="utf-8")
+        config = replace(self.store.config, planner_model=weights)
+        before = execution_identity(config)
+        template.write_text("{{ v2 }}", encoding="utf-8")
+        self.assertIn("chat_template.jinja", before["planner"]["files"])
+        self.assertNotEqual(execution_identity(config)["planner"], before["planner"])
+
     def test_tokenizers_version_change_requires_recomputation(self):
         with patch("lifemate.provenance.version", return_value="old"):
             self.store.manifest["execution_identity"] = execution_identity(self.store.config)

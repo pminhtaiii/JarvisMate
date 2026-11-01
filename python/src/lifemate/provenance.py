@@ -20,7 +20,7 @@ def execution_identity(config) -> dict:
         path = path.resolve()
         # Hash actual local weights/tokenizers, not just their directory name or mtime.
         files = sorted(p for p in path.rglob("*") if p.is_file() and
-                       p.suffix in {".json", ".safetensors", ".bin", ".model", ".txt", ".tiktoken"})
+                       p.suffix in {".json", ".jinja", ".safetensors", ".bin", ".model", ".txt", ".tiktoken"})
         return {"path": str(path), "files": {str(p.relative_to(path)).replace("\\", "/"): digest(p)
                                             for p in files}}
 

@@ -22,7 +22,13 @@ SCHEMA_VERSION = 1
 SECRET_KEY = re.compile(r"password|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|^token$", re.I)
 BEARER = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.I)
 SECRET_TEXT = re.compile(
-    r'''((?:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)["']?[^\s,;}"']+''', re.I)
+    r'''((?:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)'''
+    r'''["']?(?!\[REDACTED\])[^\s,;}"']+''', re.I)
+# JSON embedded in non-JSON text (e.g. a native <tool_call> block): redact whole quoted
+# values, including spaces, which SECRET_TEXT alone would cut at the first space.
+QUOTED_SECRET = re.compile(
+    r'''("(?:[^"\\]*(?:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)[^"\\]*'''
+    r'''|token)"\s*:\s*)"(?:[^"\\]|\\.)*"''', re.I)
 
 
 def utc_now() -> str:
@@ -44,6 +50,7 @@ def sanitize(value: Any) -> Any:
                     value = dumps(cleaned)
             except (ValueError, TypeError, RecursionError):
                 pass  # Malformed model text still receives the textual redaction below.
+        value = QUOTED_SECRET.sub(r'\1"[REDACTED]"', value)
         return SECRET_TEXT.sub(r"\1[REDACTED]", BEARER.sub("Bearer [REDACTED]", value))
     return value
 

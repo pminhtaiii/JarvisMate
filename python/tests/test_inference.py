@@ -482,6 +482,28 @@ class NativeAdapterTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "MODEL_UNAVAILABLE")
         self.model.generate.assert_not_called()
 
+    def test_selection_correction_reaches_the_native_retry_as_correction_data(self):
+        tools = [{"name": "tasks.list", "kind": "read", "description": "Liệt kê",
+                  "parameters": {"type": "object", "properties": {}}},
+                 {"name": "tasks.complete", "kind": "write", "description": "Hoàn thành", "parameters": {
+                     "type": "object", "properties": {"task_id": {"type": "string", "x-ref": "tasks.tasks"}}}}]
+        self.input = {"request": "Hoàn thành việc phù hợp", "context": {}, "history": [], "available_tools": tools,
+                      "observations": [{"step": 1, "kind": "tool_result", "name": "tasks.list", "arguments": {},
+                                        "result": {"ok": True, "tasks": [{"id": "older", "title": "ineligible"},
+                                                                         {"id": "allowed", "title": "eligible"}]}}]}
+        rejected = '<tool_call>\n{"name": "tasks.complete", "arguments": {"task_id": "older"}}\n</tool_call>'
+        self.tokenizer.decode.side_effect = [rejected, rejected.replace("older", "allowed")]
+        planner = self.native(selection_filter=True)
+        planner._select = MagicMock(return_value={"supported": True, "filters": [
+            {"field": "title", "operator": "equals", "value": "eligible"}]})
+        self.assertEqual(json.loads(planner.next_action(self.input, 30))["arguments"], {"task_id": "allowed"})
+        self.assertEqual(self.tokenizer.apply_chat_template.call_count, 2)
+        retry = self.tokenizer.apply_chat_template.call_args_list[1].args[0]
+        executed = [c["function"] for t in retry for c in t.get("tool_calls", [])]
+        self.assertEqual(executed, [{"name": "tasks.list", "arguments": {}}])
+        correction = json.loads(retry[-1]["content"])["observation"]
+        self.assertEqual((retry[-1]["role"], correction["code"]), ("user", "SELECTION_MISMATCH"))
+
     def test_unknown_protocol_is_rejected(self):
         with self.assertRaises(PipelineError) as caught:
             self.load(protocol="qwen-native-v2")

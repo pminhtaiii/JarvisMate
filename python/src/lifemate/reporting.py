@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 
 from . import artifacts
-from .contracts import JSON, LEGACY_PLANNER_PROTOCOL, PipelineError
+from .contracts import JSON, LEGACY_PLANNER_PROTOCOL, PLANNER_PROTOCOLS, PipelineError
 from .jsonio import digest, dumps, loads, read_json
 from .metrics import MODEL_ROLES, SPAN_STAGES
 
@@ -66,6 +66,8 @@ def validate_manifest(manifest: JSON) -> None:
         raise PipelineError("INPUT_INVALID", f"Run manifest is missing fields: {sorted(missing)}", "report")
     if manifest["schema_version"] != artifacts.SCHEMA_VERSION:
         raise PipelineError("INPUT_INVALID", "Unsupported run manifest schema version", "report")
+    if manifest.get("planner_protocol", LEGACY_PLANNER_PROTOCOL) not in PLANNER_PROTOCOLS:
+        raise PipelineError("INPUT_INVALID", "Unsupported run manifest planner_protocol", "report")
     selected = manifest["selected_ids"]
     samples, failures, not_started = manifest["samples"], manifest["failures"], manifest["not_started_ids"]
     if (not isinstance(selected, list) or len(set(selected)) != len(selected)

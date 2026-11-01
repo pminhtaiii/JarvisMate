@@ -18,7 +18,7 @@ from .jsonio import digest, dumps, read_json
 from .metrics import Clock, SpanRecorder
 from .prompt_profiles import (
     DEFAULT_FEW_SHOT_TOKEN_BUDGET, PROFILES, bundle_identity, load_partition_manifest, profile_identity,
-    reject_fit_in_selection, resolve_profile, validate_bundle,
+    protocol_profile, reject_fit_in_selection, resolve_profile, validate_bundle,
 )
 from .reporting import (
     build_comparison, build_report, load_manifest, validate_comparison_output, write_comparison, write_report,
@@ -178,7 +178,7 @@ def cmd_audit_examples(args) -> int:
 
 def resolve_prompt_configuration(config: RunConfig, dataset_metadata) -> dict:
     """Resolve profile/bundle before any model load; reject invalid selections here."""
-    profile = resolve_profile(config.prompt_profile)
+    profile = protocol_profile(resolve_profile(config.prompt_profile), config.planner_protocol)
     result = {"profile": profile, "examples": (), "identity": {
         "profile": profile_identity(profile), "bundle": None, "few_shot_token_budget": None}}
     if config.few_shot_bundle is None:

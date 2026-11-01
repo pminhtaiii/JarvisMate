@@ -531,6 +531,9 @@ class FewShotCLITests(unittest.TestCase):
         self.assertEqual(manifest["planner_protocol"], "qwen-native-v1")
         self.assertEqual((manifest["prompt_version"], manifest["prompt_sha256"]),
                          (NATIVE_PROMPT_VERSION, NATIVE_PROMPT_HASH))
+        # The effective prompt names the same native system prompt, not the structured one.
+        self.assertEqual(manifest["effective_prompt"]["profile"],
+                         {"profile": "baseline", "version": NATIVE_PROMPT_VERSION, "sha256": NATIVE_PROMPT_HASH})
 
     def test_native_protocol_rejects_structured_profiles_and_bundles_before_model_load(self):
         bundle_path = self.write_bundle()

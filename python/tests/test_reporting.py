@@ -499,6 +499,23 @@ class CompareRunsTests(RunFixture):
         del baseline.manifest["planner_protocol"]
         baseline.save()
         self.assertEqual(build_comparison(baseline.directory, candidate.directory, "harness")["factor"], "harness")
+        # The absent protocol means structured-v1, never "whatever the other run used".
+        candidate.manifest["planner_protocol"] = "qwen-native-v1"
+        candidate.save()
+        with self.assertRaises(PipelineError) as caught:
+            build_comparison(baseline.directory, candidate.directory, "harness")
+        self.assertIn("planner_protocol", str(caught.exception))
+
+    def test_unknown_planner_protocol_in_a_manifest_is_rejected(self):
+        baseline, candidate = self.two_runs()
+        for value in (None, "qwen-native-v2"):
+            with self.subTest(value=value):
+                for store in (baseline, candidate):
+                    store.manifest["planner_protocol"] = value
+                    store.save()
+                with self.assertRaises(PipelineError) as caught:
+                    build_comparison(baseline.directory, candidate.directory, "harness")
+                self.assertIn("planner_protocol", str(caught.exception))
 
     def test_factor_comparison_with_an_unchanged_prompt_is_rejected(self):
         baseline, candidate = self.two_runs()

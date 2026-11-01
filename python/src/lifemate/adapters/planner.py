@@ -12,8 +12,8 @@ import time
 from ..contracts import JSON, PLANNER_PROTOCOLS, Limits, PipelineError
 from ..agent import parse_action
 from ..metrics import Generation
-from ..prompt_profiles import profile_identity, resolve_profile
-from ..prompting import NATIVE_FINISH_TEXT, NATIVE_PROMPT_HASH, NATIVE_PROMPT_VERSION, NATIVE_SYSTEM, messages
+from ..prompt_profiles import profile_identity, protocol_profile, resolve_profile
+from ..prompting import NATIVE_FINISH_TEXT, messages
 from ..jsonio import dumps, loads
 from ..selection import (FILTER_SYSTEM, filter_schema, referenced_records,
                          restrict_references, selected_ids)
@@ -59,10 +59,7 @@ class LocalPlanner(ModelResidency):
         self.torch, self.hf, self.device, self.limits = torch, hf, device, limits
         self.cpu_offload = cpu_offload and device == "cuda"
         self.selection_filter = selection_filter
-        self.profile = profile or resolve_profile("baseline")
-        if self.native:
-            self.profile = self.profile | {"version": NATIVE_PROMPT_VERSION, "sha256": NATIVE_PROMPT_HASH,
-                                           "system": NATIVE_SYSTEM}
+        self.profile = protocol_profile(profile or resolve_profile("baseline"), protocol)
         self.system, self.examples = self.profile["system"], tuple(examples)
         self.few_shot_token_budget = few_shot_token_budget
         self.last_decision_details = []

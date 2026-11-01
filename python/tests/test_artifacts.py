@@ -65,6 +65,20 @@ class ArtifactTests(unittest.TestCase):
         trace.close()
         self.assertNotIn("TOP_SECRET_VALUE", path.read_text(encoding="utf-8"))
 
+    def test_multiword_secret_inside_native_tool_call_text_is_fully_redacted(self):
+        path = self.fx.root / "native.jsonl"
+        trace = Trace(path, "run", "train_0001", payloads=True)
+        response = ('<tool_call>\n{"name": "auth.login", "arguments": {"user_password": "alpha \\"beta\\" gamma", '
+                    '"token": "delta epsilon", "note": "kept text"}}\n</tool_call>')
+        trace.emit("planner_native_output", payload={"response": response})
+        trace.close()
+        raw = path.read_text(encoding="utf-8")
+        for secret in ("alpha", "beta", "gamma", "delta", "epsilon"):
+            self.assertNotIn(secret, raw)
+        payload = json.loads(raw)["payload"]["response"]
+        self.assertIn('"user_password": "[REDACTED]"', payload)
+        self.assertIn('"note": "kept text"', payload)
+
     def test_refresh_tokens_are_redacted_in_payload_keys_json_and_inline_text(self):
         path = self.fx.root / "refresh.jsonl"
         trace = Trace(path, "run", "train_0001", payloads=True)
