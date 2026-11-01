@@ -15,6 +15,7 @@ from . import artifacts
 from .contracts import JSON, LEGACY_PLANNER_PROTOCOL, PLANNER_PROTOCOLS, PipelineError
 from .jsonio import digest, dumps, loads, read_json
 from .metrics import MODEL_ROLES, SPAN_STAGES
+from .prompting import PROTOCOL_PROMPTS
 
 REPORT_SCHEMA_VERSION = 1
 EVALUATION_SCHEMA_VERSION = 1
@@ -456,6 +457,13 @@ def _validate_model_factor(factor: str, baseline: JSON, candidate: JSON,
 
     if _planner_metadata(baseline).get("dtype") != _planner_metadata(candidate).get("dtype"):
         reject("Baseline/candidate planner dtype differ")
+    # A declared protocol must carry that protocol's own prompt, at both manifest levels.
+    for manifest, prompt in ((baseline, baseline_prompt), (candidate, candidate_prompt)):
+        expected = PROTOCOL_PROMPTS.get(_protocol(manifest))
+        profile = prompt.get("profile") or {}
+        if (expected is None or (manifest.get("prompt_version"), manifest.get("prompt_sha256")) != expected
+                or (profile.get("version"), profile.get("sha256")) != expected):
+            reject(f"Factor {factor!r} requires each run's prompt identity to match its planner_protocol")
     for prompt in (baseline_prompt, candidate_prompt):
         if (prompt.get("profile") or {}).get("profile") != "baseline" or prompt.get("bundle") is not None:
             reject(f"Factor {factor!r} requires the baseline instruction policy and no examples")
@@ -482,9 +490,12 @@ def _validate_model_factor(factor: str, baseline: JSON, candidate: JSON,
         reject("A planner-model factor requires identical ASR and packages")
     if _planner_files(baseline, tokenizer=True) != _planner_files(candidate, tokenizer=True):
         reject("A planner-model factor requires the identical tokenizer and chat template")
-    template = lambda m: (_planner_metadata(m).get("native_protocol") or {}).get("chat_template_sha256")
-    if template(baseline) != template(candidate):
+    native = lambda m: _planner_metadata(m).get("native_protocol") or {}
+    if native(baseline).get("chat_template_sha256") != native(candidate).get("chat_template_sha256"):
         reject("A planner-model factor requires the identical loaded chat template")
+    # config.json can select the tokenizer class when tokenizer_config.json omits it.
+    if native(baseline).get("tokenizer_class") != native(candidate).get("tokenizer_class"):
+        reject("A planner-model factor requires the identical loaded tokenizer class")
     if _planner_files(baseline, tokenizer=False) == _planner_files(candidate, tokenizer=False):
         reject("A planner-model factor must change the planner weights/config")
 

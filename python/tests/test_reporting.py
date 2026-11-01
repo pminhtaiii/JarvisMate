@@ -567,6 +567,11 @@ class CompareRunsTests(RunFixture):
                 {"model.safetensors": "w2"}), "identical planner checkpoint"),
             ("changed code", lambda m: m["execution_identity"].update(code={"other": "hash"}), "identical execution code"),
             ("changed dtype", lambda m: m["models"]["planner"].update(dtype="torch.float32"), "dtype"),
+            ("native label, structured prompt", lambda m: m.update(
+                prompt_version=PROTOCOL_PROMPTS["structured-v1"][0], prompt_sha256=PROTOCOL_PROMPTS["structured-v1"][1]),
+             "prompt identity to match"),
+            ("effective prompt names another prompt", lambda m: m["effective_prompt"]["profile"].update(
+                sha256=PROTOCOL_PROMPTS["structured-v1"][1]), "prompt identity to match"),
         ]
         for label, change, phrase in cases:
             with self.subTest(label):
@@ -577,8 +582,10 @@ class CompareRunsTests(RunFixture):
                     if label == "selection filter":
                         self.edit(baseline, change)
                     self.edit(candidate, change)
-                self.assert_rejected(baseline, candidate, "protocol", phrase)
-                self.discard(baseline, candidate)
+                try:
+                    self.assert_rejected(baseline, candidate, "protocol", phrase)
+                finally:
+                    self.discard(baseline, candidate)
 
     def test_planner_model_factor_accepts_only_changed_weights(self):
         baseline, candidate = self.model_runs("qwen-native-v1", "qwen-native-v1")
@@ -595,6 +602,10 @@ class CompareRunsTests(RunFixture):
         weights = lambda m: m["execution_identity"]["planner"]["files"].update({"model.safetensors": "w2"})
         cases = [
             ("unchanged weights", lambda m: None, "must change the planner weights"),
+            ("ASR", lambda m: (weights(m), m["execution_identity"].update(asr={"files": {"model.bin": "a2"}})),
+             "identical ASR and packages"),
+            ("tokenizer class from config", lambda m: (weights(m), m["models"]["planner"]["native_protocol"].update(
+                tokenizer_class="OtherTokenizerFast")), "loaded tokenizer class"),
             ("tokenizer", lambda m: (weights(m), m["execution_identity"]["planner"]["files"].update(
                 {"tokenizer.json": "t2"})), "identical tokenizer"),
             ("template file", lambda m: (weights(m), m["execution_identity"]["planner"]["files"].update(
@@ -610,9 +621,11 @@ class CompareRunsTests(RunFixture):
         for label, change, phrase in cases:
             with self.subTest(label):
                 baseline, candidate = self.model_runs("qwen-native-v1", "qwen-native-v1")
-                self.edit(candidate, change)
-                self.assert_rejected(baseline, candidate, "planner-model", phrase)
-                self.discard(baseline, candidate)
+                try:
+                    self.edit(candidate, change)
+                    self.assert_rejected(baseline, candidate, "planner-model", phrase)
+                finally:
+                    self.discard(baseline, candidate)
         baseline, candidate = self.model_runs("structured-v1", "structured-v1")
         self.edit(candidate, weights)
         self.assert_rejected(baseline, candidate, "planner-model", "native-protocol runs")

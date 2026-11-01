@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..contracts import JSON, PipelineError
 from ..dataset import validate_catalog
-from ..jsonio import contained, digest, dumps, loads, read_json, safe_id
+from ..jsonio import contained, dumps, loads, read_json, safe_id
 from ..prompt_profiles import PARTITION_SCHEMA_VERSION, validate_partition_manifest
 
 GROUPING_VERSION = "lifemate-train-grouping-v1"
@@ -89,13 +89,16 @@ def visible_record(row: JSON) -> JSON:
     request = _text(row.get("audio_text"), "audio_text", sample_id)
     history = row.get("history")
     context = row.get("context")
-    if not isinstance(history, list) or not isinstance(context, dict):
+    if (not isinstance(history, list) or not isinstance(context, dict)
+            or any(not isinstance(turn, dict) for turn in history)):
         raise _invalid(f"{sample_id}: history/context have an invalid shape")
     turns = [_text(turn.get("audio_text"), "historical audio_text", sample_id)
-             for turn in history if isinstance(turn, dict) and turn.get("role") == "user"]
+             for turn in history if turn.get("role") == "user"]
     installed = context.get("installed_apps")
     if not isinstance(installed, dict) or any(
-            not isinstance(info, dict) or not isinstance(info.get("tools"), list) for info in installed.values()):
+            not isinstance(info, dict) or not isinstance(info.get("tools"), list)
+            or not all(isinstance(name, str) and name.strip() for name in info["tools"])
+            for info in installed.values()):
         raise _invalid(f"{sample_id}: invalid installed_apps")
     tools = frozenset(name for info in installed.values() for name in info["tools"])
     return {"id": sample_id, "request": request, "history": [normalize_text(t) for t in turns],
@@ -103,17 +106,18 @@ def visible_record(row: JSON) -> JSON:
 
 
 def _coverage_flags(row: JSON, visible: JSON) -> JSON:
+    # long_history comes from visible inputs, so it is known even without a label.
+    flags = {"long_history": len(visible["history"]) >= 2}
     label = row.get("label")
     calls = label.get("tool_calls") if isinstance(label, dict) else None
     if not isinstance(calls, list) or not all(isinstance(c, dict) and isinstance(c.get("name"), str)
                                                for c in calls):
-        return {"label_missing": True}
+        return flags | {"label_missing": True}
     apps = {call["name"].split(".", 1)[0] for call in calls}
-    return {"empty_gold": not calls,
-            "missing_info": any(call["name"] == "sys.ask_missing_info" for call in calls),
-            "multi_app": len(apps - {"sys"}) > 1,
-            "long_history": len(visible["history"]) >= 2,
-            "apps": sorted(apps)}
+    return flags | {"empty_gold": not calls,
+                    "missing_info": any(call["name"] == "sys.ask_missing_info" for call in calls),
+                    "multi_app": len(apps - {"sys"}) > 1,
+                    "apps": sorted(apps)}
 
 
 def _coverage(flags: dict[str, JSON], members: list[JSON]) -> JSON:
@@ -127,7 +131,8 @@ def _coverage(flags: dict[str, JSON], members: list[JSON]) -> JSON:
                 apps[app] += 1
         result[side] = {"samples": len(ids), "label_missing": len(ids) - len(known),
                         **{key: sum(1 for item in known if item[key])
-                           for key in ("empty_gold", "missing_info", "multi_app", "long_history")},
+                           for key in ("empty_gold", "missing_info", "multi_app")},
+                        "long_history": sum(1 for i in ids if flags[i]["long_history"]),
                         "samples_calling_app": dict(sorted(apps.items()))}
     fit_apps, validation_apps = (set(result[s]["samples_calling_app"]) for s in ("fit", "validation"))
     result["apps_missing_from_validation"] = sorted(fit_apps - validation_apps)
@@ -147,8 +152,9 @@ def _validated_decisions(decisions: JSON | None, ids: set[str]) -> list[JSON]:
     result = []
     for item in items:
         pair = item.get("ids") if isinstance(item, dict) else None
-        if (not isinstance(pair, list) or len(pair) != 2 or len(set(pair)) != 2
-                or not set(pair) <= ids or item.get("decision") not in ("group", "separate")
+        if (not isinstance(pair, list) or len(pair) != 2 or not all(isinstance(i, str) for i in pair)
+                or len(set(pair)) != 2 or not set(pair) <= ids
+                or item.get("decision") not in ("group", "separate")
                 or not isinstance(item.get("reason"), str) or not item["reason"].strip()):
             raise _invalid("Each decision needs two known distinct ids, group|separate and a reason")
         result.append({"ids": sorted(pair), "decision": item["decision"], "reason": item["reason"]})
@@ -251,6 +257,9 @@ def build_partition(rows: list[JSON], *, dataset_sha256: str, catalog_sha256: st
             validation_count += size
         else:
             partition_of[root] = "fit"
+    if validation_count == 0:
+        # A frozen split without validation members cannot support any evaluation.
+        raise _invalid("No group fits the validation target; use more data or a larger validation_fraction")
 
     source_hashes = {safe_id(row["id"]): hashlib.sha256(dumps(row).encode("utf-8")).hexdigest() for row in rows}
     members = [{"id": i, "group_id": group_ids[groups.find(i)], "partition": partition_of[groups.find(i)],
@@ -303,33 +312,50 @@ def read_train(data_root: Path) -> tuple[list[JSON], str, str]:
         raise PipelineError("ASSET_MISSING", "Train split directory is missing", "partition")
     jsonl = contained(split, "train.jsonl")
     catalog = contained(split, "train_tools_catalog.json")
-    validate_catalog(read_json(catalog, "CATALOG_INVALID"))
+    # Hash exactly the bytes that are parsed, so a concurrent replacement cannot
+    # pair one file's rows with another file's identity.
+    try:
+        catalog_bytes = catalog.read_bytes()
+        validate_catalog(loads(catalog_bytes.decode("utf-8")))
+    except PipelineError:
+        raise
+    except (OSError, ValueError, UnicodeError, RecursionError) as exc:
+        raise PipelineError("CATALOG_INVALID", "Train catalog is unreadable or invalid", "partition") from exc
     rows = []
     try:
-        with jsonl.open(encoding="utf-8") as stream:
-            for line in stream:
-                if line.strip():
-                    if len(line.encode("utf-8")) > 4 * 1024 * 1024:
-                        raise _invalid("Train row is too large")
-                    row = loads(line)
-                    if not isinstance(row, dict):
-                        raise _invalid("Train row must be an object")
-                    rows.append(row)
+        jsonl_bytes = jsonl.read_bytes()
+        for line in jsonl_bytes.decode("utf-8").splitlines():
+            if line.strip():
+                if len(line.encode("utf-8")) > 4 * 1024 * 1024:
+                    raise _invalid("Train row is too large")
+                row = loads(line)
+                if not isinstance(row, dict):
+                    raise _invalid("Train row must be an object")
+                rows.append(row)
+    except PipelineError:
+        raise
     except (OSError, ValueError, UnicodeError, RecursionError) as exc:
         raise _invalid("Train JSONL is unreadable or invalid") from exc
-    return rows, digest(jsonl), digest(catalog)
+    return rows, hashlib.sha256(jsonl_bytes).hexdigest(), hashlib.sha256(catalog_bytes).hexdigest()
 
 
 def write_partition(output: Path, manifest: JSON) -> None:
     """Create the manifest; an existing partition is never overwritten."""
-    output = Path(output)
+    output, content, created = Path(output), dumps(manifest) + "\n", False
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("x", encoding="utf-8", newline="\n") as stream:
-            stream.write(dumps(manifest) + "\n")
+            created = True
+            stream.write(content)
     except FileExistsError as exc:
         raise _invalid("Partition already exists; a new split needs a new experiment path") from exc
     except OSError as exc:
+        # A partial file would block every retry at this frozen path; the write error still wins.
+        if created:
+            try:
+                output.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise PipelineError("OUTPUT_IO", "Cannot write the partition manifest", "partition") from exc
 
 
@@ -343,6 +369,8 @@ def partition(data_root: Path, output: Path, *, seed: int = DEFAULT_SEED,
         raise _invalid("Partition already exists; a new split needs a new experiment path")
     rows, dataset_sha256, catalog_sha256 = read_train(data_root)
     decisions = read_json(decisions_path) if decisions_path is not None else None
+    if decisions_path is not None and decisions is None:
+        raise _invalid("Decisions file needs a 'decisions' list")
     manifest = build_partition(rows, dataset_sha256=dataset_sha256, catalog_sha256=catalog_sha256,
                                seed=seed, validation_fraction=validation_fraction, decisions=decisions)
     write_partition(output, manifest)

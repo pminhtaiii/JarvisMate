@@ -91,12 +91,24 @@ class PartitionShapeTests(unittest.TestCase):
 
     def test_invalid_inputs_are_rejected(self):
         bad = unrelated(3)
-        for rows, kwargs in ((bad + [bad[0]], {}), (bad, {"validation_fraction": 1.0}),
-                             (bad, {"validation_fraction": 0}), ([], {}),
-                             ([dict(bad[0], audio_text="  ")], {})):
-            with self.subTest(kwargs=kwargs, size=len(rows)):
-                with self.assertRaises(PipelineError):
+        tool_dict = dict(bad[0], context=dict(bad[0]["context"], installed_apps={"x": {"tools": [{"n": 1}]}}))
+        cases = {"duplicate id": (bad + [bad[0]], {}), "fraction 1": (bad, {"validation_fraction": 1.0}),
+                 "fraction 0": (bad, {"validation_fraction": 0}), "no rows": ([], {}),
+                 "blank request": ([dict(bad[0], audio_text="  ")], {}),
+                 "non-string tool": ([tool_dict] + bad[1:], {}),
+                 "non-object history entry": ([dict(bad[0], history=["text turn"])] + bad[1:], {})}
+        for label, (rows, kwargs) in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(PipelineError) as caught:
                     split(rows, **kwargs)
+                self.assertEqual(caught.exception.code, "INPUT_INVALID")
+
+    def test_a_split_without_validation_members_is_rejected(self):
+        # Two groups of five; neither fits a validation target of round(0.2 * 10) = 2.
+        rows = [row(f"train_{i:04d}", "đặt xe về nhà" if i <= 5 else "bật đèn phòng khách") for i in range(1, 11)]
+        with self.assertRaises(PipelineError) as caught:
+            split(rows)
+        self.assertIn("validation", str(caught.exception))
 
 
 class GroupingTests(unittest.TestCase):
@@ -170,6 +182,7 @@ class GroupingTests(unittest.TestCase):
         candidate = next(c for c in manifest["candidates"] if c["ids"] == ["train_0901", "train_0902"])
         self.assertEqual(candidate["decision"], "separate")
         for bad in ({"ids": ["train_0903", "train_0904"], "decision": "separate", "reason": "exact link"},
+                    {"ids": [["train_0901"], "train_0902"], "decision": "group", "reason": "nested id"},
                     {"ids": ["train_0901", "train_9999"], "decision": "group", "reason": "unknown"},
                     {"ids": ["train_0901", "train_0901"], "decision": "group", "reason": "self"},
                     {"ids": ["train_0901", "train_0902"], "decision": "merge", "reason": "bad kind"},
@@ -177,6 +190,18 @@ class GroupingTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 with self.assertRaises(PipelineError):
                     split(rows, decisions={"decisions": [bad]})
+
+    def test_separate_decision_overridden_by_other_links_is_recorded(self):
+        rows = unrelated(10) + [row("train_0901", "Đặt báo thức lúc 7h30", apps=ALARM),
+                                row("train_0902", "Đặt báo thức lúc 9h", apps=ALARM),
+                                row("train_0903", "Đặt báo thức lúc 8h", apps=ALARM)]
+        separate = {"ids": ["train_0901", "train_0902"], "decision": "separate", "reason": "different alarms"}
+        links = [{"ids": ["train_0901", "train_0903"], "decision": "group", "reason": "same alarm request"},
+                 {"ids": ["train_0903", "train_0902"], "decision": "group", "reason": "same alarm request"}]
+        manifest = split(rows, decisions={"decisions": [separate, *links]})
+        groups = group_of(manifest)
+        self.assertEqual(groups["train_0901"], groups["train_0902"])
+        self.assertEqual(manifest["separate_decisions_overridden_by_other_links"], [["train_0901", "train_0902"]])
 
     def test_limitations_and_parameters_are_recorded(self):
         grouping = split(unrelated(5))["grouping"]
@@ -190,14 +215,19 @@ class CoverageTests(unittest.TestCase):
         rows += [row("train_0901", "hỏi lại giờ hẹn", calls=["sys.ask_missing_info"]),
                  row("train_0902", "gửi cho Lan", calls=["contacts.search", "sms.send"]),
                  row("train_0903", "kể chuyện cười", calls=[]),
-                 dict(row("train_0904", "không có nhãn"), label=None)]
+                 dict(row("train_0904", "không có nhãn", history=["câu một", "câu hai"]), label=None)]
         manifest = split(rows)
         coverage = manifest["coverage"]
         totals = {key: coverage["fit"][key] + coverage["validation"][key]
-                  for key in ("samples", "missing_info", "multi_app", "label_missing")}
-        self.assertEqual(totals, {"samples": 12, "missing_info": 1, "multi_app": 1, "label_missing": 1})
+                  for key in ("samples", "missing_info", "multi_app", "label_missing", "long_history")}
+        # long_history is visible-input coverage, so a label-missing row still counts.
+        self.assertEqual(totals, {"samples": 12, "missing_info": 1, "multi_app": 1, "label_missing": 1,
+                                  "long_history": 1})
         self.assertEqual(coverage["fit"]["empty_gold"] + coverage["validation"]["empty_gold"], 9)
+        # Validation holds at most 2 of these 12, so some category must be missing there.
+        self.assertTrue(coverage["categories_missing_from_validation"])
         for key in coverage["categories_missing_from_validation"]:
+            self.assertGreater(coverage["fit"][key], 0)
             self.assertEqual(coverage["validation"][key], 0)
 
 
@@ -240,8 +270,38 @@ class PartitionCommandTests(unittest.TestCase):
         with patch.object(Path, "open", recording_open):
             code, _ = self.run_command()
         self.assertEqual(code, 0)
-        self.assertTrue(any(p.endswith("train.jsonl") for p in opened))
+        # Read once: the recorded digest describes exactly the parsed bytes.
+        self.assertEqual(sum(p.endswith("train.jsonl") for p in opened), 1)
         self.assertFalse([p for p in opened if "_environment" in p])
+        manifest = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["dataset_sha256"],
+                         hashlib.sha256((self.fx.split / "train.jsonl").read_bytes()).hexdigest())
+
+    def test_failed_write_leaves_no_partial_partition(self):
+        real_open = Path.open
+
+        class FailingStream:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                self.stream.close()
+
+            def write(self, data):
+                raise OSError("disk full")
+
+        def failing_open(path, *args, **kwargs):
+            stream = real_open(path, *args, **kwargs)
+            return FailingStream(stream) if path == self.output else stream
+
+        with patch.object(Path, "open", failing_open):
+            code, summary = self.run_command()
+        self.assertEqual((code, summary["error"]["code"]), (1, "OUTPUT_IO"))
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.run_command()[0], 0)
 
     def test_decisions_file_is_applied_and_invalid_arguments_fail(self):
         decisions = self.fx.root / "decisions.json"
@@ -254,6 +314,18 @@ class PartitionCommandTests(unittest.TestCase):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             self.assertEqual(main(["partition", "--data-root", str(self.fx.data)]), 2)
+        # A supplied file that parses to null is an error, never "no decisions".
+        empty = self.fx.root / "null-decisions.json"
+        empty.write_text("null", encoding="utf-8")
+        code, summary = self.run_command("--decisions", str(empty), output=self.fx.root / "other.json")
+        self.assertEqual((code, summary["error"]["code"]), (2, "INPUT_INVALID"))
+        self.assertFalse((self.fx.root / "other.json").exists())
+
+    def test_malformed_tool_entries_fail_with_a_structured_error_not_a_traceback(self):
+        self.fx.rows[0]["context"]["installed_apps"] = {"contacts": {"tools": [{"name": "contacts.search"}]}}
+        self.fx.write()
+        code, summary = self.run_command()
+        self.assertEqual((code, summary["status"], summary["error"]["code"]), (2, "failed", "INPUT_INVALID"))
 
     def test_partition_imports_no_training_or_inference_libraries(self):
         source = Path(lifemate.__file__).resolve().parents[1]

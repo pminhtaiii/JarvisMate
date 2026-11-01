@@ -183,9 +183,17 @@ manifests. No real Train data, model or evaluator was used.
 PYTHONPATH=src python -X utf8 -m unittest discover -s tests -p "test_*.py"
 ```
 
-Exit `0`: 326 tests, OK, 15 skipped (the same skips as above). New or extended files:
-`test_training_data.py` 18 OK; `test_reporting.py` 51 OK; `test_cli.py` 37 OK. The
-pinned-LMFE grammar run of `test_qwen_protocol.py` is unchanged (30, 5 skipped).
+Exit `0`: 331 tests, OK, 15 skipped (the same skips as above). New or extended files:
+`test_training_data.py` 22 OK; `test_reporting.py` 51 OK; `test_cli.py` 37 OK;
+`test_agent.py` 18 OK. The pinned-LMFE grammar run of `test_qwen_protocol.py` is
+unchanged (30, 5 skipped). Counts include the PR #12 review fixes: malformed tool,
+history or decision entries now fail with `INPUT_INVALID` instead of a traceback; a
+`null` decisions file is rejected; a split with no validation members is rejected;
+`train.jsonl` and the catalog are hashed from the same bytes that are parsed; a failed
+write leaves no partial manifest; label-missing rows still count toward
+`long_history`; both model factors require each run's prompt identity to match its
+declared protocol; and `planner-model` also compares the loaded tokenizer class.
+Run against the previous source, each new check fails.
 
 - **T014**: `python -m lifemate.training partition --data-root PATH --output PATH
   [--seed 20261027] [--validation-fraction 0.2] [--decisions PATH]` reads only
