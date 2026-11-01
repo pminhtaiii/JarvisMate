@@ -59,7 +59,7 @@ Full suite, from `python/`, package not installed:
 PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Exit `0`: 301 tests, OK, 15 skipped (3 baseline skips from T001; 7 character-grammar
+Exit `0`: 303 tests, OK, 15 skipped (3 baseline skips from T001; 7 character-grammar
 tests because the inference extra is not installed globally; 5 opt-in real-tokenizer
 tests, see T013). Counts include the PR #10 review fixes below. Per file:
 
@@ -72,7 +72,7 @@ tests, see T013). Counts include the PR #10 review fixes below. Per file:
 | `test_checkpoint.py` | 10 | OK |
 | `test_reporting.py` | 47 | OK |
 | `test_selection.py` | 6 | OK |
-| `test_artifacts.py` | 26 | OK |
+| `test_artifacts.py` | 28 | OK |
 
 Native grammar against the pinned library: `lm-format-enforcer==0.11.3` (with its
 declared dependencies) installed in an isolated temporary venv outside the repository;
@@ -135,8 +135,10 @@ What the evidence covers:
   always recorded as metadata; raw text and the canonical action are payload and
   appear only with `--trace-payloads`. It is traced on failure too. Trace redaction now
   removes whole quoted secret values inside non-JSON text such as a `<tool_call>`
-  block. Previously a multiword value kept everything after its first space; a test
-  covers this. Planner metadata
+  block, whether the key is bare, single-quoted, double-quoted or JSON-escaped, and
+  including a whole-word `token`. Previously a multiword value kept everything after
+  its first space, and single-quoted, escaped and bare `token` forms leaked; tests
+  cover each form and check that look-alike keys such as `max_tokens` stay visible. Planner metadata
   records the adapter, constraint schema `lifemate-native-tool-call-v1`, final text,
   EOS id and chat-template SHA-256.
 - **T011/T012**: existing runner invariants are protocol-agnostic and still pass

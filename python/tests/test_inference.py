@@ -503,6 +503,12 @@ class NativeAdapterTests(unittest.TestCase):
         self.assertEqual(executed, [{"name": "tasks.list", "arguments": {}}])
         correction = json.loads(retry[-1]["content"])["observation"]
         self.assertEqual((retry[-1]["role"], correction["code"]), ("user", "SELECTION_MISMATCH"))
+        # The retry offers only the eligible IDs, so a fixed model reply cannot hide a lost restriction.
+        retry_tools = self.tokenizer.apply_chat_template.call_args_list[1].kwargs["tools"]
+        complete = next(t["function"] for t in retry_tools if t["function"]["name"] == "tasks.complete")
+        self.assertEqual(complete["parameters"]["properties"]["task_id"]["enum"], ["allowed"])
+        retry_grammar_tools = planner.constraint.native_prefix.call_args_list[1].args[0]
+        self.assertEqual(retry_grammar_tools[1]["parameters"]["properties"]["task_id"]["enum"], ["allowed"])
 
     def test_unknown_protocol_is_rejected(self):
         with self.assertRaises(PipelineError) as caught:

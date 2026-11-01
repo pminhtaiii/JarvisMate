@@ -79,6 +79,35 @@ class ArtifactTests(unittest.TestCase):
         self.assertIn('"user_password": "[REDACTED]"', payload)
         self.assertIn('"note": "kept text"', payload)
 
+    def test_secrets_in_any_quoting_inside_native_text_are_fully_redacted(self):
+        escaped = json.dumps({"name": "notes.create", "arguments": {
+            "body": json.dumps({"password": "alpha beta", "note": "kept text"})}})
+        cases = {
+            "bare token, unquoted": "token=delta note=kept",
+            "single-quoted token": "{'token': 'delta epsilon', 'note': 'kept'}",
+            "single-quoted multiword": "password='alpha beta' note='kept'",
+            "escaped JSON key and value": "<tool_call>\n" + escaped + "\n</tool_call>",
+        }
+        for number, (label, text) in enumerate(cases.items()):
+            with self.subTest(label):
+                path = self.fx.root / f"quoting-{number}.jsonl"
+                trace = Trace(path, "run", "train_0001", payloads=True)
+                trace.emit("planner_native_output", payload={"response": text})
+                trace.close()
+                response = json.loads(path.read_text(encoding="utf-8"))["payload"]["response"]
+                for secret in ("alpha", "beta", "delta", "epsilon"):
+                    self.assertNotIn(secret, response)
+                self.assertIn("[REDACTED]", response)
+                self.assertIn("kept", response)
+
+    def test_token_lookalike_keys_are_not_redacted(self):
+        path = self.fx.root / "lookalike.jsonl"
+        trace = Trace(path, "run", "train_0001", payloads=True)
+        text = "max_tokens=512 output_token_count: 9 tokens: 7 'token_id': 'kept'"
+        trace.emit("planner_native_output", payload={"response": text})
+        trace.close()
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["payload"]["response"], text)
+
     def test_refresh_tokens_are_redacted_in_payload_keys_json_and_inline_text(self):
         path = self.fx.root / "refresh.jsonl"
         trace = Trace(path, "run", "train_0001", payloads=True)

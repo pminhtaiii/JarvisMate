@@ -21,14 +21,20 @@ from .prompting import PROTOCOL_PROMPTS
 SCHEMA_VERSION = 1
 SECRET_KEY = re.compile(r"password|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|^token$", re.I)
 BEARER = re.compile(r"Bearer\s+[A-Za-z0-9._~+/=-]+", re.I)
+SECRET_WORDS = r"password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization"
+# A whole-word `token` only, so keys such as max_tokens or output_token_count stay visible.
 SECRET_TEXT = re.compile(
-    r'''((?:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)["']?\s*[:=]\s*)'''
-    r'''["']?(?!\[REDACTED\])[^\s,;}"']+''', re.I)
-# JSON embedded in non-JSON text (e.g. a native <tool_call> block): redact whole quoted
-# values, including spaces, which SECRET_TEXT alone would cut at the first space.
+    rf'''((?:{SECRET_WORDS}|(?<![\w-])token)["']?\s*[:=]\s*)["']?(?!\[REDACTED\])[^\s,;}}"']+''', re.I)
+# Credentials inside non-JSON text (e.g. a native <tool_call> block): the key may be bare,
+# '...', "..." or JSON-escaped \"...\", and the whole quoted value is redacted, spaces included.
 QUOTED_SECRET = re.compile(
-    r'''("(?:[^"\\]*(?:password|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)[^"\\]*'''
-    r'''|token)"\s*:\s*)"(?:[^"\\]|\\.)*"''', re.I)
+    rf'''((?:\\?["'])?(?:[\w-]*(?:{SECRET_WORDS})[\w-]*|(?<![\w-])token)(?:\\?["'])?\s*[:=]\s*)'''
+    r'''(\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')''', re.I | re.S)
+
+
+def _redact_quoted(match: re.Match) -> str:
+    quote = "\\\"" if match.group(2).startswith("\\") else match.group(2)[0]
+    return match.group(1) + quote + "[REDACTED]" + quote
 
 
 def utc_now() -> str:
@@ -50,7 +56,7 @@ def sanitize(value: Any) -> Any:
                     value = dumps(cleaned)
             except (ValueError, TypeError, RecursionError):
                 pass  # Malformed model text still receives the textual redaction below.
-        value = QUOTED_SECRET.sub(r'\1"[REDACTED]"', value)
+        value = QUOTED_SECRET.sub(_redact_quoted, value)
         return SECRET_TEXT.sub(r"\1[REDACTED]", BEARER.sub("Bearer [REDACTED]", value))
     return value
 
