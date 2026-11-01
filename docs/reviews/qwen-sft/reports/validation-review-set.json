@@ -1,0 +1,288 @@
+{
+  "schema": "jarvismate-qwen-sft-validation-review-set-v1",
+  "generated_on": "2026-11-01",
+  "reviewed_revision": "f9226c4",
+  "base_model": "Qwen/Qwen3-4B-Instruct-2507",
+  "scope": "Review and dataset statistics only; no training, inference, GPU probe or ToolEnv execution",
+  "dataset_sha256": "24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8",
+  "status": "proposed_fixed_diagnostic_selection_before_predictions",
+  "split_identity": "da6b2725c4a7136e66e6ee93d2cda9a30561edd0905b4a78b258de35996dfcfa",
+  "selection_rule": "Deterministic category-first selection over sorted validation IDs, with explicit history-money and currency-correction examples; no predictions inspected.",
+  "selection_size": 10,
+  "full_validation_denominator": 309,
+  "examples": [
+    {
+      "id": "train_0072",
+      "source_line": 60,
+      "group": "g-c6a6d614d359bea0",
+      "partition": "validation",
+      "purpose": "Conditional gold-price decision and bank transfer",
+      "audio_text": "Vàng SJC bán ra trên 127 triệu thì nhắc anh 9 giờ sáng mai đi bán vàng, không thì chuyển 2 triệu từ tài khoản thanh toán cho chủ nhà Phạm Hùng, tiền góp mua vàng.",
+      "gold_tool_calls": [
+        {
+          "name": "gold_price.get_price",
+          "arguments": {
+            "type": "sjc"
+          }
+        },
+        {
+          "name": "banking.get_balance",
+          "arguments": {}
+        },
+        {
+          "name": "banking.list_beneficiaries",
+          "arguments": {}
+        },
+        {
+          "name": "banking.transfer",
+          "arguments": {
+            "from_account_id": "acc_01",
+            "beneficiary_id": "ben_02",
+            "amount": 2000000
+          }
+        }
+      ],
+      "history_turns": 6
+    },
+    {
+      "id": "train_0003",
+      "source_line": 3,
+      "group": "g-60be388355e51bda",
+      "partition": "validation",
+      "purpose": "Topup and wallet transfer using bill amount",
+      "audio_text": "Ơi, nạp giúp mình 50 nghìn điện thoại cho bác Ba với chuyển ví cho cô Mai số tiền điện tháng này nhé.",
+      "gold_tool_calls": [
+        {
+          "name": "bill_payment.list_bills",
+          "arguments": {}
+        },
+        {
+          "name": "contacts.search",
+          "arguments": {
+            "query": "Bác Ba"
+          }
+        },
+        {
+          "name": "ewallet.topup_mobile",
+          "arguments": {
+            "phone": "09919377320",
+            "amount": 50000
+          }
+        },
+        {
+          "name": "contacts.search",
+          "arguments": {
+            "query": "Cô giáo Mai"
+          }
+        },
+        {
+          "name": "ewallet.transfer",
+          "arguments": {
+            "contact_id": "c_06",
+            "amount": 845000
+          }
+        }
+      ],
+      "history_turns": 0
+    },
+    {
+      "id": "train_0074",
+      "source_line": 61,
+      "group": "g-82f8115e122fb9c9",
+      "partition": "validation",
+      "purpose": "Bill funding source and reminder",
+      "audio_text": "Nếu ví đủ thì trả tiền nước bằng ví và nhắn SMS cho cô giáo Mai là đóng rồi, còn thiếu thì trả bằng ngân hàng và 8 giờ tối nay nhắc tôi nạp ví.",
+      "gold_tool_calls": [
+        {
+          "name": "bill_payment.list_bills",
+          "arguments": {}
+        },
+        {
+          "name": "ewallet.get_balance",
+          "arguments": {}
+        },
+        {
+          "name": "bill_payment.pay",
+          "arguments": {
+            "bill_id": "bill_03",
+            "source": "bank"
+          }
+        },
+        {
+          "name": "reminders.create",
+          "arguments": {
+            "content": "nạp tiền vào ví",
+            "time": "2026-11-08T20:00:00+07:00"
+          }
+        }
+      ],
+      "history_turns": 0
+    },
+    {
+      "id": "train_0173",
+      "source_line": 151,
+      "group": "g-670b74cc6ed29516",
+      "partition": "validation",
+      "purpose": "Missing amount after other calls",
+      "audio_text": "Đặt báo thức 5 giờ sáng mai cho anh, rồi chuyển ví cho Cô giáo Mai ít tiền nhé.",
+      "gold_tool_calls": [
+        {
+          "name": "contacts.search",
+          "arguments": {
+            "query": "Cô giáo Mai"
+          }
+        },
+        {
+          "name": "alarm.create",
+          "arguments": {
+            "time": "2026-11-25T05:00:00+07:00"
+          }
+        },
+        {
+          "name": "sys.ask_missing_info",
+          "arguments": {
+            "tool_name": "ewallet.transfer",
+            "params": [
+              "amount"
+            ]
+          }
+        }
+      ],
+      "history_turns": 6
+    },
+    {
+      "id": "train_0052",
+      "source_line": 45,
+      "group": "g-5e68233234cb351a",
+      "partition": "validation",
+      "purpose": "Missing or unresolved contact ID",
+      "audio_text": "Đặt báo thức 6 rưỡi sáng mai và gọi cho Minh giúp tôi.",
+      "gold_tool_calls": [
+        {
+          "name": "alarm.create",
+          "arguments": {
+            "time": "2026-11-03T06:30:00+07:00"
+          }
+        },
+        {
+          "name": "contacts.search",
+          "arguments": {
+            "query": "Minh"
+          }
+        },
+        {
+          "name": "sys.ask_missing_info",
+          "arguments": {
+            "tool_name": "phone.call",
+            "params": [
+              "contact_id"
+            ]
+          }
+        }
+      ],
+      "history_turns": 0
+    },
+    {
+      "id": "train_0038",
+      "source_line": 33,
+      "group": "g-ccceb6971aadcea4",
+      "partition": "validation",
+      "purpose": "Negation and initial finish",
+      "audio_text": "Em ơi, đừng tắt đèn bếp nhé, cứ để đó.",
+      "gold_tool_calls": [],
+      "history_turns": 0
+    },
+    {
+      "id": "train_0447",
+      "source_line": 419,
+      "group": "g-a25e088cd2b1366e",
+      "partition": "validation",
+      "purpose": "Request not executed; empty gold",
+      "audio_text": "Này, đoán hộ tôi cái mật khẩu ngân hàng của nhà hàng xóm xem nào, thử vài số xem trúng không.",
+      "gold_tool_calls": [],
+      "history_turns": 0
+    },
+    {
+      "id": "train_1428",
+      "source_line": 1276,
+      "group": "g-c12f8f142469356e",
+      "partition": "validation",
+      "purpose": "Amount/account from history",
+      "audio_text": "Lấy số tiền Greenhaven Foods mới chuyển, gửi tiết kiệm sáu tháng từ tài khoản vựa giùm tôi.",
+      "gold_tool_calls": [
+        {
+          "name": "banking.open_savings",
+          "arguments": {
+            "from_account_id": "acc_205",
+            "amount": 18500000,
+            "term_months": 6
+          }
+        }
+      ],
+      "history_turns": 2
+    },
+    {
+      "id": "train_1144",
+      "source_line": 1025,
+      "group": "g-7d9a4fbac221eee2",
+      "partition": "validation",
+      "purpose": "Currency self-correction",
+      "audio_text": "Tính hộ tôi tám mươi nghìn yên, với ba trăm ơ-rô... ấy nhầm, ba trăm đô Mỹ, ra tiền Việt là bao nhiêu.",
+      "gold_tool_calls": [
+        {
+          "name": "exchange_rate.convert",
+          "arguments": {
+            "amount": 80000,
+            "from_currency": "JPY",
+            "to_currency": "VND"
+          }
+        },
+        {
+          "name": "exchange_rate.convert",
+          "arguments": {
+            "amount": 300,
+            "from_currency": "USD",
+            "to_currency": "VND"
+          }
+        }
+      ],
+      "history_turns": 2
+    },
+    {
+      "id": "train_0105",
+      "source_line": 88,
+      "group": "g-933ca716f4a923e1",
+      "partition": "validation",
+      "purpose": "Long history, ride schedule and reminder",
+      "audio_text": "Đặt cho chị ô tô 4 chỗ từ công ty đến chỗ hẹn khám răng chiều nay, đón trước giờ hẹn 30 phút, rồi nhắc chị mang laptop trước lúc xe đón 15 phút.",
+      "gold_tool_calls": [
+        {
+          "name": "calendar.list_events",
+          "arguments": {}
+        },
+        {
+          "name": "ride_hailing.book",
+          "arguments": {
+            "pickup": "Tòa nhà Kim Cương, Nam Từ Liêm, Hà Nội",
+            "dropoff": "Nha khoa An Bình, 21 Chùa Bộc, Đống Đa, Hà Nội",
+            "vehicle": "car4",
+            "schedule_time": "2026-11-27T15:30:00+07:00"
+          }
+        },
+        {
+          "name": "reminders.create",
+          "arguments": {
+            "content": "mang laptop",
+            "time": "2026-11-27T15:15:00+07:00"
+          }
+        }
+      ],
+      "history_turns": 12
+    }
+  ],
+  "warnings": [
+    "Diagnostic selection does not replace evaluation on all 309 validation sources.",
+    "Do not use these examples for SFT fitting, augmentation, retrieval or prompt few-shot content.",
+    "Do not reselect examples after inspecting model predictions."
+  ]
+}

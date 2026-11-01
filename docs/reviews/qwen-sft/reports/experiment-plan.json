@@ -1,0 +1,93 @@
+{
+  "schema": "jarvismate-qwen-sft-experiment-review-plan-v1",
+  "generated_on": "2026-11-01",
+  "reviewed_revision": "f9226c4",
+  "base_model": "Qwen/Qwen3-4B-Instruct-2507",
+  "scope": "Review and dataset statistics only; no training, inference, GPU probe or ToolEnv execution",
+  "dataset_sha256": "24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8",
+  "status": "proposed_not_executable_training_config",
+  "shared": {
+    "split_identity": "da6b2725c4a7136e66e6ee93d2cda9a30561edd0905b4a78b258de35996dfcfa",
+    "base_revision": null,
+    "prompt": "P1: proposed frozen contract based on lifemate-react-v4",
+    "prompt_contract_verified": false,
+    "action_grammar": "one call object with action/name/arguments, or finish",
+    "explicit_chain_of_thought": false,
+    "request_decomposition": false,
+    "selection_filter": false,
+    "training_method": "LoRA; QLoRA fallback selected by measured 12-GiB probe and held fixed across L1-L3",
+    "lora_rank": null,
+    "lora_targets": null,
+    "training_token_or_update_budget": null,
+    "asr_checkpoint": null,
+    "checkpoint_selection_rule": null
+  },
+  "experiments": [
+    {
+      "id": "L0",
+      "initialization": "same eligible pretrained snapshot",
+      "training": false,
+      "inputs": "P1 with gold or fixed-ASR validation transcripts"
+    },
+    {
+      "id": "L1",
+      "initialization": "pretrained",
+      "training": true,
+      "fit_views": "audited clean gold transcripts",
+      "weights": {
+        "normal_call": 1,
+        "ask_missing_info": 1,
+        "finish_after_calls": 1,
+        "initial_finish": 1
+      }
+    },
+    {
+      "id": "L2",
+      "initialization": "pretrained",
+      "training": true,
+      "fit_views": "same audited clean rows as L1",
+      "weights": {
+        "normal_call": 1,
+        "ask_missing_info": 2,
+        "finish_after_calls": 1,
+        "initial_finish": 2
+      },
+      "balancing_proposal": "loss weighting only initially; completion loss normalization must be frozen for L1 and L2"
+    },
+    {
+      "id": "L3",
+      "initialization": "pretrained independently, not L1/L2 checkpoint",
+      "training": true,
+      "policy": "selected L1/L2 policy",
+      "fit_views": "clean rows plus separately rendered approved ASR views",
+      "noisy_view_acceptance": "target and entire strict prefix remain grounded; unknown cases excluded/reviewed",
+      "mixing_ratio": null,
+      "counterfactual_relabeling": false
+    }
+  ],
+  "workflow": {
+    "one_experiment_per_invocation": true,
+    "automatic_experiment_chaining": false,
+    "explicit_resume_only": true,
+    "compare_reads_artifacts_only": true,
+    "compare_retrains": false,
+    "compare_runs_inference": false
+  },
+  "open_decisions": [
+    "Shared renderer/completion serialization and target-only EOS loss mask",
+    "Gold quality exclusions and dependent finish policy",
+    "Actual ASR checkpoint/export and its Fit/Validation provenance",
+    "Token lengths and GPU probe",
+    "Loss normalization, budget, checkpoint selection and L3 view policy",
+    "Trusted scorer/reference for Final State Match"
+  ],
+  "limits_from_supplied_brief": {
+    "llm_parameters_strictly_below": 5000000000,
+    "total_parameters_strictly_below": 6000000000,
+    "context_tokens_max": 16384,
+    "submission_seconds_per_sample": 30,
+    "submission_gpu": "NVIDIA A30",
+    "development_training_operating_limit_gib": 12,
+    "development_training_limit_is_competition_rule": false
+  }
+}

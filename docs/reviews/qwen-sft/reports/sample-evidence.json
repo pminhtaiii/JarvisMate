@@ -1,0 +1,611 @@
+{
+  "schema": "jarvismate-qwen-sft-sample-evidence-v1",
+  "generated_on": "2026-11-01",
+  "reviewed_revision": "f9226c4",
+  "base_model": "Qwen/Qwen3-4B-Instruct-2507",
+  "scope": "Review and dataset statistics only; no training, inference, GPU probe or ToolEnv execution",
+  "dataset_sha256": "24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8",
+  "status": "data_excerpts_not_asr_predictions",
+  "indexing": "All JSON paths and call/decision indices are zero-based; source_line is one-based. Result of call i is available only from decision i+1; provided history is available at decision 0.",
+  "samples": [
+    {
+      "id": "train_0030",
+      "source_line": 25,
+      "partition": "train",
+      "audio_text": "Ơi, chuyển giúp tôi một triệu hai cho chủ nhà Phạm Hùng nhé.",
+      "gold_tool_calls": [
+        {
+          "name": "banking.get_balance",
+          "arguments": {}
+        },
+        {
+          "name": "banking.list_beneficiaries",
+          "arguments": {}
+        },
+        {
+          "name": "banking.transfer",
+          "arguments": {
+            "from_account_id": "acc_01",
+            "beneficiary_id": "ben_01",
+            "amount": 1200000
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "current_results": [
+          {
+            "call_index": 0,
+            "accounts": [
+              {
+                "id": "acc_01",
+                "name": "Tài khoản thanh toán",
+                "balance": 12500000
+              },
+              {
+                "id": "acc_02",
+                "name": "Tài khoản tiết kiệm",
+                "balance": 50000000
+              }
+            ]
+          },
+          {
+            "call_index": 1,
+            "beneficiary": {
+              "id": "ben_01",
+              "name": "Chủ nhà - Phạm Hùng",
+              "bank": "An Phát Bank"
+            }
+          },
+          {
+            "call_index": 2,
+            "transaction": {
+              "id": "tx_01",
+              "account_id": "acc_01",
+              "beneficiary_id": "ben_01",
+              "amount": -1200000,
+              "note": null
+            },
+            "balance": 11300000
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "amount",
+          "target_call_index": 2,
+          "origin": "request",
+          "available_from_decision_index": 0
+        },
+        {
+          "argument": "from_account_id",
+          "target_call_index": 2,
+          "origin": "label.tool_results[0].accounts",
+          "available_from_decision_index": 1
+        },
+        {
+          "argument": "beneficiary_id",
+          "target_call_index": 2,
+          "origin": "label.tool_results[1].beneficiaries",
+          "available_from_decision_index": 2
+        }
+      ]
+    },
+    {
+      "id": "train_0015",
+      "source_line": 14,
+      "partition": "train",
+      "audio_text": "Chuyển tiền mạng tháng này cho chú Phạm Hùng nha, nếu tài khoản thanh toán không đủ thì lấy từ tiết kiệm dùm tôi hen.",
+      "gold_tool_calls": [
+        {
+          "name": "bill_payment.list_bills",
+          "arguments": {}
+        },
+        {
+          "name": "banking.get_balance",
+          "arguments": {}
+        },
+        {
+          "name": "banking.list_beneficiaries",
+          "arguments": {}
+        },
+        {
+          "name": "banking.transfer",
+          "arguments": {
+            "from_account_id": "acc_02",
+            "beneficiary_id": "ben_02",
+            "amount": 218000
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "current_results": [
+          {
+            "call_index": 0,
+            "internet_bill": {
+              "id": "bill_03",
+              "type": "internet",
+              "provider": "Vitech Telecom",
+              "amount": 218000,
+              "due_date": "2026-12-01",
+              "paid": false
+            }
+          },
+          {
+            "call_index": 1,
+            "accounts": [
+              {
+                "id": "acc_01",
+                "name": "Tài khoản thanh toán",
+                "balance": 112425
+              },
+              {
+                "id": "acc_02",
+                "name": "Tài khoản tiết kiệm",
+                "balance": 50000000
+              }
+            ]
+          },
+          {
+            "call_index": 2,
+            "beneficiary": {
+              "id": "ben_02",
+              "name": "Chủ nhà - Phạm Hùng",
+              "bank": "An Phát Bank"
+            }
+          },
+          {
+            "call_index": 3,
+            "transaction": {
+              "id": "tx_01",
+              "account_id": "acc_02",
+              "beneficiary_id": "ben_02",
+              "amount": -218000,
+              "note": null
+            },
+            "balance": 49782000
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "amount",
+          "target_call_index": 3,
+          "origin": "label.tool_results[0].bills: internet bill",
+          "available_from_decision_index": 1
+        },
+        {
+          "argument": "from_account_id",
+          "target_call_index": 3,
+          "origin": "prior bill amount and label.tool_results[1].accounts balances",
+          "available_from_decision_index": 2
+        },
+        {
+          "argument": "beneficiary_id",
+          "target_call_index": 3,
+          "origin": "label.tool_results[2].beneficiaries",
+          "available_from_decision_index": 3
+        }
+      ]
+    },
+    {
+      "id": "train_0500",
+      "source_line": 469,
+      "partition": "train",
+      "audio_text": "Chuyển cho Hòa một trăm hai mươi nghìn qua ví giúp anh cái.",
+      "gold_tool_calls": [
+        {
+          "name": "contacts.search",
+          "arguments": {
+            "query": "Hòa"
+          }
+        },
+        {
+          "name": "ewallet.transfer",
+          "arguments": {
+            "contact_id": "c_05",
+            "amount": 120000
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "current_results": [
+          {
+            "call_index": 0,
+            "contacts": [
+              {
+                "id": "c_05",
+                "name": "Hòa"
+              }
+            ]
+          },
+          {
+            "call_index": 1,
+            "transaction": {
+              "id": "tx_01",
+              "type": "transfer",
+              "to": "c_05",
+              "amount": -120000,
+              "note": null
+            }
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "amount",
+          "target_call_index": 1,
+          "origin": "request",
+          "available_from_decision_index": 0
+        },
+        {
+          "argument": "contact_id",
+          "target_call_index": 1,
+          "origin": "label.tool_results[0].contacts",
+          "available_from_decision_index": 1
+        }
+      ]
+    },
+    {
+      "id": "train_0059",
+      "source_line": 48,
+      "partition": "train",
+      "audio_text": "Trợ lý ơi, xem giúp tôi tiền điện tháng này bao nhiêu rồi thanh toán bằng ví, nếu thiếu thì trừ luôn qua ngân hàng nhé.",
+      "gold_tool_calls": [
+        {
+          "name": "bill_payment.list_bills",
+          "arguments": {}
+        },
+        {
+          "name": "ewallet.get_balance",
+          "arguments": {}
+        },
+        {
+          "name": "bill_payment.pay",
+          "arguments": {
+            "bill_id": "bill_02",
+            "source": "bank"
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "current_results": [
+          {
+            "call_index": 0,
+            "electricity_bill": {
+              "id": "bill_02",
+              "type": "electricity",
+              "provider": "EVN",
+              "amount": 848000,
+              "due_date": "2026-12-02",
+              "paid": false
+            }
+          },
+          {
+            "call_index": 1,
+            "balance": 739892
+          },
+          {
+            "call_index": 2,
+            "bill": {
+              "id": "bill_02",
+              "type": "electricity",
+              "provider": "EVN",
+              "amount": 848000,
+              "due_date": "2026-12-02",
+              "paid": true,
+              "paid_with": "bank"
+            }
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "bill_id",
+          "target_call_index": 2,
+          "origin": "label.tool_results[0].bills",
+          "available_from_decision_index": 1
+        },
+        {
+          "argument": "source",
+          "target_call_index": 2,
+          "origin": "request condition + prior bill amount + wallet balance",
+          "available_from_decision_index": 2
+        }
+      ]
+    },
+    {
+      "id": "train_0152",
+      "source_line": 132,
+      "partition": "train",
+      "audio_text": "Đặt báo thức 6 giờ sáng mai cho anh, rồi chuyển ví điện tử cho Lan ít tiền nha.",
+      "gold_tool_calls": [
+        {
+          "name": "contacts.search",
+          "arguments": {
+            "query": "Lan"
+          }
+        },
+        {
+          "name": "alarm.create",
+          "arguments": {
+            "time": "2026-11-22T06:00:00+07:00"
+          }
+        },
+        {
+          "name": "sys.ask_missing_info",
+          "arguments": {
+            "tool_name": "ewallet.transfer",
+            "params": [
+              "amount"
+            ]
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "context": {
+          "current_time": "2026-11-21T13:10:00+07:00",
+          "timezone": "Asia/Ho_Chi_Minh"
+        },
+        "current_results": [
+          {
+            "call_index": 0,
+            "contacts": [
+              {
+                "id": "c_01",
+                "name": "Lan"
+              }
+            ]
+          },
+          {
+            "call_index": 1,
+            "result": {
+              "ok": true,
+              "id": "alm_04",
+              "item": {
+                "id": "alm_04",
+                "repeat": "once",
+                "enabled": true,
+                "time": "2026-11-22T06:00:00+07:00"
+              }
+            }
+          },
+          {
+            "call_index": 2,
+            "result": {
+              "ok": true,
+              "waiting_for_user": true
+            }
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "time",
+          "target_call_index": 1,
+          "origin": "request + context.current_time/timezone",
+          "available_from_decision_index": 0
+        },
+        {
+          "argument": "params contains amount",
+          "target_call_index": 2,
+          "origin": "missing numeric amount in request and available context; contact lookup does not supply an amount",
+          "available_from_decision_index": 0
+        }
+      ]
+    },
+    {
+      "id": "train_1428",
+      "source_line": 1276,
+      "partition": "validation",
+      "audio_text": "Lấy số tiền Greenhaven Foods mới chuyển, gửi tiết kiệm sáu tháng từ tài khoản vựa giùm tôi.",
+      "gold_tool_calls": [
+        {
+          "name": "banking.open_savings",
+          "arguments": {
+            "from_account_id": "acc_205",
+            "amount": 18500000,
+            "term_months": 6
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "historical_results": [
+          {
+            "path": "history[1].tool_results[0].accounts",
+            "value": [
+              {
+                "id": "acc_831",
+                "name": "Tài khoản cá nhân",
+                "balance": 48000000
+              },
+              {
+                "id": "acc_205",
+                "name": "Tài khoản vựa",
+                "balance": 21300000
+              }
+            ]
+          },
+          {
+            "path": "history[1].tool_results[1].transactions",
+            "value": [
+              {
+                "id": "tx_5412",
+                "account_id": "acc_205",
+                "counterparty": "Greenhaven Foods",
+                "amount": 18500000,
+                "note": "Greenhaven Foods thanh toán xoài cát",
+                "time": "2026-11-21T10:25:00+07:00"
+              },
+              {
+                "id": "tx_388",
+                "account_id": "acc_205",
+                "counterparty": "Greenhaven Fresh",
+                "amount": 9200000,
+                "note": "Greenhaven Fresh thanh toán bưởi da xanh",
+                "time": "2026-11-21T15:40:00+07:00"
+              }
+            ]
+          }
+        ],
+        "current_results": [
+          {
+            "call_index": 0,
+            "result": {
+              "ok": true,
+              "savings": {
+                "id": "sav_01",
+                "account_id": "acc_205",
+                "amount": 18500000,
+                "term_months": 6,
+                "status": "active"
+              },
+              "balance": 2800000
+            }
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "amount and from_account_id",
+          "target_call_index": 0,
+          "origin": "provided history[1].tool_results + current request selection",
+          "available_from_decision_index": 0
+        }
+      ]
+    },
+    {
+      "id": "train_1144",
+      "source_line": 1025,
+      "partition": "validation",
+      "audio_text": "Tính hộ tôi tám mươi nghìn yên, với ba trăm ơ-rô... ấy nhầm, ba trăm đô Mỹ, ra tiền Việt là bao nhiêu.",
+      "gold_tool_calls": [
+        {
+          "name": "exchange_rate.convert",
+          "arguments": {
+            "amount": 80000,
+            "from_currency": "JPY",
+            "to_currency": "VND"
+          }
+        },
+        {
+          "name": "exchange_rate.convert",
+          "arguments": {
+            "amount": 300,
+            "from_currency": "USD",
+            "to_currency": "VND"
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "current_results": [
+          {
+            "call_index": 0,
+            "result": {
+              "ok": true,
+              "amount": 80000,
+              "from_currency": "JPY",
+              "to_currency": "VND",
+              "rate": 173,
+              "result": 13840000
+            }
+          },
+          {
+            "call_index": 1,
+            "result": {
+              "ok": true,
+              "amount": 300,
+              "from_currency": "USD",
+              "to_currency": "VND",
+              "rate": 25946,
+              "result": 7783800
+            }
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "amount/from_currency/to_currency",
+          "target_call_index": 0,
+          "origin": "request: 80000 JPY to VND",
+          "available_from_decision_index": 0
+        },
+        {
+          "argument": "amount/from_currency/to_currency",
+          "target_call_index": 1,
+          "origin": "request self-correction: 300 USD, not EUR",
+          "available_from_decision_index": 0
+        }
+      ]
+    },
+    {
+      "id": "train_0995",
+      "source_line": 898,
+      "partition": "train",
+      "audio_text": "Tớ đang ở quầy Góc Phố 24h nè, quét QR qua ví bốn mươi hai nghìn luôn, không đổi điểm đâu nha.",
+      "gold_tool_calls": [
+        {
+          "name": "ewallet.pay_qr",
+          "arguments": {
+            "merchant_id": "mch_2648",
+            "amount": 42000
+          }
+        }
+      ],
+      "evidence_excerpts": {
+        "historical_results": [
+          {
+            "path": "history[1].tool_results[0].programs[1]",
+            "value": {
+              "id": "prog_2636",
+              "name": "Góc Phố 24h Rewards",
+              "merchant": "Góc Phố 24h",
+              "merchant_id": "mch_2648"
+            }
+          }
+        ],
+        "current_results": [
+          {
+            "call_index": 0,
+            "transaction": {
+              "id": "tx_01",
+              "type": "pay_qr",
+              "merchant_id": "mch_2648",
+              "amount": -42000
+            }
+          }
+        ]
+      },
+      "argument_origins": [
+        {
+          "argument": "merchant_id",
+          "target_call_index": 0,
+          "origin": "provided history[1].tool_results[0].programs",
+          "available_from_decision_index": 0
+        },
+        {
+          "argument": "amount and no loyalty redemption",
+          "target_call_index": 0,
+          "origin": "request amount and negation",
+          "available_from_decision_index": 0
+        }
+      ]
+    }
+  ],
+  "quality_flags": [
+    {
+      "id": "train_1696",
+      "line": 1503,
+      "call_index": 2,
+      "tool": "chat_ott.send_message",
+      "argument": "chat_id",
+      "value": "chat_6142",
+      "result": {
+        "ok": true,
+        "done": false,
+        "message": "không tìm thấy chat_id"
+      },
+      "interpretation": "Review flag, not a complete semantic-grounding proof"
+    }
+  ],
+  "usage": "Review only. Validation samples stay held out. Excerpts are not complete records, SFT fit rows or inference inputs."
+}

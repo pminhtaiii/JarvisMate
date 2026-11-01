@@ -1,0 +1,847 @@
+{
+  "schema": "jarvismate-qwen-sft-evaluation-template-v1",
+  "generated_on": "2026-11-01",
+  "reviewed_revision": "f9226c4",
+  "base_model": "Qwen/Qwen3-4B-Instruct-2507",
+  "scope": "Review and dataset statistics only; no training, inference, GPU probe or ToolEnv execution",
+  "dataset_sha256": "24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8",
+  "status": "template_not_measured_results",
+  "split_identity": "da6b2725c4a7136e66e6ee93d2cda9a30561edd0905b4a78b258de35996dfcfa",
+  "expected_validation_sources": 309,
+  "metric_null_meaning": "Not measured or not available; never interpret as zero.",
+  "modes": {
+    "G": "Gold current/history user transcripts",
+    "A": "Same fixed ASR current/history transcript cache for every planner"
+  },
+  "latency_warning": "Cached transcript latency covers planner/tools, not actual ASR or full audio end-to-end; separate A30 audio acceptance required.",
+  "final_state_warning": "No trusted gold hash/evaluator established by this review. Never hash partial label.final_state.",
+  "rows": [
+    {
+      "experiment": "L0",
+      "mode": "G",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    },
+    {
+      "experiment": "L0",
+      "mode": "A",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    },
+    {
+      "experiment": "L1",
+      "mode": "G",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    },
+    {
+      "experiment": "L1",
+      "mode": "A",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    },
+    {
+      "experiment": "L2",
+      "mode": "G",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    },
+    {
+      "experiment": "L2",
+      "mode": "A",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    },
+    {
+      "experiment": "L3",
+      "mode": "G",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    },
+    {
+      "experiment": "L3",
+      "mode": "A",
+      "status": "not_run",
+      "prediction_artifact": null,
+      "trace_artifact": null,
+      "metrics": {
+        "tool_call_f1": null,
+        "state_gated_tool_call_f1": null,
+        "ask_missing_precision": null,
+        "ask_missing_recall": null,
+        "ask_strict_precision": null,
+        "ask_strict_recall": null,
+        "no_action_precision": null,
+        "no_action_recall": null,
+        "premature_finish_rate": null,
+        "next_action_accuracy": null,
+        "argument_joint_accuracy": null,
+        "argument_accuracy_given_correct_tool": null,
+        "action_type_macro_f1": null,
+        "final_state_match": null,
+        "latency_mean_seconds": null,
+        "latency_p95_seconds": null,
+        "peak_vram_allocated_gib": null,
+        "peak_vram_reserved_gib": null,
+        "coverage": null,
+        "completed_samples": null,
+        "failed_samples": null,
+        "timeout_samples": null
+      }
+    }
+  ],
+  "diagnostic_prediction_comparisons": [
+    {
+      "id": "train_0072",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_0003",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_0074",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_0173",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_0052",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_0038",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_0447",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_1428",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_1144",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    },
+    {
+      "id": "train_0105",
+      "modes": {
+        "G": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        },
+        "A": {
+          "L0": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L1": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L2": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          },
+          "L3": {
+            "status": "not_run",
+            "predicted_tool_calls": null,
+            "stop_reason": null,
+            "argument_differences": null
+          }
+        }
+      }
+    }
+  ],
+  "notes": [
+    "Teacher-forced next-action diagnostics use gold prefixes only in a separate evaluation path.",
+    "Closed-loop predictions use actual observations from predicted calls, never gold prefixes.",
+    "Keep failures and timeouts in the source denominator.",
+    "Argument exact match is diagnostic; official fuzzy matching differs for marked fields.",
+    "Premature-finish teacher-forced definition: predicted finish where gold next target is a call. Closed-loop definition needs a trustworthy completion reference."
+  ]
+}

@@ -1,0 +1,422 @@
+{
+  "schema": "jarvismate-qwen-sft-data-audit-v1",
+  "generated_on": "2026-11-01",
+  "reviewed_revision": "f9226c4",
+  "base_model": "Qwen/Qwen3-4B-Instruct-2507",
+  "scope": "Review and dataset statistics only; no training, inference, GPU probe or ToolEnv execution",
+  "dataset_sha256": "24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8",
+  "status": "computed_from_visible_files",
+  "sources": {
+    "train_jsonl": {
+      "relative_to_dataset_root": "train/train.jsonl",
+      "sha256": "24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8",
+      "bytes": 7198841
+    },
+    "catalog": {
+      "relative_to_dataset_root": "train/train_tools_catalog.json",
+      "sha256": "a994984bb580d7e0d60166641858901d428549682ba3614dbf9269037a33cce0",
+      "bytes": 91423,
+      "schema_version": "2.7.0",
+      "apps": 46,
+      "tools": 147
+    }
+  },
+  "counts": {
+    "source_samples": 1545,
+    "current_gold_calls": 3541,
+    "sources_with_history": 1018,
+    "historical_user_turns": 3491,
+    "historical_users_with_audio_and_audio_text": 3491,
+    "source_categories": {
+      "nonempty_without_ask": 1217,
+      "empty_gold": 111,
+      "contains_ask": 217
+    },
+    "source_percentages": {
+      "nonempty_without_ask": 78.7702,
+      "empty_gold": 7.1845,
+      "contains_ask": 14.0453
+    },
+    "first_decision": {
+      "normal_call": 1374,
+      "initial_finish": 111,
+      "ask_missing_info": 60
+    },
+    "next_action_rows_before_filtering": {
+      "normal_call": 3324,
+      "ask_missing_info": 217,
+      "finish_after_calls": 1217,
+      "initial_finish": 111
+    },
+    "next_action_percentages": {
+      "normal_call": 68.2686,
+      "ask_missing_info": 4.4568,
+      "finish_after_calls": 24.9949,
+      "initial_finish": 2.2797
+    },
+    "total_rows_before_filtering": 4869,
+    "call_count_histogram": {
+      "0": 111,
+      "1": 369,
+      "2": 428,
+      "3": 359,
+      "4": 161,
+      "5": 107,
+      "6": 10
+    },
+    "ask": {
+      "source_samples": 217,
+      "ask_only_samples": 60,
+      "mixed_samples": 157,
+      "samples_with_read_before_ask": 153,
+      "positions_zero_based": {
+        "0": 60,
+        "1": 72,
+        "2": 58,
+        "3": 20,
+        "4": 6,
+        "5": 1
+      },
+      "calls_with_amount_in_params": 21
+    }
+  },
+  "split": {
+    "local_manifest_not_committed": ".agent-work/asr-benchmark/split42.json",
+    "identity": "da6b2725c4a7136e66e6ee93d2cda9a30561edd0905b4a78b258de35996dfcfa",
+    "seed": 42,
+    "groups": 1323,
+    "largest_group": 126,
+    "grouping": {
+      "audio": "SHA256 of decoded PCM",
+      "conversation": "shared user turns/prefixes; transitive connected components",
+      "limitations": "heuristic near-text detection; no semantic/audio perceptual matching",
+      "near_text": "character-trigram Jaccard >=0.85 AND SequenceMatcher >=0.92",
+      "text": "all user turns, exact normalized text or digit-masked template",
+      "version": "audio-user-text-template-v1"
+    },
+    "source_sha_matches": true,
+    "partitions": {
+      "train": {
+        "sources": 1236,
+        "source_categories": {
+          "nonempty_without_ask": 972,
+          "empty_gold": 92,
+          "contains_ask": 172
+        },
+        "next_action_rows": {
+          "normal_call": 2684,
+          "ask_missing_info": 172,
+          "finish_after_calls": 972,
+          "initial_finish": 92
+        },
+        "total_rows_before_filtering": 3920
+      },
+      "validation": {
+        "sources": 309,
+        "source_categories": {
+          "nonempty_without_ask": 245,
+          "empty_gold": 19,
+          "contains_ask": 45
+        },
+        "next_action_rows": {
+          "normal_call": 640,
+          "ask_missing_info": 45,
+          "finish_after_calls": 245,
+          "initial_finish": 19
+        },
+        "total_rows_before_filtering": 949
+      }
+    }
+  },
+  "financial_tools": [
+    {
+      "name": "banking.transfer",
+      "gold_calls": 82,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from_account_id": {
+            "type": "string",
+            "description": "ID tài khoản, lấy từ banking.get_balance",
+            "x-ref": "banking.accounts"
+          },
+          "beneficiary_id": {
+            "type": "string",
+            "description": "ID người thụ hưởng, lấy từ banking.list_beneficiaries",
+            "x-ref": "banking.beneficiaries"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "Số nguyên, không dấu chấm, phẩy hay đơn vị, ví dụ 1200000",
+            "exclusiveMinimum": 0
+          },
+          "note": {
+            "type": "string",
+            "x-match": "fuzzy"
+          }
+        },
+        "required": [
+          "from_account_id",
+          "beneficiary_id",
+          "amount"
+        ]
+      },
+      "observed_amounts": {
+        "calls": 82,
+        "integer_valued_numbers": 82,
+        "string_values": 0,
+        "fractional_numbers": 0,
+        "minimum": 30000,
+        "maximum": 23220000
+      }
+    },
+    {
+      "name": "banking.open_savings",
+      "gold_calls": 5,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from_account_id": {
+            "type": "string",
+            "description": "ID tài khoản, lấy từ banking.get_balance",
+            "x-ref": "banking.accounts"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "Số nguyên, không dấu chấm, phẩy hay đơn vị, ví dụ 1200000",
+            "exclusiveMinimum": 0
+          },
+          "term_months": {
+            "type": "integer",
+            "description": "Số nguyên, không dấu chấm hay phẩy, ví dụ 2",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "from_account_id",
+          "amount",
+          "term_months"
+        ]
+      },
+      "observed_amounts": {
+        "calls": 5,
+        "integer_valued_numbers": 5,
+        "string_values": 0,
+        "fractional_numbers": 0,
+        "minimum": 3600000,
+        "maximum": 40000000
+      }
+    },
+    {
+      "name": "ewallet.transfer",
+      "gold_calls": 33,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "contact_id": {
+            "type": "string",
+            "description": "ID liên hệ, lấy từ contacts.search",
+            "x-ref": "contacts.contacts"
+          },
+          "phone": {
+            "type": "string",
+            "description": "Số điện thoại, giữ nguyên chuỗi, ví dụ 09123456785"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "Số nguyên, không dấu chấm, phẩy hay đơn vị, ví dụ 1200000",
+            "exclusiveMinimum": 0
+          },
+          "note": {
+            "type": "string",
+            "x-match": "fuzzy"
+          }
+        },
+        "required": [
+          "amount"
+        ],
+        "x-one-of": [
+          [
+            "contact_id"
+          ],
+          [
+            "phone"
+          ]
+        ]
+      },
+      "observed_amounts": {
+        "calls": 33,
+        "integer_valued_numbers": 33,
+        "string_values": 0,
+        "fractional_numbers": 0,
+        "minimum": 50000,
+        "maximum": 6500000
+      }
+    },
+    {
+      "name": "ewallet.topup_mobile",
+      "gold_calls": 10,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "description": "Giữ nguyên chuỗi, ví dụ 09123456785"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "Số nguyên, không dấu chấm, phẩy hay đơn vị, ví dụ 1200000",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "phone",
+          "amount"
+        ]
+      },
+      "observed_amounts": {
+        "calls": 10,
+        "integer_valued_numbers": 10,
+        "string_values": 0,
+        "fractional_numbers": 0,
+        "minimum": 50000,
+        "maximum": 200000
+      }
+    },
+    {
+      "name": "ewallet.pay_qr",
+      "gold_calls": 4,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "merchant_id": {
+            "type": "string",
+            "description": "ID merchant của quán (trường merchant_id trong kết quả food_delivery.list_restaurants), không phải id quán"
+          },
+          "amount": {
+            "type": "integer",
+            "description": "Số nguyên, không dấu chấm, phẩy hay đơn vị, ví dụ 1200000",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": [
+          "merchant_id",
+          "amount"
+        ]
+      },
+      "observed_amounts": {
+        "calls": 4,
+        "integer_valued_numbers": 4,
+        "string_values": 0,
+        "fractional_numbers": 0,
+        "minimum": 42000,
+        "maximum": 600000
+      }
+    },
+    {
+      "name": "exchange_rate.convert",
+      "gold_calls": 12,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "description": "Số nguyên, không dấu chấm, phẩy hay đơn vị, ví dụ 1200000",
+            "minimum": 0
+          },
+          "from_currency": {
+            "type": "string"
+          },
+          "to_currency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "from_currency",
+          "to_currency"
+        ]
+      },
+      "observed_amounts": {
+        "calls": 12,
+        "integer_valued_numbers": 12,
+        "string_values": 0,
+        "fractional_numbers": 0,
+        "minimum": 120,
+        "maximum": 85000
+      }
+    },
+    {
+      "name": "bill_payment.pay",
+      "gold_calls": 104,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bill_id": {
+            "type": "string",
+            "description": "ID hoá đơn, lấy từ bill_payment.list_bills",
+            "x-ref": "bill_payment.bills"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "bank",
+              "ewallet"
+            ]
+          }
+        },
+        "required": [
+          "bill_id",
+          "source"
+        ]
+      },
+      "observed_amounts": null
+    }
+  ],
+  "quality_checks": {
+    "pair_length_mismatches": [],
+    "unknown_tools": [],
+    "unavailable_tools": [],
+    "non_object_results": [],
+    "continuations_after_terminal_ask": [],
+    "ask_nonterminal_results": [],
+    "ok_false_results": [],
+    "done_false_results": [
+      {
+        "id": "train_1696",
+        "call_index": 2,
+        "name": "chat_ott.send_message",
+        "result": {
+          "ok": true,
+          "done": false,
+          "message": "không tìm thấy chat_id"
+        }
+      }
+    ],
+    "xref_literal_not_found_flags": [
+      {
+        "id": "train_1696",
+        "line": 1503,
+        "call_index": 2,
+        "tool": "chat_ott.send_message",
+        "argument": "chat_id",
+        "value": "chat_6142",
+        "result": {
+          "ok": true,
+          "done": false,
+          "message": "không tìm thấy chat_id"
+        },
+        "interpretation": "Review flag, not a complete semantic-grounding proof"
+      }
+    ]
+  },
+  "limitations": [
+    "Counts precede quality, token-budget and semantic filtering. No SFT datasets exported.",
+    "No ToolEnv creation, execution, replay or hidden environment-file access.",
+    "Pair/eligibility/terminal checks are not full schema validation or semantic verification.",
+    "X-ref check tests literal string presence in request/context/history/prior calls/results only; it does not cover all IDs, array arguments, correct entity binding or inferred values.",
+    "Source empty-gold reasons are not exhaustively semantically annotated.",
+    "Split membership was read from the existing manifest; audio hashes/grouping were not regenerated in this review.",
+    "Integer-valued JSON numbers were counted after parsing; this is not an audit of lexical number formatting."
+  ]
+}
