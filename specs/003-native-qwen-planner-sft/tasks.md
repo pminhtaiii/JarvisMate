@@ -67,18 +67,18 @@ grounding exclusions and actual tokenizer final-completion masks.
 predicted calls/real observations; no promotion on teacher-forced metrics alone.
 
 - [ ] T026 [US4] Establish isolated one-batch compatible training environment and exact `python/requirements-training.txt` lock; record GPU/BF16/VRAM and method-selection evidence in `specs/003-native-qwen-planner-sft/validation.md` before a real fit.
-- [ ] T027 [US4] Implement validated config, audited-input gate, all-linear LoRA/NF4 QLoRA, target-only training, deterministic seed and memory preflight in `python/src/lifemate/training/fit.py` with lazy optional imports.
-- [ ] T028 [US4] Add fit command, checkpoint/provenance/failure manifests and adapter save/reload in `python/src/lifemate/training/__main__.py` and `python/src/lifemate/training/fit.py`; preserve checkpoint selection evidence.
-- [ ] T029 [US4] Implement original-base verification and self-contained merge/export in `python/src/lifemate/training/export.py` and its command in `python/src/lifemate/training/__main__.py`, refusing mismatches/overwrite and copying exact tokenizer identity.
-- [ ] T030 [US4] Add and run config/input rejection, mask audit, dependency isolation, fit-only smoke/save/reload/merge checks in `python/tests/test_training_fit.py`; verify base/protocol mismatch rejection and recorded memory.
+- [x] T027 [US4] Implement validated config, audited-input gate, all-linear LoRA/NF4 QLoRA, target-only training, deterministic seed and memory preflight in `python/src/lifemate/training/fit.py` with lazy optional imports.
+- [x] T028 [US4] Add fit command, checkpoint/provenance/failure manifests and adapter save/reload in `python/src/lifemate/training/__main__.py` and `python/src/lifemate/training/fit.py`; preserve checkpoint selection evidence.
+- [x] T029 [US4] Implement original-base verification and self-contained merge/export in `python/src/lifemate/training/export.py` and its command in `python/src/lifemate/training/__main__.py`, refusing mismatches/overwrite and copying exact tokenizer identity.
+- [x] T030 [US4] Add and run config/input rejection, mask audit, dependency isolation, fit-only smoke/save/reload/merge checks in `python/tests/test_training_fit.py`; verify base/protocol mismatch rejection and recorded memory.
 - [ ] T031 [US4] Execute eligible controlled fit and actual merged-export native transcript/audio comparisons under `.agent-work/lifemate-runs/native-sft/`; record full coverage, evaluator evidence and per-ID regressions in `specs/003-native-qwen-planner-sft/validation.md`.
 - [ ] T032 [US4] Measure actual export on offline A30 audio pipeline, model/context budgets and deterministic reruns; record promotion or retained-base outcome and unavailable gates in `specs/003-native-qwen-planner-sft/validation.md`.
 
 ## Phase 7: Documentation and handoff
 
-- [ ] T033 Update `python/README.md`, `context/architecture.md` and `context/tech_stack.md` with implemented protocol/training usage and measured evidence only; retain baseline control and unresolved experiment trade-offs.
-- [ ] T034 Run implemented checks from `specs/003-native-qwen-planner-sft/quickstart.md` at their applicable scope; record exact commands, passes/failures/external blockers in `specs/003-native-qwen-planner-sft/validation.md` without treating partial acceptance as complete.
-- [ ] T035 Review requirement-to-task coverage, documentation links and ignored data/weight boundaries in `specs/003-native-qwen-planner-sft/validation.md` and link the authorized issue/PR when one exists; do not publish datasets or claim unrun acceptance.
+- [x] T033 Update `python/README.md`, `context/architecture.md` and `context/tech_stack.md` with implemented protocol/training usage and measured evidence only; retain baseline control and unresolved experiment trade-offs.
+- [x] T034 Run implemented checks from `specs/003-native-qwen-planner-sft/quickstart.md` at their applicable scope; record exact commands, passes/failures/external blockers in `specs/003-native-qwen-planner-sft/validation.md` without treating partial acceptance as complete.
+- [x] T035 Review requirement-to-task coverage, documentation links and ignored data/weight boundaries in `specs/003-native-qwen-planner-sft/validation.md` and link the authorized issue/PR when one exists; do not publish datasets or claim unrun acceptance.
 
 ## Dependencies and implementation strategy
 

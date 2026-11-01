@@ -1,10 +1,12 @@
 # Train gold trajectories to planner SFT
 
 **Status**: design 2026-10-27; native exporter implemented 2026-11-01 as
-`python -m lifemate.training export` ([native serialization](#native-serialization-implemented)).
-Its evidence is controlled fixtures only: it has not run on real Train data or the real
-tokenizer, and no training dependency, training run or tuned model exists. Fitting stays
-conditional on the [roadmap's error-analysis gate](../../context/roadmap.md).
+`python -m lifemate.training export` ([native serialization](#native-serialization-implemented)),
+followed the same day by the `fit` and `merge` commands of the
+[training contract](../../specs/003-native-qwen-planner-sft/contracts/training.md). Their
+evidence is controlled fixtures plus a CPU smoke on a tiny random Qwen3 checkpoint: none
+has run on real Train data, the real tokenizer or a GPU, and no tuned model exists.
+Real fitting stays conditional on the [roadmap's error-analysis gate](../../context/roadmap.md).
 
 The accepted [native Qwen and SFT plan](../../specs/003-native-qwen-planner-sft/plan.md)
 defines the model-facing protocol and training method for that feature. JSON call/
@@ -249,7 +251,7 @@ fit row is accepted or when the leakage or partition audit fails.
 The manifest records source JSONL/catalog hashes and versions, partition file hash and
 grouping identity, exporter version and code digest, protocol/prompt/constraint
 identities, base tokenizer/template/config file hashes (export does not hash weights;
-the planned fit and merge commands must verify them), budgets, supervision and weighting policy, per-partition row and
+`fit` and `merge` hash them and refuse a different base), budgets, supervision and weighting policy, per-partition row and
 sample counts, per-tool/finish/missing-info distributions, token-length statistics,
 exclusions by reason and tool, audit counts and output file digests. Track experiment
 configuration and concise reports; do not publish competition data, derived examples
@@ -276,8 +278,8 @@ controlled fixtures. The real-tokenizer items still require the actual checkpoin
 After the roadmap gate, start from the same eligible pretrained planner baseline.
 Use all-linear LoRA, or QLoRA when measured training memory requires it, following
 the native Qwen feature's training contract. Exact package locks and numerical
-settings require its compatibility smoke and controlled experiments; this document
-does not implement a trainer. Record base snapshot, trainable and deployed parameter counts,
+settings require its compatibility smoke and controlled experiments; the trainer is
+`python/src/lifemate/training/fit.py`. Record base snapshot, trainable and deployed parameter counts,
 method, seeds, data identity, hyperparameters, packages, checkpoint selection, and export.
 
 Keep the validation partition out of fitting. Compare candidates with the unchanged

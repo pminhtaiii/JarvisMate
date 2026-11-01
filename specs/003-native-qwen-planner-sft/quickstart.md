@@ -1,8 +1,8 @@
 # Validation quickstart
 
-This is an implementation acceptance guide. Native protocol/training commands below
-are planned and will not work until their tasks are implemented. No model experiment
-or benchmark result is claimed by creating this file.
+This is an implementation acceptance guide. The native protocol and all four
+training commands are implemented with controlled evidence only (see
+[validation](validation.md)). No model experiment or benchmark result is claimed here.
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ python -m unittest discover -s tests -p test_qwen_protocol.py
 
 ## 2. Freeze partition and compare protocols
 
-Proposed partition command (CPU/data only; no training libraries or environment creation):
+Partition command (CPU/data only; no training libraries or environment creation):
 
 ```powershell
 python -m lifemate.training partition --data-root C:/lifemate-data --output ../.agent-work/lifemate-runs/native-sft/partition.json --seed 20261027 --validation-fraction 0.2
@@ -76,11 +76,26 @@ No hidden-state files or ToolEnv are accessed. Validation rows remain separate.
 
 ## 4. Fit-only smoke, then controlled training
 
-Use a separate environment with the implemented exact `requirements-training.txt`.
-Create a config conforming to [training contract](contracts/training.md); point its
-fit rows to a tiny fit-only smoke artifact and output to a fresh directory first.
+Use a separate environment installed from `requirements-training.txt`. Create a
+config conforming to the [training contract](contracts/training.md); point its fit
+rows to a tiny unmodified subset of the export's `fit.jsonl` and output to a fresh
+directory first. Relative paths resolve against the config file. Set
+`package_lock.sha256` to the sha256 of your checkout's lock file.
+
+```json
+{"schema_version": 1, "base_model": "C:/lifemate-models/Qwen3-4B-Instruct-2507",
+ "export_manifest": "sft/export_manifest.json", "fit_rows": "smoke-rows.jsonl",
+ "output_dir": "fit-smoke", "method": "lora", "device": "cuda", "seed": 20261027,
+ "context_limit": 16384, "max_target_tokens": 512, "microbatch": 1,
+ "gradient_accumulation": 16, "gradient_checkpointing": true, "learning_rate": 0.0001,
+ "epochs": 1, "adapter": {"rank": 32, "alpha": 64, "dropout": 0.05, "targets": "all-linear"},
+ "optimizer": "adamw_torch", "schedule": "linear", "warmup_ratio": 0.03,
+ "checkpoint_cadence": "epoch",
+ "package_lock": {"path": "../../../python/requirements-training.txt", "sha256": "<sha256>"}}
+```
 
 ```powershell
+python -m lifemate.training fit --config ../.agent-work/lifemate-runs/native-sft/smoke-config.json --preflight-only
 python -m lifemate.training fit --config ../.agent-work/lifemate-runs/native-sft/smoke-config.json
 python -m unittest discover -s tests -p test_training_fit.py
 ```
@@ -92,7 +107,7 @@ only after eligibility/preflight passes. Smoke success is not accuracy evidence.
 ## 5. Merge, load and evaluate actual deployment
 
 ```powershell
-python -m lifemate.training merge --base-model C:/lifemate-models/Qwen3-4B-Instruct-2507 --adapter ../.agent-work/lifemate-runs/native-sft/fit/checkpoint-final --output ../.agent-work/lifemate-runs/native-sft/deployment
+python -m lifemate.training merge --base-model C:/lifemate-models/Qwen3-4B-Instruct-2507 --adapter ../.agent-work/lifemate-runs/native-sft/fit/checkpoint-epoch-<n> --output ../.agent-work/lifemate-runs/native-sft/deployment
 ```
 
 In the pinned inference environment, run the same native validation commands using

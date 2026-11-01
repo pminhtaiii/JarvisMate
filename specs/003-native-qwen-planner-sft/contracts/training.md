@@ -1,8 +1,8 @@
 # Offline training contract
 
-`partition` and `export` are implemented with controlled evidence only (see
-[validation](../validation.md)); `fit` and `merge` are proposed. All operate outside
-inference. Source data/weights/traces remain in ignored storage. Training dependencies
+All four commands are implemented with controlled evidence only (see
+[validation](../validation.md)); `fit` and `merge` also ran end to end on CPU against a
+tiny random Qwen3 checkpoint, and no real fit exists. All operate outside inference. Source data/weights/traces remain in ignored storage. Training dependencies
 are optional and must not become mandatory imports for ordinary `lifemate run`.
 
 ## CLI surface
@@ -22,13 +22,15 @@ are optional and must not become mandatory imports for ordinary `lifemate run`.
    Never create ToolEnv or read `*_environment/`; use supplied gold results.
    Rendering and parity checks are recorded in the
    [gold conversion design](../../../docs/design/train-to-sft.md#native-serialization-implemented).
-3. `fit --config PATH` reads a JSON configuration and audited fit artifact, runs
-   hardware/package/mask preflight and trains/saves adapter checkpoints. Refuse
-   validation rows in optimizer input. Failure preserves a failed run manifest.
+3. `fit --config PATH [--preflight-only]` reads a JSON configuration and audited fit
+   artifact, runs hardware/package/mask preflight and trains/saves adapter checkpoints.
+   Refuse validation rows in optimizer input. Failure preserves a failed run manifest.
+   `--preflight-only` stops after the one-batch memory probe, without a checkpoint.
 4. `merge --base-model PATH --adapter PATH --output PATH` verifies matching base and
    tokenizer/protocol identity, loads original non-quantized base, merges adapter,
-   and writes self-contained checkpoint/tokenizer plus export manifest. Refuse
-   overwrite and model/data input directories as output targets.
+   and writes self-contained checkpoint/tokenizer plus export manifest
+   (`lifemate_export.json`, written last). Refuse overwrite and model/data input
+   directories as output targets.
 
 Each operation returns nonzero on input/audit/resource failure and a bounded summary
 with artifact paths. An export can quarantine bad rows but must report exclusions
@@ -76,6 +78,14 @@ Required JSON fields: base_model, export_manifest, fit_rows, output_dir, method
 (`lora`/`qlora`), seed, context_limit, max_target_tokens, microbatch,
 gradient_accumulation, learning_rate, epochs, adapter rank/alpha/dropout/targets,
 optimizer/schedule/warmup, checkpoint cadence and exact package-lock identity.
+The implemented schema (`schema_version: 1`) also requires `device` (`cpu`/`cuda`)
+and `gradient_checkpointing`; `package_lock` is `{path, sha256}`; `optimizer`,
+`schedule` and `checkpoint_cadence` accept only `adamw_torch`, `linear` and `epoch`.
+Unknown fields are rejected; relative paths resolve against the config file. Fixed
+settings (weight decay 0, gradient clipping 1.0, left padding, SDPA attention) are
+recorded in each run manifest. Fit rows may be the export's `fit.jsonl` or an
+unmodified subset of it. `fit` saves per epoch; it does not compute validation loss,
+which stays an export-side teacher-forced diagnostic.
 
 Initial experimental defaults: all-linear targets, rank 32, alpha 64, dropout 0.05,
 LR 1e-4, AdamW, linear decay with 0.03 warmup ratio, effective batch about 16 rows,
@@ -92,9 +102,11 @@ requires explicit shared rendering/compaction review or reported row exclusions.
 Resource failure blocks the run; it never silently changes precision or drops rows.
 
 Bootstrap with a provisional exact candidate package lock, not floating latest.
-Run the one-batch compatibility smoke, freeze the passing TRL/PEFT/Transformers/
+Run the one-batch compatibility smoke, freeze the passing PEFT/Transformers/
 bitsandbytes and transitive versions in `python/requirements-training.txt`, then
-rerun and record the smoke with that frozen lock before a real fit. Keep inference
+rerun and record the smoke with that frozen lock before a real fit. The trainer
+consumes the exporter's verified explicit labels, so TRL is not needed. The current
+lock passed only the CPU smoke; the GPU smoke is still required. Keep inference
 pins separate and verify the merged export there.
 Record license/release eligibility, base/adapter/deployed parameter counts, hardware,
 seeds, data identities, hyperparameters, measured memory, revisions and diagnostics.
