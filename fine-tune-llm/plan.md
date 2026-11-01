@@ -3,7 +3,7 @@
 **Project:** JarvisMate / LifeMate 2026. **Date:** 2026-11-01.
 **Status:** planning only; no LLM implementation, environment setup, model execution,
 or training is delivered by this document.
-**Authority:** [specs.md](specs.md), version 1.2; implementation checklist:
+**Authority:** [specs.md](specs.md), version 1.3; implementation checklist:
 [tasks.md](tasks.md). The specification takes precedence if these documents diverge.
 
 This plan turns the accepted specification into three implementation increments.
@@ -113,47 +113,61 @@ one phase and experiment/mode where applicable. No --all or hidden dependency ru
 Training alone performs its declared periodic teacher-forced validation; it does not
 trigger probes, ASR, export, closed-loop evaluation, or another experiment.
 
-## 4. Phase I — Data & Prompt Foundation
+## 4. Phase I — CPU native proof, then Data & Prompt Foundation
 
 **Authoring tasks:** LL001–LL020. **Execution evidence:** RV001, RV002, RV006, RV007.
 
-1. Define strict configs, resource inventory, portable paths, stable provenance,
-   artifact schemas and sealed-suite storage. Validate the existing split, source
-   hashes and complete membership; missing manifest is a dependency failure.
-2. Build a pure projection of request/context/history/permitted tools. Read labels
-   only in the exporter/reference reader. Expand gold pairs into exact strict-prefix
-   rows. Never expose R[k] to decision k or use final_state as evidence.
-3. Implement the three audit levels: deterministic validation, semantic risk
-   screening, and recorded manual review. High-risk/ambiguous rows stay needs_review
-   until resolved. Preserve gold; quarantine train_1696 k=2 and dependent finish k=3.
-   Accept earlier rows only after independent checks; no prefix splicing.
-4. Implement native function definitions retaining exact catalog schemas/extensions,
-   installed ordering and sys. Preserve x-one-of semantics, not exclusive oneOf.
-   Build assistant.tool_calls and role=tool pairs using the pinned template; never
-   manually wrap old action JSON or turn final into a fake tool.
-5. Author shared native P1, catalog adapter and parser/decoder in Phase I. Pass
-   tools=; tool responses may render within a user wrapper because the tokenizer
-   does that. Validate historical pairs/text without replay or invented results.
-6. Test one versus multiple/malformed/truncated calls, tag-looking strings inside
-   JSON, name/schema binding, raw EOS/stop metadata and ordinary-final reachability.
-   Prechecks do not hide authoritative env.call rejections. Keep custom decisions
-   internal only; bounded repair feedback is not a fabricated tool response.
-7. Render prefix and full one-target assistant with the same tokenizer/tools.
-   Verify exact token prefix, native completion plus one EOS; mask all previous
-   roles/tools/padding and the assistant header. Compare flag omission on identical
-   native messages; no thinking switch or custom/native byte equivalence is assumed.
-8. Reaudit native tools/history/wrapper lengths at 16,384 total with 512 reserved,
-   without truncation/packing. Resolve native P1/final language/content before freeze;
-   freeze new protocol/adapter/template/parser/decoder/terminal hashes after tests.
-9. Author metric fixtures separating format validity, semantic name/arguments,
-   multi-step behavior and trusted state. Initial gold [] must allow final with
-   tools present; successful terminal ask has no extra final. Preserve fixed cases,
-   all-source failure accounting, null metrics and strict-prefix quality audits.
+Implement in the following dependency order; each execution is manual and this
+documentation does not run it:
 
-**Exit:** data, audit, prompt, serialization, mask and metric-fixture source is
-reviewable. Executed acceptance is separate. A valid L0-G baseline does not depend
-on L3, exhaustive semantic automation, bootstrap reporting or trusted state hashes.
-Full training still requires an audited accepted Fit corpus and actual token checks.
+1. Author core config/storage and minimal pure catalog/codec/P1/token-mask helpers
+   (LL001–LL005, adapter portion of LL007, minimal LL013–LL016 and LL019 POC fixtures).
+   Full Train projection, exporter, sealed suite, ASR and model weights are unnecessary
+   for this prototype. Unrelated split/audit helper authoring may proceed independently.
+2. Select the Vietnamese P1 text from specs §4.2 and exact ordinary final policy
+   lifemate-native-final-vi-v1: NFC "Đã kết thúc.", no extra whitespace/content, followed
+   by one real assistant EOS. This is a design choice, not a measured language gain
+   or runtime modification. New prompt identity is lifemate-native-p1-vi-v1.
+3. Explicitly run the early CPU native decoder proof (P03, RV002/decoder_poc) using
+   the actual pinned local tokenizer/LMFE. Token-walk all nine fixture groups from
+   specs §4.4.1: call, empty args, ask, initial/post-tool final with tools, invalid/
+   multiple/partial, tag-like strings, EOS/stop boundaries and nested/array/x-one-of.
+   Include backend-failure injection; do not force every decision to be a call.
+   No inference/weights/GPU/ToolEnv or full corpus export is involved.
+4. Only after the proof passes, integrate the full strict-prefix exporter/audits
+   and full native rendering/token cache. A failed/missing proof blocks that rollout,
+   P1 acceptance freeze and native L0; no custom/unconstrained fallback. Replacing
+   the decoder requires reviewed new identity and the same proof, not auto-switching.
+5. Implement frozen split/source hashes and pure visible projection. Expand only
+   G/R pairs j<k into native input messages/tools; never R[k]/final_state. Keep
+   terminal ask/initial/post-final classes and gold values unchanged. Audit and
+   quarantine train_1696 k=2/dependent final k=3; retain earlier rows independently.
+6. Implement all three audit levels and lossless historical conversion. Preserve
+   assistant text plus the supplied multi-call array, then corresponding ordered
+   tool results; do not invent interleaving, missing observations or current targets.
+   Real Fit fixture anchors are train_0008/history[1] and train_0069/history[5]/[9];
+   unsupported order/pairing stays needs_review or a recorded Validation failure.
+7. Implement canonical native_rejection user feedback (specs §4.3.2): step/code/
+   Vietnamese policy message, UTF-8-bounded quoted raw preview, stop/EOS metadata
+   and Python repairability. Preserve every previous actual call/result. No fake
+   role=tool, successful-call replay or custom-output instructions. Total two repair
+   generations per source within existing step/time bounds; truncated/unknown stops
+   and uncertain ToolEnv execution never silently retry.
+8. Complete shared native renderer, exact full-template prompt-prefix/mask/EOS
+   alignment and catalog/extension conformance. Mask all prior roles/tools/header/
+   padding; supervise one native call/final plus EOS only. Reaudit native lengths
+   at 16,384 total/512 reserved, without truncation/packing. Freeze acceptance hashes
+   after the early proof and full regressions; no accepted custom masks/probes.
+9. Complete focused metric/runner fixtures: native validity versus semantic accuracy,
+   teacher-forced versus closed loop, all-source failure accounting, trusted-state
+   availability, fixed ten diagnostic IDs and no reference leakage into Fit.
+
+**Exit:** authored Phase I is reviewable; accepted Phase I additionally needs the
+matching P03 early proof and full data/token evidence. Missing local tokenizer
+resources leave the CPU proof not_run/blocked, not fake success; core/independent
+source work may continue. Full exporter integration does not precede that proof.
+Native L0-G still does not need L3/ASR/bootstrap/trusted state. This gate ordering
+requires no GPU on the authoring machine.
 
 ## 5. Phase II — L0/L1/L2
 
@@ -175,13 +189,33 @@ not_attempted cases. An explicit continue-on-error profile collects failures wit
 retry; never exclude failures to improve the mean. Full evaluated coverage means
 309 attempted/valid outcomes and no not_attempted, not 309 successes. Timed-out is
 a subset of failed; failures remain zero-scored. Partial runs cannot supply complete
-selection evidence; promotion keeps stricter success/no-timeout gates.
+selection evidence. Comparison/selection hard validity is separate from performance:
+failed full-coverage runs may be ranked/selected under the predeclared tolerances
+in specs §10.5. One timeout or one lost minority TP is not an automatic whole-run
+veto. Metric/profile/evidence defects remain hard blockers.
 
 Build minimal metrics/reports before L0-G: per-source local ungated F1, ask/no-action
 confusion counts, teacher-forced accuracy/NLL, statuses, scope-aware timings and null
 state metrics. Keep the local matcher unverified until conformance evidence exists.
-L0-G may proceed while ASR/A-mode is blocked. Preserve the fixed ten cases from
+L0-G may proceed after P03/P1 acceptance while ASR/A-mode is blocked. Preserve the fixed ten cases from
 specs §10.5; do not turn their Validation content into training or few-shot input.
+
+### Validity, selection and deployment evidence
+
+Author LL024 minimal comparison with hard protocol/data/identity/export/evaluator/
+coverage gates separate from performance policy. Freeze the policy hash and its
+primary A criterion, reference availability, controls, regression tolerances, supports,
+null handling and ties before viewing outcomes. Use trusted state-gated score if
+available, otherwise provisional ungated F1; also report minority TP/FP/FN/precision,
+critical arguments, failure/timeout rates, G regressions and scope-matched latency.
+The proposed nonzero tolerances are specified once in specs §10.5.2; do not silently
+replace them with zero-failure/zero-TP-loss requirements or post-hoc waivers.
+
+RV018 compares L2 against L1 and ties to L1. Final promotion compares candidates
+against native L0; no improvement retains L0, while passing SFT ties prefer L1/L2/L3
+in that order. Optional missing diagnostic evidence stays unverified; required
+missing evidence leaves selection pending. State-Verified needs trusted state,
+and all submission-ready claims still need actual offline A30/full-audio acceptance.
 
 ### Actual GPU preflight and training probes
 
@@ -340,6 +374,7 @@ writing these planning documents.
 ## 9. Dependencies and implementation order
 
 ```text
+Minimal native helpers -> CPU decoder-poc -> full Phase I exporter/acceptance
 Phase I -> minimal evaluation + pinned local model path -> L0-G
 Phase I -> loss/trainer/checkpoints + verified target GPU -> L1/L2
 Selected ASR + real audio -> explicit L0 pilot (review before full SFT)
@@ -347,6 +382,7 @@ Selected ASR + fixed Validation cache -> L0/L1/L2 A evaluation
 Complete compatible L1/L2 G/A comparison -> explicit L3 policy
 Fit ASR cache + approved full-prefix views -> independent L3
 Actual exports + full comparisons -> candidate promotion
+Hard validity + predeclared performance policy -> conditional candidate selection
 Trusted state references -> State-Verified claim
 Offline real audio on A30 + supervision -> submission acceptance
 ```
@@ -355,8 +391,9 @@ Source for all three phases may be completed before any GPU execution. Dependenc
 govern execution, not permission to author later modules. A blocker in A/L3 must not
 prevent a correct clean baseline; unavailable evidence remains visible.
 
-Open decisions remain those in specs §14: exact native P1/final wording, actual
-native tokenizer/LMFE/EOS acceptance and historical pairing coverage, host/stack and LoRA fit, selected
+Open execution dependencies remain those in specs §14: actual early CPU native
+proof, selected Vietnamese P1/final token acceptance, historical order/pairing
+coverage, exact host/stack and LoRA fit, selected
 ASR/caches, review capacity and noisy coverage, trusted references/matcher, manifest
 availability, deterministic kernels, full-pipeline latency and final supervision.
 Record resolving evidence with dataset, command, host, identities and outcome.
@@ -365,7 +402,9 @@ replace it with custom grammar, another model/split, edited labels or new experi
 
 ### Minimal dependency paths
 
-- Phase I CPU/native-tokenizer contracts -> native L0-G; no ASR/L3 requirement.
+- Minimal codec/catalog/Vietnamese P1/token fixtures -> RV002 early CPU decoder proof.
+- Passed proof -> full exporter integration -> remaining render/mask/token checks
+  -> P1 acceptance freeze -> native L0-G; no proof/full-export circular dependency.
 - LL003–LL006 + LL046 + minimum LL047 -> RV004 transfer; not LL048.
 - Minimum model/loss/mask code -> RV005 early smoke; full path -> RV008/RV009.
 - Gold-text L1/L2 need full data/resource checks and audio-pilot review or explicit
