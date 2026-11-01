@@ -127,8 +127,9 @@ success, and deadline compliance as distinct outcomes.
 - Test preflight input failures: the manifest records the defect before any sample
   trace, model invocation, or environment; no failure trace is required at this stage.
 - Test malformed or unavailable actions: validation feedback is traced before dispatch
-  and no environment call occurs. Well-formed, allowed calls with schema-invalid arguments
-  reach ToolEnv.call, appear in submitted tool_calls, and return correction feedback.
+  and no environment call occurs. Numeric/temporal normalization, visible x-ref checks
+  and env.validate reject invalid proposals with correction feedback before dispatch;
+  every actual ToolEnv.call still appears in submitted tool_calls.
 - Test missing information and unsupported requests: both produce legitimate outcomes,
   distinct from execution failure; previous actions are preserved when asking for info.
   Only success with waiting_for_user:true ends the sample as needs_info; success with

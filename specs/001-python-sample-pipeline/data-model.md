@@ -54,11 +54,12 @@ per response. Every response counts toward max_steps, even if rejected.
 
 - `step`: one-based model decision index.
 - `kind`: `validation_rejection` or `tool_result`.
-- Validation rejection: malformed action or unavailable tool category plus bounded
-  feedback; no env.call took place.
+- Validation rejection: malformed/unavailable action, argument normalization,
+  ungrounded x-ref, or organizer schema preview failure plus bounded feedback;
+  no env.call took place.
 - Tool result: dispatched `name/arguments` and exact returned result for in-memory
-  reasoning, including schema-error correction feedback. A well-formed, allowed call
-  with schema-invalid arguments reaches ToolEnv.call and remains in submitted tool_calls.
+  reasoning, including any execution-time schema rejection. Schema previews reject
+  invalid proposals before dispatch; every actual call remains in submitted tool_calls.
   Traces may bound/redact payloads; never substitute the trace copy as the authoritative
   in-memory observation.
 

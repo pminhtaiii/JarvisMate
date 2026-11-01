@@ -12,7 +12,7 @@ from lifemate.asr_training.config import DEFAULTS
 from lifemate.asr_training.storage import write, write_rows, rows
 from asr.pretrained.runner import result_row
 from asr.pretrained.metrics import summarize
-from asr_training_support import annotation, suite_fixture
+from asr_training_support import annotation, suite_fixture, saved_run
 
 
 class SlotTests(unittest.TestCase):
@@ -86,14 +86,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual([r['status'] for r in rows(output/'transcripts.jsonl')],['timeout','not_run'])
 
     def test_compare_keeps_all_statuses_without_loading_torch_or_models(self):
-        base=self.suite/'E0/run-001'
-        base.mkdir(parents=True)
-        predicted=[result_row(r,{'status':'ok','prediction':r['reference'],'latency_seconds':.01}) for r in self.val]
-        (base/'primary').mkdir()
-        write_rows(base/'primary/transcripts.jsonl',predicted)
-        metrics=summarize(predicted)|{'slots':{'status':'unavailable','critical_slot_accuracy':None}}
-        write(base/'manifest.json',{'kind':'run','experiment':'E0','status':'completed','metrics':metrics,
-                                    'best_evaluation':str(base/'primary')})
+        saved_run(self.suite,self.metadata,self.val)
         for experiment,state,kind in [('E1','failed_oom','probe'),('E2','skipped_dependency','skip'),('E3','unsupported','probe')]:
             write(self.suite/experiment/'record-1/manifest.json',{'kind':kind,'experiment':experiment,'status':state,'error':'fixture'})
         with patch.dict('sys.modules',{'torch':None}), patch('lifemate.asr_training.workers.Session',side_effect=AssertionError('No inference in compare')):
@@ -102,7 +95,8 @@ class EvaluationTests(unittest.TestCase):
             comparisons=list(csv.DictReader(stream))
         self.assertEqual(len(comparisons),5)
         self.assertEqual([r['status'] for r in comparisons],['completed','failed_oom','skipped_dependency','unsupported','not_run'])
-        self.assertEqual(comparisons[1]['normalized_wer'],'')
+        self.assertEqual(comparisons[1]['normalized_wer'],'N/A')
+        self.assertEqual(result['valid_runs'],1)
         self.assertEqual(len(status(self.suite)),5)
 
 

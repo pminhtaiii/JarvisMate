@@ -15,6 +15,7 @@ from .contracts import Limits, PipelineError, RunConfig
 from .dataset import preflight
 from .jsonio import dumps
 from .runtime import load_runtime
+from .runpaths import dated_run_path
 
 
 class Parser(argparse.ArgumentParser):
@@ -43,7 +44,8 @@ def parser() -> Parser:
             child.add_argument("--selection-filter", action="store_true",
                                help="Development: filter visible task records before tasks.complete")
             child.add_argument("--device", required=True, choices=("cpu", "cuda"))
-            child.add_argument("--run-dir", required=True, type=Path)
+            child.add_argument("--run-dir", type=Path,
+                               help="New output path; default .agent-work/lifemate-runs/<split>-<mode>-YYYYMMDD-HHMMSS (Vietnam time)")
             child.add_argument("--resume-from", type=Path,
                                help="Reuse completed rows from a stopped run into a NEW --run-dir")
             child.add_argument("--allow-mixed-resume", action="store_true",
@@ -69,7 +71,9 @@ def configuration(args) -> RunConfig:
         planner_model=args.planner_model if running else None,
         asr_model=args.asr_model if running else None,
         device=args.device if running else "cpu",
-        run_dir=args.run_dir if running else None,
+        run_dir=(args.run_dir if args.run_dir is not None else dated_run_path(
+            Path.cwd() / ".agent-work/lifemate-runs",
+            args.split.replace("_", "-") + "-" + args.input_mode)) if running else None,
         trace_payloads=args.trace_payloads if running else False,
         resume_from=args.resume_from if running else None,
         continue_on_error=args.continue_on_error if running else False,

@@ -39,9 +39,11 @@ arbitrary text. Limit response bytes/tokens before parsing.
 2. Generate one action and increment decision count, including malformed responses.
 3. Invalid shape or unavailable name: emit validation rejection, feed bounded feedback
    to the planner, consume no env.call, and continue within the bound.
-4. For well-formed, allowed calls, delegate argument-schema validation to `ToolEnv.call`.
-   Schema-invalid arguments must reach the environment so it logs the attempted call;
-   do not gate dispatch on `env.validate` or invent missing values.
+4. For well-formed, allowed proposals, normalize schema-directed numeric/temporal
+   arguments, check visible x-ref evidence and call `env.validate` before dispatch.
+   Rejected proposals return bounded validation feedback with zero `env.call`; consume
+   a decision and never invent missing values. This 2026-10-31 user-requested policy
+   supersedes the original dispatch-before-validation behavior.
 5. Trace intent before dispatch, call `env.call`, and trace the returned observation.
    Return schema-error feedback to the planner for correction within the decision bound.
    Actual attempted calls, including schema rejections, remain in the environment's

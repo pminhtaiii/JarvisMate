@@ -15,6 +15,7 @@ from . import __version__
 from .contracts import JSON, PipelineError, RunConfig
 from .jsonio import dumps, loads, safe_id
 from .prompting import PROMPT_HASH, PROMPT_VERSION
+from .arguments import ARGUMENT_POLICY_VERSION
 
 SCHEMA_VERSION = 1
 SECRET_KEY = re.compile(r"password|secret|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|^token$", re.I)
@@ -165,6 +166,7 @@ class RunStore:
             "submission_ready": False, "code": code_provenance(),
             "python": platform.python_version(), "package_version": __version__,
             "prompt_version": PROMPT_VERSION, "prompt_sha256": PROMPT_HASH,
+            "argument_policy": ARGUMENT_POLICY_VERSION,
             "seed": config.seed, "device": config.device,
             "selection_filter": config.selection_filter,
             "model_offload": config.model_offload,

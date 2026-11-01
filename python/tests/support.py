@@ -105,6 +105,11 @@ class ControlledEnvironment:
         self.calls = []
         self.response = response
 
+    def validate(self, name, arguments):
+        if name == "sms.send" and "contact_id" not in arguments:
+            return {"ok": False, "error": "missing contact_id"}
+        return {"ok": True, "error": None}
+
     def call(self, name, arguments):
         self.calls.append({"name": name, "arguments": copy.deepcopy(arguments)})
         if self.response:

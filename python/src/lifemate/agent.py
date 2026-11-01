@@ -8,6 +8,8 @@ import time
 from .adapters.common import inference_session
 from .contracts import (ASR, Deadline, EnvironmentFactory, JSON, Limits,
                         PipelineError, Planner, SampleInput, SampleOutcome, TraceSink)
+from .arguments import (ARGUMENT_POLICY_VERSION, ArgumentRejection, check_references,
+                        normalize_arguments)
 from .dataset import prepare_request
 from .jsonio import dumps, loads
 from .prompting import planner_input
@@ -60,7 +62,8 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
             stage = "environment"
             env = environment_factory(split, sample.id, data_root)
             deadline.remaining()
-            allowed = {t["name"] for t in sample.tools}
+            tools = {t["name"]: t for t in sample.tools}
+            allowed = set(tools)
             observations: list[JSON] = []
             last_rejected, repeated_rejections = None, 0
             last_failure, repeated_failures = None, 0
@@ -85,6 +88,18 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                     if action["action"] == "call" and action["name"] not in allowed:
                         unavailable = True
                         raise ValueError("Tool unavailable in this sample")
+                    if action["action"] == "call":
+                        action["arguments"] = normalize_arguments(
+                            action["arguments"], tools[action["name"]], prepared["context"])
+                        check_references(action["arguments"], tools[action["name"]], prepared, observations)
+                        deadline.remaining()
+                        preview = env.validate(action["name"], action["arguments"])
+                        deadline.remaining()
+                        if not isinstance(preview, dict) or type(preview.get("ok")) is not bool:
+                            raise PipelineError("EXECUTION_UNCERTAIN", "Invalid schema validation response", "validation")
+                        if not preview["ok"]:
+                            raise ArgumentRejection("ARGUMENT_SCHEMA", "arguments",
+                                                    str(preview.get("error") or "Schema rejected arguments"))
                 except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
                     reason = (f"Invalid JSON: {exc.msg}." if isinstance(exc, json.JSONDecodeError)
                               else "Invalid action shape or unavailable tool name.")
@@ -92,13 +107,22 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                         reason = ("The top-level name is not in available_tools. Copy an exact name from "
                                   "available_tools into the top-level name field. Put that tool's parameters "
                                   "directly in arguments, without nesting another name/arguments call.")
+                    code = "UNAVAILABLE_TOOL" if unavailable else "INVALID_ACTION"
+                    if isinstance(exc, ArgumentRejection):
+                        code = exc.code
+                        reason = (f"Argument rejected in field {exc.field[:128]} ({code}). "
+                                  "Use the catalog schema and visible IDs. Supply explicit units, date and day period; "
+                                  "use sys.ask_missing_info when required information is genuinely unavailable.")
                     feedback = {"step": steps, "kind": "validation_rejection",
-                                "code": "UNAVAILABLE_TOOL" if unavailable else "INVALID_ACTION",
+                                "code": code,
                                 "message": reason + " No tool was executed. Correct the previous response; "
                                 "return exactly one call/finish JSON object, with balanced braces and no extra text.",
                                 "rejected_response": raw[:4096], "response_truncated": len(raw) > 4096}
+                    if isinstance(exc, ArgumentRejection) and exc.detail:
+                        feedback["schema_error"] = exc.detail
                     trace.emit("validation_result", step=steps, accepted=False,
-                               scope="action_shape_and_eligibility", payload=feedback)
+                               scope="pre_dispatch", payload=feedback,
+                               argument_policy=ARGUMENT_POLICY_VERSION)
                     observations.append(feedback)
                     repeated_rejections = repeated_rejections + 1 if raw == last_rejected else 1
                     last_rejected = raw
@@ -107,15 +131,15 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                     continue
                 last_rejected, repeated_rejections = None, 0
                 trace.emit("validation_result", step=steps, accepted=True, action=action["action"],
-                           scope="action_shape_and_eligibility",
-                           arguments_schema="delegated_to_env.call" if action["action"] == "call" else "not_applicable")
+                           scope="pre_dispatch", argument_policy=ARGUMENT_POLICY_VERSION,
+                           arguments_schema="env.validate" if action["action"] == "call" else "not_applicable")
                 if action["action"] == "finish":
                     break
                 stage = "dispatch"
                 trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
                 deadline.remaining()
                 started = clock()
-                # Arguments, including schema-invalid ones, reach the authoritative logger.
+                # Only prevalidated proposals dispatch. Every actual call stays authoritative.
                 try:
                     result = env.call(action["name"], action["arguments"])
                 except Exception as exc:

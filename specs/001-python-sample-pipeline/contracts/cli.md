@@ -49,7 +49,7 @@ Runs check-data-equivalent preflight, then loads local models and executes seque
 | `--planner-model PATH` | Local Qwen snapshot directory; required |
 | `--asr-model PATH` | Local compatible Whisper/PhoWhisper snapshot; audio mode only |
 | `--device cpu\|cuda` | Explicit device; unavailable device fails clearly |
-| `--run-dir PATH` | New run directory; refuse existing path |
+| `--run-dir PATH` | Optional explicit new directory; refuse existing path. Default `.agent-work/lifemate-runs/<split>-<mode>-YYYYMMDD-HHMMSS` in Vietnam time; same-second collisions add microseconds |
 | `--max-steps N` | Positive decision bound, default 16 |
 | `--sample-timeout-seconds N` | Positive sample budget, default 30 |
 | `--trace-payloads` | Explicit detailed dataset-debug payload capture in local traces |

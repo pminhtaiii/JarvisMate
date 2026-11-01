@@ -54,11 +54,11 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.env.calls, [])
         self.assertEqual(len(self.planner.inputs[2]["observations"]), 2)
 
-    def test_schema_invalid_allowed_call_is_logged_then_corrected(self):
+    def test_schema_invalid_proposal_is_rejected_without_dispatch_then_corrected(self):
         outcome = self.execute([call("sms.send", content="Trễ"),
                                 call("sms.send", contact_id="observed_77", content="Trễ"), FINISH])
-        self.assertEqual(len(outcome.result["tool_calls"]), 2)
-        self.assertFalse(self.planner.inputs[1]["observations"][0]["result"]["ok"])
+        self.assertEqual(len(outcome.result["tool_calls"]), 1)
+        self.assertEqual(self.planner.inputs[1]["observations"][0]["code"], "ARGUMENT_SCHEMA")
 
     def test_done_false_is_observed_instead_of_failing_batch(self):
         env = ControlledEnvironment(lambda *_: {"ok": True, "done": False})

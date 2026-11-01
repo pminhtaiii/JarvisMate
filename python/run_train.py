@@ -1,9 +1,9 @@
 """Run all Train transcripts, optionally resuming an explicitly selected checkpoint."""
 import argparse
 from pathlib import Path
-import uuid
 
 from lifemate.cli import main
+from lifemate.runpaths import dated_run_path
 
 
 def run():
@@ -17,10 +17,13 @@ def run():
         parser.error("--allow-mixed-resume requires --resume-from")
     root = Path(__file__).resolve().parents[1]
     data = root / "DATA_JarvisMate" / "train+public_test"
-    output = root / ".agent-work" / "lifemate-runs" / ("train-all-" + uuid.uuid4().hex)
+    output = dated_run_path(root / ".agent-work/lifemate-runs", "train-all")
+    planner = root / ".agent-work/asr-finetune/models/qwen3-4b-instruct-2507"
+    if not planner.is_dir():
+        planner = root / ".agent-work/models/qwen3-4b-instruct-2507"
     args = ["run", "--data-root", str(data), "--runtime-dir", str(data / "train" / "zaic_tools"),
             "--split", "train", "--input-mode", "transcript", "--all",
-            "--planner-model", str(root / ".agent-work" / "models" / "qwen3-4b-instruct-2507"),
+            "--planner-model", str(planner),
             "--device", "cuda", "--trace-payloads", "--sample-timeout-seconds", "120",
             "--continue-on-error", "--run-dir", str(output)]
     if options.resume_from is not None:

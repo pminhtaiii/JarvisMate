@@ -38,10 +38,11 @@ weights/compute are available. A controlled run is not model evidence.
    returns to the planner within the remaining bounds.
 4. **Given** labels and historical actions, **when** inference runs, **then** labels
    never enter planner inputs and history is not re-executed.
-5. **Given** a well-formed, allowed call with schema-invalid arguments, **when** it
-   reaches `ToolEnv.call`, **then** the attempted call remains in submitted `tool_calls`
-   and its error result supplies correction feedback. Malformed or unavailable
-   actions are rejected before dispatch and produce no environment call.
+5. **Given** a well-formed, allowed proposal, **when** argument normalization,
+   visible x-ref evidence or organizer `env.validate` rejects it, **then** return
+   validation feedback without dispatch. Every actual `ToolEnv.call`, including a
+   runtime rejection, remains in the authoritative submitted log. This user-requested
+   2026-10-31 policy supersedes the original schema-invalid dispatch behavior.
 
 ### User Story 2 - Run a selected subset and expose failures (Priority: P1)
 
@@ -121,12 +122,12 @@ GPU-free tests verify adapter behavior with controlled ASR output.
   Access app data through tool calls, never hidden-file reads/copies/parsing or
   `get_state()` as planner context. Require a valid catalog before environment creation.
 - **FR-007**: Use one general planner in a bounded structured ReAct loop. Validate
-  action shape and eligibility before dispatch. Send well-formed, allowed calls,
-  including schema-invalid arguments, through `ToolEnv.call` for deterministic
-  organizer schema validation, attempted-call logging, and correction feedback.
+  action shape and eligibility, normalize schema-directed numeric/temporal values,
+  check visible x-ref evidence, and require organizer `env.validate` before dispatch.
+  Reject invalid proposals without `env.call`; log every actual call authoritatively.
 - **FR-008**: Distinguish finish, missing-information, valid empty outcome, and failure.
   Malformed or unavailable actions are traced and may be corrected before dispatch;
-  schema errors return from the environment for correction within the action bound.
+  argument/schema rejections return validation feedback within the action bound.
   Every actual environment call, including rejected calls, remains logged and submitted.
   A missing-information call ends the sample only on success with `waiting_for_user:true`;
   success without that condition returns to the planner.

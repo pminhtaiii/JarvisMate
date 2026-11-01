@@ -21,6 +21,13 @@ def argument_schemas(tool: dict) -> list[dict]:
             result["additionalProperties"] = False
         if result.get("type") == "string" and required:
             result["minLength"] = max(1, result.get("minLength", 0))
+        # This is the proposal grammar, not the execution schema. Vietnamese
+        # quantities remain strings until the deterministic argument boundary.
+        if result.get("type") in {"integer", "number"} and "enum" not in result and "x-ref" not in schema:
+            return {"anyOf": [result, {"type": "string", "minLength": 1, "maxLength": 512}]}
+        if result.get("format") in {"date", "time", "date-time"}:
+            result.pop("format")
+            result["maxLength"] = 512
         if result.get("type") == "array":
             result["items"] = normalize(result["items"])
             if required:
@@ -78,7 +85,7 @@ class ActionConstraint:
                                                      max_json_array_length=16_384)
             self.tokenizer_data = build_token_enforcer_tokenizer_data(tokenizer)
             self.metadata = {"library": "lm-format-enforcer", "version": version("lm-format-enforcer"),
-                             "schema": "lifemate-tool-arguments-v2", "strict_field_order": True,
+                             "schema": "lifemate-tool-arguments-v3", "strict_field_order": True,
                              "max_consecutive_whitespaces": 2, "unconstrained_fallback": False}
         except Exception as exc:
             raise PipelineError("MODEL_UNAVAILABLE", "Cannot initialize required JSON constraints; install inference extra",

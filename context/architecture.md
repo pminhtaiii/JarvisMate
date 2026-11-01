@@ -13,6 +13,9 @@ Use one general planner for the MVP, with only the current sample's available to
 1. Receive the sample audio and its provided context, conversation history, installed-app list, and tool definitions.
 2. Run ASR to produce request text for planning.
 3. Create exactly one `ToolEnv` for the sample. Use a structured ReAct loop: the planner proposes a tool call using the request, sample context, installed-app tools, and prior observations; deterministic code validates and executes it through that environment. Return the result to the planner for its next decision. Use `sys.ask_missing_info` when required information is missing, and produce no calls for unsupported requests.
+   Numeric/temporal arguments are normalized by deterministic rules before organizer
+   `env.validate`; invalid proposals return feedback without dispatch. x-ref values
+   need structured visible ID evidence. See the [supported rules](../python/README.md#deterministic-arguments-2026-10-31).
 4. Bound the loop and preserve the no-automatic-retry policy for uncertain executions. Every attempted call goes through the same environment. Prioritize a working baseline before latency optimization while measuring elapsed time; the competition deadline remains a submission constraint. See [ADR 007](../docs/adr/007-react-first-runnable-baseline.md) for the trade-off and supersession of ADR 006.
 5. Submit the environment's recorded tool-call log and final `state_hash`.
 

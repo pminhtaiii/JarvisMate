@@ -17,7 +17,8 @@ a measured baseline, a validation score, or a submission-ready container.
 CLI -> dataset/runtime preflight -> load models once
   -> for each selected sample, in dataset order:
        trace/deadline -> transcript or current/history ASR -> one ToolEnv
-       -> Qwen action -> shape/eligibility check -> env.call -> observation -> Qwen
+       -> Qwen action -> shape/eligibility -> normalize/ID evidence -> env.validate
+       -> env.call -> observation -> Qwen
        -> finish / successful waiting_for_user -> authoritative call log + hash
        -> terminal trace -> flushed partial prediction -> manifest progress
   -> validate exact selection coverage -> publish predictions.jsonl
@@ -31,11 +32,114 @@ custom scorer, full-container supervisor, or Docker submission is added here.
 | `contracts.py` | Configuration/bounds, protocols, failure codes and outcomes |
 | `jsonio.py`, `dataset.py` | Strict visible JSON, input whitelist, contained selected assets, ordered user-turn preparation |
 | `runtime.py` | Trusted split package import, matching catalogs, implementation coverage, one-open factory |
+| `arguments.py`, `numbers.py`, `temporal.py` | Schema-directed Vietnamese numbers/time, visible ID evidence, no transcript mutation |
 | `prompting.py`, `agent.py` | Versioned Vietnamese structured ReAct prompt, strict action grammar, bounded dispatch |
 | `adapters/planner.py` | Local Qwen3 tokenizer/model, greedy actions, token and time budgets |
 | `adapters/asr.py` | Local Whisper/PhoWhisper Vietnamese transcription from PCM WAV, no text fallback |
 | `artifacts.py` | Durable exact predictions, bounded/redacted debug traces, manifest/publication lifecycle |
 | `cli.py` | Preflight, sequential model reuse, stop-on-first-failure orchestration |
+
+## Deterministic arguments (2026-10-31)
+
+The runner preserves ASR/history text. Numeric and temporal tool fields alone accept
+Vietnamese expressions, normalized before organizer `env.validate`; rejection returns
+bounded planner feedback with zero `env.call`. Every actual dispatched call, including
+any subsequent runtime rejection, remains in the authoritative log. The proposal
+grammar allows numeric strings; tool catalog schemas remain unchanged.
+
+- Numbers: Vietnamese hundreds/tens, nghìn/ngàn/triệu/tỷ, phẩy, negative values,
+  scale + rưỡi. Money `amount` uses Vietnamese dot grouping and may end in đồng/VND;
+  single separators in other numeric fields are interpreted using field type.
+  Explicit durations convert to fields ending in minutes/seconds/hours; temperature
+  accepts độ/độ C. Fractional values in integer fields are rejected, never rounded.
+- Dates: full dd/mm/yyyy -> YYYY-MM-DD; hôm nay/mai/kia/hôm qua; explicit weekday
+  tới (strictly next occurrence) or tuần sau (next Monday-based week).
+- Datetimes: explicit date + HH:mm[:ss] or spoken clock with day period; e.g.
+  `ba giờ chiều mai`. `sau ... phút/giờ/ngày` uses sample time, never system time.
+  New datetimes have seconds and timezone offset. Valid aware ISO literals and
+  HH:mm[:ss] precision are preserved. Date-only input never invents a clock.
+- Timezone uses IANA ZoneInfo. Without a database on Windows, modern Vietnam and
+  UTC have explicit fixed-offset fallbacks; unsupported zones, DST folds/gaps,
+  incomplete dates, ambiguous spoken hours and unknown grammar reject the proposal.
+- Strings such as phone/account identifiers, names, message content, enums and x-ref
+  values are not numerically rewritten. x-ref values require a structured visible ID
+  from context, successful history results or successful results of the referenced app.
+  This checks evidence, not semantic entity selection or continued existence.
+
+On rejection the planner may correct its proposal or ask for missing required info.
+Rules do not infer a missing currency/unit, recover leading zeros from a numeric phone
+value, or claim complete Vietnamese-language coverage. Prompt v6 and the argument-policy
+version are recorded in provenance. Synthetic checks are separate from model evaluation.
+
+### Extended rules and dated output (2026-11-01)
+
+`vi-arguments-v2` / prompt `lifemate-react-v6` adds synthetic-tested coverage:
+
+- Spoken decimal scale coefficients: `một phẩy năm triệu` -> 1500000.
+- Explicit compound durations/halves: `một giờ ba mươi phút` -> 90 minutes;
+  `sau nửa tiếng` -> sample time + 30 minutes. Units must descend without duplicates.
+- Spoken clocks with optional phút: `bảy giờ mười lăm sáng` -> 07:15; explicit
+  seconds remain available. A spoken 1-12 hour still requires a day period.
+- Full spoken dates require day, month and year. `đầu/cuối tháng này/sau` means
+  first/last calendar day of that month, including leap years and year rollover.
+  Week boundaries and dates missing a year remain unsupported rather than guessed.
+- Numeric strings use field-aware separators. Money `amount` uses Vietnamese dot
+  grouping; a number field treats a single dot/comma as decimal. For other integer
+  fields, ambiguous `1.234` rejects instead of becoming 1234. Ambiguous monetary
+  comma grouping such as `500,000` rejects. An explicit scale coefficient such as
+  `1.234 triệu` uses decimal arithmetic before multiplication.
+
+Run the same E4 audio/public-test configuration in a fresh timestamped directory:
+
+```powershell
+Set-Location D:\JarvisMate_4
+& .\.venv-asr-train\Scripts\python.exe -B .\python\run_e4.py --all
+```
+
+For a one-sample check, replace `--all` with `--id public_0002`. The wrapper uses
+local E4 `exports/best`, local Qwen, CUDA offload, the existing selection filter and
+120-second development timeout. It performs inference only. No previous prediction
+rows are reused; output reflects the current code and models.
+
+New outputs use Vietnam time (UTC+07:00):
+`public-test-e4-normalized-YYYYMMDD-HHMMSS`. `run_train.py` similarly uses
+`train-all-YYYYMMDD-HHMMSS`. CLI `run` without `--run-dir` defaults to
+`.agent-work/lifemate-runs/<split>-<mode>-YYYYMMDD-HHMMSS`; an explicit path is
+preserved. Same-second collisions add numeric microseconds; existing output is
+never overwritten.
+
+Four completed prediction directories with UUID suffixes were renamed using their
+manifest `started_at` converted to Vietnam time. The mapping and SHA256 checks are
+in `.agent-work/lifemate-runs/run-directory-renames-20261101-091506.json`.
+Historical manifest/argv contents are preserved as execution provenance.
+
+Verification: system Python with `PYTHONPATH=D:\JarvisMate_4\python\src`,
+`python -B -m unittest discover -s python/tests -p 'test_*.py'`: 170 tests,
+166 passed, 4 skipped, exit 0. New normalization tests (10) and run-path/wrapper
+checks (5) all passed in the local venv. Existing argument/parser checks in that
+venv: 24 tests, 23 passed, 1 skipped for the missing IANA database. These checks
+use synthetic fixtures and the Train catalog validator, not public-test labels.
+No E4/Qwen benchmark was rerun by this change.
+
+### Verification in D:\JarvisMate_4 (2026-10-31)
+
+From the repository root, with `PYTHONPATH=D:\JarvisMate_4\python\src`:
+
+- `python -B -m unittest discover -s python/tests -p 'test_*.py'`:
+  155 tests, 151 passed, 4 skipped, exit 0. This includes controlled pipeline checks
+  and synthetic tiny-model ASR checks; no competition-model benchmark was run.
+- `.\.venv-asr-train\Scripts\python.exe -B -m unittest discover -s python/tests -p test_arguments.py -v`:
+  24 tests, 23 passed, 1 skipped (IANA database unavailable in this venv), exit 0.
+  The actual lm-format-enforcer parser accepted Vietnamese numeric/time proposals.
+  The DST test passed separately in the system Python full-suite run.
+- The copied venv initially imported LifeMate from JarvisMate_2. An offline
+  `python -m pip install --no-index --no-deps --no-build-isolation -e ./python`
+  using the venv interpreter repaired the editable package/CLI. Direct import now
+  resolves under JarvisMate_4 and `Scripts/lifemate.exe --help` succeeds.
+
+These are implementation checks, not Qwen accuracy, organizer replay or Docker
+acceptance. The earlier handoff's unexecuted baseline/model gates remain historical
+and do not become complete merely because these checks passed.
 
 ## Install on the receiving machine
 
