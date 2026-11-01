@@ -5,6 +5,7 @@ Decoding is strict: one complete call or the exact neutral final text, never rep
 """
 from __future__ import annotations
 
+import json
 import re
 
 from ..contracts import JSON
@@ -23,6 +24,14 @@ def render_tools(tools: list[JSON]) -> list[JSON]:
         for tool in tools]
 
 
+def assistant_turn(decision: JSON) -> JSON:
+    """The assistant message of one canonical decision; the template adds the wrappers."""
+    if decision["action"] == "finish":
+        return {"role": "assistant", "content": NATIVE_FINISH_TEXT}
+    return {"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {
+        "name": decision["name"], "arguments": decision["arguments"]}}]}
+
+
 def render_messages(value: JSON, *, system: str) -> list[JSON]:
     """Executed calls become tool_calls/tool turns; rejections stay correction data.
 
@@ -33,13 +42,36 @@ def render_messages(value: JSON, *, system: str) -> list[JSON]:
              {"role": "user", "content": dumps({k: value[k] for k in ("request", "context", "history")})}]
     for observation in value["observations"]:
         if observation["kind"] == "tool_result":
-            turns.append({"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {
-                "name": observation["name"], "arguments": observation["arguments"]}}]})
+            turns.append(assistant_turn({"action": "call", "name": observation["name"],
+                                         "arguments": observation["arguments"]}))
             turns.append({"role": "tool", "content": dumps(observation["result"])})
         else:
             # A rejected proposal never executed; it must not look like a tool result.
             turns.append({"role": "user", "content": dumps({"observation": observation})})
     return turns
+
+
+def render_prompt(tokenizer, value: JSON, *, system: str, target: JSON | None = None) -> str:
+    """The runtime generation prompt; with a target, the same conversation ending in that decision.
+
+    Inference and SFT export both render through here, so their prefixes cannot drift.
+    """
+    turns = render_messages(value, system=system)
+    if target is not None:
+        turns.append(assistant_turn(target))
+    return tokenizer.apply_chat_template(turns, tools=render_tools(value["available_tools"]), tokenize=False,
+                                         add_generation_prompt=target is None, enable_thinking=False)
+
+
+def encode_decision(decision: JSON) -> str:
+    """The completion text, without EOS, that the native grammar generates for a decision.
+
+    Matches the template's own tool_call rendering (`tojson` with default separators).
+    """
+    if decision["action"] == "finish":
+        return NATIVE_FINISH_TEXT
+    return (CALL_OPEN + '{"name": ' + json.dumps(decision["name"], ensure_ascii=False) + ', "arguments": '
+            + json.dumps(decision["arguments"], ensure_ascii=False, allow_nan=False) + "}" + CALL_CLOSE)
 
 
 def decode_decision(text: str, max_bytes: int = 65_536) -> JSON:

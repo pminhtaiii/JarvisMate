@@ -251,10 +251,7 @@ class LocalPlanner(ModelResidency):
         self._generation_index += 1
         try:
             if self.native:
-                rendered = self.tokenizer.apply_chat_template(
-                    qwen_protocol.render_messages(planner_input, system=self.system),
-                    tools=qwen_protocol.render_tools(planner_input["available_tools"]),
-                    tokenize=False, add_generation_prompt=True, enable_thinking=False)
+                rendered = qwen_protocol.render_prompt(self.tokenizer, planner_input, system=self.system)
             else:
                 rendered = self.tokenizer.apply_chat_template(
                     messages(planner_input, system=self.system, examples=self.examples),
