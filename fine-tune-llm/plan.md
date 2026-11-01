@@ -1,56 +1,64 @@
-# Implementation Plan: Qwen3-4B Next-Action SFT
+# Implementation Plan: Native Qwen3-4B Next-Action SFT
 
 **Project:** JarvisMate / LifeMate 2026. **Date:** 2026-11-01.
 **Status:** planning only; no LLM implementation, environment setup, model execution,
 or training is delivered by this document.
-**Authority:** [specs.md](specs.md), version 1.1; implementation checklist:
+**Authority:** [specs.md](specs.md), version 1.2; implementation checklist:
 [tasks.md](tasks.md). The specification takes precedence if these documents diverge.
 
 This plan turns the accepted specification into three implementation increments.
-It does not change the experiments, authorize their execution, or claim hardware
-compatibility. All new module, test, configuration, lock, and command paths below
+It adopts the approved native model-facing protocol, keeps L0–L3 treatments, and
+does not authorize execution or claim hardware/native-tokenizer compatibility. All new module, test, configuration, lock, and command paths below
 are future deliverables. Existing modules are linked explicitly.
 
 ## 1. Fixed scope and architecture
 
 ```text
-Current + historical user audio
-  -> selected frozen fine-tuned PhoWhisper-large
-  -> one transcript view + supplied context/history/tools
-  -> shared Structured Prompt P1
+Current + historical user audio -> selected fine-tuned PhoWhisper-large
+  -> selected transcript + supplied context/history
+  -> catalog-to-native-functions + shared pinned Qwen messages/tools template
   -> Qwen/Qwen3-4B-Instruct-2507
-  -> one call/finish JSON
-  -> existing deterministic dispatch -> original ToolEnv
-  -> actual observation -> P1 -> next call/finish
+  -> one native assistant tool call OR ordinary assistant final content
+  -> native parser -> internal normalized Python decision -> original ToolEnv
+  -> actual role=tool result -> native template -> next call/final
 ```
 
-Implement offline Next-Action SFT with LoRA. QLoRA is a resource-probe-driven
-fallback, selected consistently for L1–L3 before full comparable runs. No Request
-Decomposition, explicit CoT, full-trajectory prediction, fabricated observations,
-counterfactual relabeling, extra experiments, or warm-start between experiments.
+Keep iterative Next-Action SFT + LoRA, one general planner and at most one new call
+per decision. QLoRA NF4 remains an explicitly selected resource fallback for L1–L3.
+No decomposition, explicit CoT, full-trajectory generation, extra experiments,
+fabricated observations, gold repair or cross-experiment warm-start.
+
+The old model-facing action/finish JSON is superseded. Internal Python decisions
+may remain compatible with agent.parse_action; they are never Qwen targets,
+assistant history or native template instructions. No fake finish tool.
 
 | Experiment | Initialization and treatment |
 |---|---|
-| L0 | Pinned pretrained base; no optimizer updates |
-| L1 | Same pretrained base; audited clean Fit rows using gold audio_text; weights all 1 |
-| L2 | Independent same base; exact L1 corpus/order/budget; normal/ask/post-finish/initial-finish weights 1/2/1/2 |
-| L3 | Independent same base; selected L1/L2 weighting policy; same clean base rows with approved Fit ASR views; proposed p_noisy=0.5 |
+| L0 | Pinned pretrained; fresh native baseline, no optimizer updates |
+| L1 | Independent same pretrained; audited gold audio_text native next-action rows; weights all 1 |
+| L2 | Independent same pretrained; exact L1 corpus/order/budget; normal/ask/post-final/initial-final weights 1/2/1/2 |
+| L3 | Independent same pretrained; selected L1/L2 policy, clean plus approved Fit ASR native views; proposed p_noisy=.5 |
 
-Use the pinned revision and identities in specs §2/§9, not floating model main.
-Keep the audited grouped seed-42 split: 1,236 Fit and 309 Validation sources, with
-3,920/949 raw candidate next-action rows before filtering. Seed alone is insufficient
-to recreate membership. The 309-source closed-loop denominator never shrinks when
-teacher-forced references or training rows fail audits. Initial finish and finish
-after calls are separate types; a terminal successful ask has no following finish.
+All use the identical native renderer/catalog adapter/parser/decoder/terminal policy.
+Create a new native suite and native L0; do not compare old custom L0 with native
+L1–L3, reuse old token masks/accepted-format hashes, or warm-start a custom adapter.
+Raw dataset/catalog/split identities, the same pinned pretrained Qwen/tokenizer
+files, and verified compatible ASR assets may be reused as inputs, not as evidence
+that the native format has passed.
+
+Preserve grouped seed-42 membership: 1,236 Fit/309 Validation sources, raw
+3,920/949 next-action candidates. Recompute native accepted/token-length counts.
+Historical turns remain context only, current prefixes remain strict j<k, and
+successful terminal ask has no extra final target. Closed-loop expected stays 309.
 
 ## 2. Existing integration boundaries
 
 | Existing boundary | Planned use / permitted change |
 |---|---|
 | [dataset.py](../python/src/lifemate/dataset.py) | Extract/share pure visible projection and whitelist behavior; do not run audio/environment preflight from SFT export |
-| [prompting.py](../python/src/lifemate/prompting.py) | Own shared P1 messages/rendering and canonical prior-action serialization; avoid a trainer-only prompt copy |
-| [planner.py](../python/src/lifemate/adapters/planner.py) | Consume the shared renderer; retain greedy local inference and Planner interface |
-| [constrained.py](../python/src/lifemate/adapters/constrained.py) | Reuse actual tool-bound grammar/schema order and tokenizer-prefix checks |
+| [prompting.py](../python/src/lifemate/prompting.py) | Migrate custom SYSTEM/messages to shared native messages and tools= rendering; no trainer-only template copy |
+| [planner.py](../python/src/lifemate/adapters/planner.py) | Use native renderer, raw token/EOS-aware parser and internal normalization; retain local greedy inference/Planner interface |
+| [constrained.py](../python/src/lifemate/adapters/constrained.py) | Replace custom ActionConstraint for native wrappers plus tool-bound args and ordinary-final branch; prove pinned-tokenizer acceptance |
 | [agent.py](../python/src/lifemate/agent.py), [runtime.py](../python/src/lifemate/runtime.py) | Reuse complete-sample ownership, one ToolEnv, actual logs/hashes, bounds and failure handling |
 | [jsonio.py](../python/src/lifemate/jsonio.py) | Reuse strict JSON, visible-path guard, contained paths and file hashing; keep generic sorted-key encoding separate from completion encoding |
 | [model_budget.py](../python/src/lifemate/model_budget.py) | Verify logical model counts, including quantized bases/adapters; never equate bytes with parameter count |
@@ -58,11 +66,17 @@ after calls are separate types; a terminal successful ask has no following finis
 | [organizer validation](../tools/train/validate.py) | Pure schema checks only in export/audit; no exporter ToolEnv construction or hidden-state access |
 
 Shared changes require existing pipeline regression coverage. Preserve installed-app
-eligibility, custom action grammar, rejected-attempt logging, terminal ask semantics,
+eligibility, internal normalized decisions, authoritative rejected-attempt logging, terminal ask semantics,
 no uncertain mutation retry, and authoritative env.get_tool_calls()/get_state_hash().
 Do not change organizer source. Python still owns each sample; the TypeScript
 harness boundary remains as specified. Avoid importing training dependencies from
 the normal inference entry point.
+
+Native catalog/codec interfaces are future shared modules native_tools.py and
+adapters/qwen_native.py. Preserve original organizer schemas/extensions and do not
+modify ToolEnv. Current LL001–LL024 training modules/tests are absent; the exact
+source migration audit is in specs §2.4. Existing review reports describe the prior
+custom protocol and are historical evidence, not the native implementation contract.
 
 ## 3. Implementation structure and dependency direction
 
@@ -73,7 +87,8 @@ thin per-experiment wrappers, not four copies of training/evaluation logic.
 |---|---|
 | config.py, storage.py, cli.py | Strict configuration, portable roots, immutable identities, atomic artifacts, explicit command dispatch and statuses |
 | data.py, audit.py | Visible projection, frozen split, strict-prefix expansion, deterministic/risk/manual audit, quarantine and review records |
-| tokenization.py | Import shared production rendering; exact supervised boundaries/masks, token audit and cache identity |
+| native_tools.py and adapters/qwen_native.py (shared runtime modules) | Pure catalog-to-functions adapter; native serializer/parser/EOS completion; normalized executor decision; bounded rejection feedback |
+| tokenization.py | Shared native rendering; exact boundaries/masks, tools/EOS acceptance and new token-cache identity |
 | models.py, resources.py | Local pinned Qwen, adapter scope, actual CUDA/kernel/resource evidence, LoRA/NF4 probes |
 | losses.py, trainer.py | Completion-mean weighted objective, uniform base-row order, fixed update budget and explicit within-experiment validation |
 | checkpoints.py, export.py | Durable state/resume, common NLL selection, merge and fresh offline reload |
@@ -112,21 +127,28 @@ trigger probes, ASR, export, closed-loop evaluation, or another experiment.
    screening, and recorded manual review. High-risk/ambiguous rows stay needs_review
    until resolved. Preserve gold; quarantine train_1696 k=2 and dependent finish k=3.
    Accept earlier rows only after independent checks; no prefix splicing.
-4. Implement the action serializer at the shared prompt boundary: envelope order
-   action -> name -> arguments, recursively matching decoder schema order. Generic
-   sorted-key JSON remains appropriate for bodies/results, not action completions.
-5. Implement P1 and migrate inference to the same rendering contract. For the pinned
-   non-thinking tokenizer, omit enable_thinking only after verifying exact rendered
-   text/token equivalence to the installed adapter call on contract fixtures.
-6. Construct prompt+completion sequences with exactly one final <|im_end|>. Labels
-   cover the target JSON/EOS only; history/prompt/observations/padding are -100.
-   Verify exact inference-prefix IDs, joint token boundaries and grammar acceptance.
-7. Token-audit separately using the local pinned tokenizer; cap prompt+512 at
-   16,384 and completion at 512 including EOS. Quarantine overflow without truncation.
-   Freeze P1 version/hashes only after acceptance, then seal the accepted corpus.
-8. Prepare focused evaluation fixtures before real predictions: duplicate/fuzzy
-   matching, empty gold, strict ask, invalid outputs, failure accounting, unavailable
-   state references, and the existing ten fixed diagnostic IDs.
+4. Implement native function definitions retaining exact catalog schemas/extensions,
+   installed ordering and sys. Preserve x-one-of semantics, not exclusive oneOf.
+   Build assistant.tool_calls and role=tool pairs using the pinned template; never
+   manually wrap old action JSON or turn final into a fake tool.
+5. Author shared native P1, catalog adapter and parser/decoder in Phase I. Pass
+   tools=; tool responses may render within a user wrapper because the tokenizer
+   does that. Validate historical pairs/text without replay or invented results.
+6. Test one versus multiple/malformed/truncated calls, tag-looking strings inside
+   JSON, name/schema binding, raw EOS/stop metadata and ordinary-final reachability.
+   Prechecks do not hide authoritative env.call rejections. Keep custom decisions
+   internal only; bounded repair feedback is not a fabricated tool response.
+7. Render prefix and full one-target assistant with the same tokenizer/tools.
+   Verify exact token prefix, native completion plus one EOS; mask all previous
+   roles/tools/padding and the assistant header. Compare flag omission on identical
+   native messages; no thinking switch or custom/native byte equivalence is assumed.
+8. Reaudit native tools/history/wrapper lengths at 16,384 total with 512 reserved,
+   without truncation/packing. Resolve native P1/final language/content before freeze;
+   freeze new protocol/adapter/template/parser/decoder/terminal hashes after tests.
+9. Author metric fixtures separating format validity, semantic name/arguments,
+   multi-step behavior and trusted state. Initial gold [] must allow final with
+   tools present; successful terminal ask has no extra final. Preserve fixed cases,
+   all-source failure accounting, null metrics and strict-prefix quality audits.
 
 **Exit:** data, audit, prompt, serialization, mask and metric-fixture source is
 reviewable. Executed acceptance is separate. A valid L0-G baseline does not depend
@@ -140,12 +162,20 @@ Full training still requires an audited accepted Fit corpus and actual token che
 
 ### Evaluation and the first baseline
 
+L0 means a freshly measured native L0. Parse native output to semantic decisions,
+not exact wrapper text matching. Bind comparisons to new native protocol/catalog-
+adapter/parser/decoder/terminal/template identities and report format validity/EOS
+separately from semantic and final-state correctness.
+
 Implement G and cache-backed A as separate evaluation runs using the same sample
 loop. The reference reader stays outside planner inputs. Teacher-forced diagnostics
 use supplied strict prefixes; closed-loop runs use only predicted calls and actual
 observations. Preserve outcomes for all 309 sources even when fail-fast leaves
 not_attempted cases. An explicit continue-on-error profile collects failures without
-retry; never exclude failures to improve the mean or promote an incomplete run.
+retry; never exclude failures to improve the mean. Full evaluated coverage means
+309 attempted/valid outcomes and no not_attempted, not 309 successes. Timed-out is
+a subset of failed; failures remain zero-scored. Partial runs cannot supply complete
+selection evidence; promotion keeps stricter success/no-timeout gates.
 
 Build minimal metrics/reports before L0-G: per-source local ungated F1, ask/no-action
 confusion counts, teacher-forced accuracy/NLL, statuses, scope-aware timings and null
@@ -154,6 +184,12 @@ L0-G may proceed while ASR/A-mode is blocked. Preserve the fixed ten cases from
 specs §10.5; do not turn their Validation content into training or few-shot input.
 
 ### Actual GPU preflight and training probes
+
+An early explicit smoke may run after minimum model/LoRA/loss/native-mask code:
+short/long-prompt memory, forward/backward and one update. No final-handoff/trainer/
+reporting dependency. RV008 still needs accepted native worst rows and five or
+more updates; NF4 fallback qualifies separately. Hardware may remain not_run until
+source-first delivery is complete.
 
 Author compatibility/probe commands on the current machine; run them explicitly
 only on the receiving local RTX 5070 Ti machine. Use specs §9 candidate versions
@@ -194,6 +230,9 @@ checkpoints, including any native-NF4 versus merged-FP16 difference. Phase III a
 deployment acceptance; export validity cannot be postponed until after L1/L2 scoring.
 
 ### Early latency feasibility
+
+Native tools injection/history/wrappers change prompt lengths and decode cost.
+Reaudit tokens/resources/timings; old custom-format evidence is not native acceptance.
 
 Implement an explicitly invoked L0 pilot using real current/history audio and the
 selected fine-tuned ASR. Record per-turn ASR, per-decision prompt tokens and Qwen
@@ -244,7 +283,7 @@ trainer or obtaining low NLL does not pass those gates.
    enforcement as an explicit dependency if unavailable. Do not claim A30/30-second
    acceptance from local training, a cache-backed run, or cooperative deadlines alone.
 
-**Exit:** all L0–L3 authoring deliverables can be handed off with unrun/blocked evidence.
+**Exit:** all native L0–L3 authoring deliverables can be handed off with unrun/blocked evidence.
 Training, state verification and deployment each retain their own acceptance status.
 
 ## 7. Two-machine portability and resource handoff
@@ -316,11 +355,23 @@ Source for all three phases may be completed before any GPU execution. Dependenc
 govern execution, not permission to author later modules. A blocker in A/L3 must not
 prevent a correct clean baseline; unavailable evidence remains visible.
 
-Open decisions remain those in specs §14: exact host/stack and LoRA fit, selected
+Open decisions remain those in specs §14: exact native P1/final wording, actual
+native tokenizer/LMFE/EOS acceptance and historical pairing coverage, host/stack and LoRA fit, selected
 ASR/caches, review capacity and noisy coverage, trusted references/matcher, manifest
 availability, deterministic kernels, full-pipeline latency and final supervision.
 Record resolving evidence with dataset, command, host, identities and outcome.
-Do not silently change the architecture, model, split, labels or experiment policy.
+The native protocol is the newly approved architecture contract. Do not silently
+replace it with custom grammar, another model/split, edited labels or new experiments.
+
+### Minimal dependency paths
+
+- Phase I CPU/native-tokenizer contracts -> native L0-G; no ASR/L3 requirement.
+- LL003–LL006 + LL046 + minimum LL047 -> RV004 transfer; not LL048.
+- Minimum model/loss/mask code -> RV005 early smoke; full path -> RV008/RV009.
+- Gold-text L1/L2 need full data/resource checks and audio-pilot review or explicit
+  unresolved-latency decision; missing ASR alone does not block clean training.
+- Saved native L0/L1/L2 G/A + LL024 -> RV018 policy; no LL042 prerequisite.
+- Fit ASR cache + approved full-prefix views + RV018 -> independent native L3.
 
 ## 10. Definition of handoff
 
