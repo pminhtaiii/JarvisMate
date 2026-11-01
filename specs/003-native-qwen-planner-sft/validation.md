@@ -238,3 +238,79 @@ Qwen3-4B-Instruct-2507 checkpoint, an ASR checkpoint and GPU time for paired
 transcript/audio runs. T019 depends on T018 and evaluator output. None of these assets
 is available here, so no partition, comparison report, protocol decision or SFT
 eligibility exists yet.
+
+## T020–T023, T025 — Native SFT export, controlled (recorded 2026-11-01)
+
+**Branch**: `feat/native-sft-export`, stacked on `feat/native-sft-partition` (PR #12).
+**Evidence level**: controlled unittest fixtures with a character-level tokenizer that
+renders Qwen3's tool-call template. The native grammar is the real pinned LMFE parser in
+the isolated venv run, and a schema stand-in otherwise. No real Train data, Qwen
+tokenizer or weights were used. Export engineering proceeds ahead of the T019 gate, as
+the task dependencies allow; this record is not SFT eligibility.
+
+```bash
+PYTHONPATH=src python -X utf8 -m unittest discover -s tests -p "test_*.py"
+```
+
+Exit `0`: 356 tests, OK, 15 skipped (the same skips as above).
+`test_training_data.py` has 47 tests, OK: the 22 partition tests and 25 new export tests.
+The same file and `test_qwen_protocol.py` were also run in an isolated temporary venv
+with `lm-format-enforcer==0.11.3`, outside the repository:
+
+```bash
+PYTHONPATH=src <venv>/python -X utf8 -m unittest discover -s tests -p "test_training_data.py"
+PYTHONPATH=src <venv>/python -X utf8 -m unittest discover -s tests -p "test_qwen_protocol.py"
+```
+
+Exit `0`: 47 OK with the real grammar deciding target admission; 30 OK, 5 skipped
+(the opt-in real-tokenizer class). `node scripts/ci/check-context.mjs` and
+`git diff --check` passed.
+
+- **T020**: fixtures cover:
+  - future-result sentinels at and after their own step;
+  - label, `final_state`, sample-ID and group-ID exclusion from prompts;
+  - exact runtime prompt parity, grammar key order, sorted prior-call arguments,
+    completion-only masks and EOS;
+  - history as context only, empty gold, terminal, non-terminal and inconsistent
+    missing-info cases;
+  - invalid gold: missing label, pairing mismatch, bad shape, unavailable tool,
+    schema-invalid and ungrounded targets;
+  - prompt and target overflow, inseparable token boundaries and a non-extending
+    template;
+  - validation separation, manifest identities and digests, determinism, mismatched
+    partitions/sources, zero accepted rows, no overwrite, protected output paths and
+    untouched environment files.
+- **T021**: `gold_rows` builds each row through the inference whitelist
+  (`normalize_record`, `prepare_request`, `planner_input`). Labels supply only the target
+  and earlier paired observations, and the final row is a declared `policy_finish`.
+  `leakage_audit` re-derives every prefix from the source labels. The environment
+  existence check moved from `normalize_record` to `preflight`, so conversion never
+  touches `*_environment/`; inference preflight still checks each selected sample.
+- **T022**: `python -m lifemate.training export` validates the partition's dataset/catalog
+  hashes, membership and per-row source hashes. It writes `fit.jsonl`, optional
+  `validation.next_action.jsonl`, `exclusions.jsonl` and `export_manifest.json` through one
+  staged rename. It refuses existing outputs and outputs inside the data root or base model.
+- **T023**: the planner and exporter share `qwen_protocol.render_prompt`. `render_row`
+  checks grammar admission, template extension, token-boundary separability, EOS-only
+  completion labels, the runtime budget rule and decode round-trip.
+  **Finding**: with the pinned grammar, the `sms.send` gold arguments in content-first
+  order are rejected and the required-first order is accepted. Targets are therefore
+  serialized in grammar order, with values unchanged.
+- **T025**: `docs/design/train-to-sft.md` records the implemented native serialization,
+  exclusion reasons, artifacts and evidence limits. Its conversion invariants stay the
+  single source; the training contract marks `partition`/`export` implemented and
+  `fit`/`merge` proposed.
+
+## T024 — Actual-tokenizer export audit (NOT RUN, 2026-11-01)
+
+Blocked in this environment, not failed. It needs the Qwen3-4B-Instruct-2507 tokenizer
+and chat template, the inference extra, the real Train JSONL/catalog and the frozen
+partition from T016. Command once they exist (from `python/`):
+
+```bash
+python -m lifemate.training export --data-root <data> --partition ../.agent-work/lifemate-runs/native-sft/partition.json --base-model <Qwen3-4B-Instruct-2507> --output ../.agent-work/lifemate-runs/native-sft/sft
+```
+
+Until then, no real export, row count, length distribution or exclusion review exists.
+The real template's tool-call rendering, token boundary and EOS behavior are proven only
+by the T013 smoke tests, which have not run either.

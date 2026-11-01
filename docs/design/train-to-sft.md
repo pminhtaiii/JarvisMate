@@ -1,8 +1,10 @@
 # Train gold trajectories to planner SFT
 
-**Status**: design only, 2026-10-27. No converter, SFT files, training dependency,
-training run, or tuned model is implemented by this document. Implementation is a
-later feature, conditional on the [roadmap's error-analysis gate](../../context/roadmap.md).
+**Status**: design 2026-10-27; native exporter implemented 2026-11-01 as
+`python -m lifemate.training export` ([native serialization](#native-serialization-implemented)).
+Its evidence is controlled fixtures only: it has not run on real Train data or the real
+tokenizer, and no training dependency, training run or tuned model exists. Fitting stays
+conditional on the [roadmap's error-analysis gate](../../context/roadmap.md).
 
 The accepted [native Qwen and SFT plan](../../specs/003-native-qwen-planner-sft/plan.md)
 defines the model-facing protocol and training method for that feature. JSON call/
@@ -178,30 +180,80 @@ restricted to fit data with provenance and reviewed targets. Do not pair a chang
 ASR request with unchanged gold automatically when the meaning has changed. Gold
 tool-call SFT does not train the ASR model.
 
-## Export artifacts and planned acceptance checks
+## Native serialization (implemented)
 
-Use ignored local experiment storage, for example:
+`python/src/lifemate/training/data.py` implements this page for the `qwen-native-v1`
+protocol. The rules above still decide which rows exist; this section records only how
+an accepted row is rendered.
+
+- **Input**: the inference whitelist (`normalize_record`, `prepare_request`,
+  `planner_input`) builds each row, and `qwen_protocol.render_prompt`, the function the
+  native planner calls, renders it with the checkpoint's chat template and the
+  baseline native system prompt. Earlier gold calls appear as assistant `tool_calls`
+  turns with sorted-key arguments, because the runner re-reads executed calls from
+  canonical JSON. Their results follow as `tool` turns.
+- **Target**: one native `<tool_call>` block, or the declared final text `Mình hiểu.`
+  marked `policy_finish`, followed by EOS. Argument values are unchanged, but keys are
+  emitted in the order the pinned grammar generates: a branch's required keys first,
+  in `required` order, then the remaining keys. The grammar rejects gold key order when
+  it differs, so a gold-ordered target could not be produced at inference.
+- **Parity checks per row**: the inference grammar must generate the target text
+  exactly. Rendering the conversation with the target appended must extend the
+  generation prompt by exactly that text and EOS. Tokenizing prompt and completion
+  separately must equal tokenizing them together. Decoding the completion tokens must
+  return the gold decision.
+- **Labels**: prompt tokens are `-100`; the target tokens and their EOS are trained.
+  The template's trailing newline after EOS is not trained. Packing is off.
+- **Budgets**: the runtime rule applies, so prompt tokens plus reserved output must fit
+  the context, and the target must fit the output budget. Overflowing rows are excluded.
+
+Excluded samples or rows go to `exclusions.jsonl` with one reason. Sample-level reasons
+are `visible_input_invalid`, `label_missing`, `pairing_mismatch`, `invalid_gold_shape`,
+`unavailable_tool` and `continues_after_terminal_wait`. Row-level reasons are
+`ungrounded_reference`, `grammar_rejected_target`, `template_prefix_mismatch`,
+`template_target_mismatch`, `token_boundary_mismatch`, `completion_eos_invalid`,
+`context_overflow`, `target_overflow` and `target_decode_mismatch`. A row excluded for
+its target still leaves that gold call and result in later rows' prefixes, since the
+call was executed in the gold trajectory.
+
+**Evidence limits**: ID grounding is lexical. A reference argument (`x-ref`) must occur
+in the request, context, history or an earlier result. This flags invented IDs, but
+cannot show the value came from the right record. Grammar parity is checked character
+by character; token-level EOS admission and the real Qwen template are covered only by
+the opt-in real-tokenizer tests, which have not run.
+
+## Export artifacts and acceptance checks
+
+`export` writes a new directory in ignored local experiment storage; the partition
+manifest comes from the separate `partition` command:
 
 ```text
-.agent-work/lifemate-runs/<experiment>/sft/
+.agent-work/lifemate-runs/<experiment>/
   partition.json
-  fit.jsonl
-  validation.next_action.jsonl
-  export_manifest.json
-  exclusions.jsonl
+  sft/
+    fit.jsonl
+    validation.next_action.jsonl   (only with --validation-diagnostics)
+    exclusions.jsonl
+    export_manifest.json
 ```
 
-These are proposed artifacts, not files created by this update. The validation rows
-are optional teacher-forced diagnostics, not the end-to-end validation prediction file.
+The directory is staged and published in one rename; an existing export is never
+replaced. Fit rows carry `prompt`, `completion`, token counts, provenance and
+`canonical_target`. The validation rows are optional teacher-forced diagnostics, not the
+end-to-end validation prediction file. The export fails without writing artifacts when no
+fit row is accepted or when the leakage or partition audit fails.
 
-The manifest records source JSONL/catalog hashes and versions, split/group manifest
-identity, exporter revision, prompt/template/tokenizer/base snapshot identities,
-partition and row counts, per-tool/finish/missing-info distributions, token lengths,
-weighting policy, quality exclusions, and any externally generated data provenance.
-Track experiment configuration and concise reports; do not publish competition data,
-derived examples containing it, raw traces, or model weights through the source repo.
+The manifest records source JSONL/catalog hashes and versions, partition file hash and
+grouping identity, exporter version and code digest, protocol/prompt/constraint
+identities, base tokenizer/template/config file hashes (export does not hash weights;
+the planned fit and merge commands must verify them), budgets, supervision and weighting policy, per-partition row and
+sample counts, per-tool/finish/missing-info distributions, token-length statistics,
+exclusions by reason and tool, audit counts and output file digests. Track experiment
+configuration and concise reports; do not publish competition data, derived examples
+containing it, raw traces, or model weights through the source repo.
 
-Future exporter tests must establish:
+Exporter tests (`python/tests/test_training_data.py`) cover the following with
+controlled fixtures. The real-tokenizer items still require the actual checkpoint:
 
 - Every target matches its original gold call; previous observations equal the exact
   strict prefix, and current/future results never enter the corresponding input.

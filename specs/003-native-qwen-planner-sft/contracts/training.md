@@ -1,6 +1,7 @@
 # Offline training contract
 
-All commands below are proposed, not currently available. They operate outside
+`partition` and `export` are implemented with controlled evidence only (see
+[validation](../validation.md)); `fit` and `merge` are proposed. All operate outside
 inference. Source data/weights/traces remain in ignored storage. Training dependencies
 are optional and must not become mandatory imports for ordinary `lifemate run`.
 
@@ -14,10 +15,13 @@ are optional and must not become mandatory imports for ordinary `lifemate run`.
    Reuse its validator and add catalog/grouping/count provenance. Use roadmap grouping
    and fit-side smoke IDs. Refuse
    to overwrite an existing partition; intentional re-partitioning creates a new experiment.
-2. `export --data-root PATH --partition PATH --base-model PATH --output PATH`
+2. `export --data-root PATH --partition PATH --base-model PATH --output PATH
+   [--validation-diagnostics] [--context-tokens 16384] [--output-tokens 512]`
    validates source identities, exports fit-only prompt/completion rows, optional
    separately marked teacher-forced validation diagnostics, exclusions and manifest.
    Never create ToolEnv or read `*_environment/`; use supplied gold results.
+   Rendering and parity checks are recorded in the
+   [gold conversion design](../../../docs/design/train-to-sft.md#native-serialization-implemented).
 3. `fit --config PATH` reads a JSON configuration and audited fit artifact, runs
    hardware/package/mask preflight and trains/saves adapter checkpoints. Refuse
    validation rows in optimizer input. Failure preserves a failed run manifest.
