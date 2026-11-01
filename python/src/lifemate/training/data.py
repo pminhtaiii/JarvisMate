@@ -37,6 +37,8 @@ MIN_SKELETON_TOKENS = 3
 SMOKE_FIT_IDS = ("train_1748", "train_1749", "train_1750", "train_1751")
 DEFAULT_SEED = 20261027
 DEFAULT_VALIDATION_FRACTION = 0.2
+# The brief describes about 1,600 Train rows; this bounds memory for a corrupt or wrong file.
+MAX_TRAIN_BYTES = 256 * 1024 * 1024
 LIMITATIONS = (
     "Visible Train inputs carry no explicit conversation or scenario-template IDs; conversation "
     "links are inferred from shared history turns.",
@@ -337,7 +339,10 @@ def read_train(data_root: Path) -> tuple[list[JSON], str, JSON, str]:
         raise PipelineError("CATALOG_INVALID", "Train catalog is unreadable or invalid", "partition") from exc
     rows = []
     try:
-        jsonl_bytes = jsonl.read_bytes()
+        with jsonl.open("rb") as stream:
+            jsonl_bytes = stream.read(MAX_TRAIN_BYTES + 1)
+        if len(jsonl_bytes) > MAX_TRAIN_BYTES:
+            raise _invalid("Train JSONL exceeds the supported size")
         for line in jsonl_bytes.decode("utf-8").splitlines():
             if line.strip():
                 if len(line.encode("utf-8")) > 4 * 1024 * 1024:
@@ -355,23 +360,28 @@ def read_train(data_root: Path) -> tuple[list[JSON], str, JSON, str]:
 
 
 def write_partition(output: Path, manifest: JSON) -> None:
-    """Create the manifest; an existing partition is never overwritten."""
-    output, content, created = Path(output), dumps(manifest) + "\n", False
+    """Publish the complete manifest at once; an existing partition is never overwritten.
+
+    Writing a staging file first means an interrupted write never leaves a partial
+    manifest at the frozen path, where it would block every retry.
+    """
+    output = Path(output)
+    staging = output.with_name(f".{output.name}.partial-{uuid.uuid4().hex}")
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
-        with output.open("x", encoding="utf-8", newline="\n") as stream:
-            created = True
-            stream.write(content)
+        with staging.open("x", encoding="utf-8", newline="\n") as stream:
+            sync_write(stream, dumps(manifest) + "\n")
+        # Neither call replaces an existing destination: Windows rename refuses one, a link cannot.
+        (os.rename if os.name == "nt" else os.link)(staging, output)
     except FileExistsError as exc:
         raise _invalid("Partition already exists; a new split needs a new experiment path") from exc
     except OSError as exc:
-        # A partial file would block every retry at this frozen path; the write error still wins.
-        if created:
-            try:
-                output.unlink(missing_ok=True)
-            except OSError:
-                pass
         raise PipelineError("OUTPUT_IO", "Cannot write the partition manifest", "partition") from exc
+    finally:
+        try:
+            staging.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def partition(data_root: Path, output: Path, *, seed: int = DEFAULT_SEED,
@@ -605,8 +615,13 @@ def render_row(row: JSON, tokenizer, admits, *, system: str, limits: Limits) -> 
     if not admits(value["available_tools"], text):
         raise Quarantine("grammar_rejected_target", "The native inference grammar cannot generate this gold "
                          "target; review it as schema-invalid gold", step, name)
-    prompt = qwen_protocol.render_prompt(tokenizer, value, system=system)
-    full = qwen_protocol.render_prompt(tokenizer, value, system=system, target=target)
+    try:
+        prompt = qwen_protocol.render_prompt(tokenizer, value, system=system)
+        full = qwen_protocol.render_prompt(tokenizer, value, system=system, target=target)
+    except Exception as exc:
+        # A checkpoint template may reject unusual row content; exclude the row, not the export.
+        raise Quarantine("template_render_failed", "The chat template cannot render this row", step,
+                         name) from exc
     completion = text + tokenizer.eos_token
     if not full.startswith(prompt):
         raise Quarantine("template_prefix_mismatch", "The conversation ending in the target does not extend "

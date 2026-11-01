@@ -210,7 +210,7 @@ an accepted row is rendered.
 Excluded samples or rows go to `exclusions.jsonl` with one reason. Sample-level reasons
 are `visible_input_invalid`, `label_missing`, `pairing_mismatch`, `invalid_gold_shape`,
 `unavailable_tool` and `continues_after_terminal_wait`. Row-level reasons are
-`ungrounded_reference`, `grammar_rejected_target`, `template_prefix_mismatch`,
+`ungrounded_reference`, `grammar_rejected_target`, `template_render_failed`, `template_prefix_mismatch`,
 `template_target_mismatch`, `token_boundary_mismatch`, `completion_eos_invalid`,
 `context_overflow`, `target_overflow` and `target_decode_mismatch`. A row excluded for
 its target still leaves that gold call and result in later rows' prefixes, since the

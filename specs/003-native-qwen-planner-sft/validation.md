@@ -252,8 +252,12 @@ the task dependencies allow; this record is not SFT eligibility.
 PYTHONPATH=src python -X utf8 -m unittest discover -s tests -p "test_*.py"
 ```
 
-Exit `0`: 356 tests, OK, 15 skipped (the same skips as above).
-`test_training_data.py` has 47 tests, OK: the 22 partition tests and 25 new export tests.
+Exit `0`: 359 tests, OK, 15 skipped (the same skips as above).
+`test_training_data.py` has 50 tests, OK: 24 partition tests and 26 export tests. The counts
+include the PR #13 review fixes: a chat-template exception now excludes only its row
+(`template_render_failed`); `train.jsonl` reads are capped at 256 MiB; and the partition
+manifest is written to a staging file and then published without replacing an existing
+path, so an interrupted write leaves no partial manifest.
 The same file and `test_qwen_protocol.py` were also run in an isolated temporary venv
 with `lm-format-enforcer==0.11.3`, outside the repository:
 

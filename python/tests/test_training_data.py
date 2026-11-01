@@ -305,13 +305,29 @@ class PartitionCommandTests(unittest.TestCase):
 
         def failing_open(path, *args, **kwargs):
             stream = real_open(path, *args, **kwargs)
-            return FailingStream(stream) if path == self.output else stream
+            return FailingStream(stream) if path.name.startswith(f".{self.output.name}.partial-") else stream
 
         with patch.object(Path, "open", failing_open):
             code, summary = self.run_command()
         self.assertEqual((code, summary["error"]["code"]), (1, "OUTPUT_IO"))
         self.assertFalse(self.output.exists())
+        self.assertEqual(list(self.output.parent.iterdir()), [])
         self.assertEqual(self.run_command()[0], 0)
+
+    def test_failed_publish_leaves_neither_partition_nor_staging_file(self):
+        publish = "rename" if os.name == "nt" else "link"
+        with patch.object(os, publish, side_effect=OSError("interrupted")):
+            code, summary = self.run_command()
+        self.assertEqual((code, summary["error"]["code"]), (1, "OUTPUT_IO"))
+        self.assertEqual(list(self.output.parent.iterdir()), [])
+        self.assertEqual(self.run_command()[0], 0)
+        self.assertEqual([p.name for p in self.output.parent.iterdir()], ["partition.json"])
+
+    def test_oversized_train_jsonl_is_rejected_before_parsing(self):
+        with patch.object(training_data, "MAX_TRAIN_BYTES", 64):
+            code, summary = self.run_command()
+        self.assertEqual((code, summary["error"]["code"]), (2, "INPUT_INVALID"))
+        self.assertFalse(self.output.exists())
 
     def test_decisions_file_is_applied_and_invalid_arguments_fail(self):
         decisions = self.fx.root / "decisions.json"
@@ -638,6 +654,19 @@ class NativeTargetTests(ExportCase):
                                             tokenizer=MergingTokenizer())
         self.assertEqual(list(rows), ["train_0001:1"])
         self.assertEqual(self.reasons(exclusions), {("train_0001", 0, "token_boundary_mismatch")})
+
+    def test_template_render_failure_excludes_only_that_row(self):
+        class RejectingTokenizer(QwenLikeTokenizer):
+            def apply_chat_template(self, turns, **kwargs):
+                if "REJECTED_BY_TEMPLATE" in turns[1]["content"]:
+                    raise ValueError("template error")
+                return super().apply_chat_template(turns, **kwargs)
+
+        rows, exclusions, _ = self.fit_rows([sample("train_0001", request="Kể chuyện cười"),
+                                             sample("train_0002", request="REJECTED_BY_TEMPLATE")],
+                                            tokenizer=RejectingTokenizer())
+        self.assertEqual(list(rows), ["train_0001:0"])
+        self.assertEqual(self.reasons(exclusions), {("train_0002", 0, "template_render_failed")})
 
     def test_template_that_does_not_extend_the_generation_prompt_is_quarantined(self):
         with self.assertRaises(PipelineError) as caught:
