@@ -19,6 +19,20 @@ class Tensor:
         return self
 
 
+class Ids(list):
+    """Token-ID row double supporting the slicing/tolist calls used by the adapter."""
+
+    def __getitem__(self, item):
+        value = list.__getitem__(self, item)
+        return Ids(value) if isinstance(item, slice) else value
+
+    def tolist(self):
+        return list(self)
+
+    def to(self, *args, **kwargs):
+        return self
+
+
 class Array:
     def astype(self, *_):
         return self
@@ -66,12 +80,17 @@ class AdapterTests(unittest.TestCase):
         self.model = MagicMock()
         self.model.to.return_value = self.model
         self.model.parameters.return_value = [types.SimpleNamespace(numel=lambda: 100)]
-        self.model.generate.return_value = [list(range(12))]
+        # Controlled native IDs: 10 prompt tokens, a 3-token body, then assistant EOS (2).
+        self.prompt_ids = list(range(100, 110))
+        self.model.generate.return_value = [Ids(self.prompt_ids + [7, 8, 9, 2])]
         self.tokenizer = MagicMock()
-        self.tokenizer.apply_chat_template.return_value = "rendered prompt"
-        self.tokenizer.return_value = {"input_ids": Tensor(), "attention_mask": Tensor()}
-        self.tokenizer.decode.return_value = '{"action":"finish"}'
-        self.tokenizer.eos_token_id = 2
+        self.tokenizer.apply_chat_template.side_effect = (
+            lambda *a, tokenize=False, **k: list(self.prompt_ids) if tokenize else "rendered prompt")
+        self.tokenizer.return_value = {"input_ids": list(self.prompt_ids)}
+        self.tokenizer.decode.return_value = "Đã kết thúc."
+        self.tokenizer.convert_tokens_to_ids.return_value = 2
+        self.tokenizer.eos_token_id, self.tokenizer.pad_token_id = 2, 3
+        self.tokenizer.unk_token_id, self.tokenizer.all_special_ids = None, [2, 3]
         self.processor = MagicMock()
         self.processor.return_value = {"input_features": Tensor(), "attention_mask": Tensor()}
         self.processor.batch_decode.return_value = ["Xin chào"]
@@ -83,22 +102,27 @@ class AdapterTests(unittest.TestCase):
             WhisperForConditionalGeneration=types.SimpleNamespace(from_pretrained=MagicMock(return_value=self.model)),
             StoppingCriteria=object, StoppingCriteriaList=lambda values: values)
         self.torch = types.SimpleNamespace(float32="float32", float16="float16",
-                                           inference_mode=contextlib.nullcontext)
+                                           inference_mode=contextlib.nullcontext,
+                                           tensor=lambda rows: Ids(rows[0]), ones_like=lambda value: value)
         self.np = types.SimpleNamespace(float32="float32", frombuffer=lambda *a, **k: Array())
         self.metadata = {"parameter_count": 100, "test_only": True}
         self.input = {"request": "Chào", "context": {}, "history": [],
-                      "available_tools": [], "observations": []}
+                      "available_tools": [{"name": "sys.ask_missing_info", "app": "sys", "kind": "meta",
+                                           "description": "Hỏi thiếu", "parameters": {"type": "object", "properties": {}}}],
+                      "observations": []}
 
     def load(self, limits=None):
         with patch("lifemate.adapters.planner.dependencies", return_value=(self.torch, self.hf, self.np)), \
              patch("lifemate.adapters.planner.metadata", return_value=self.metadata), \
-             patch("lifemate.adapters.planner.ActionConstraint"):
+             patch("lifemate.adapters.planner.NativeConstraint"):
             return LocalPlanner(self.weights, "cpu", limits or Limits())
 
     def test_local_only_load_and_greedy_generation_reuse(self):
         planner = self.load()
         for _ in range(2):
             self.assertEqual(planner.next_action(self.input, 30), '{"action":"finish"}')
+        self.assertNotIn("enable_thinking", self.tokenizer.apply_chat_template.call_args.kwargs)
+        self.assertIn("tools", self.tokenizer.apply_chat_template.call_args.kwargs)
         self.hf.AutoModelForCausalLM.from_pretrained.assert_called_once()
         for loader in (self.hf.AutoConfig, self.hf.AutoTokenizer, self.hf.AutoModelForCausalLM):
             kwargs = loader.from_pretrained.call_args.kwargs
@@ -108,6 +132,27 @@ class AdapterTests(unittest.TestCase):
         self.assertIs(kwargs["do_sample"], False)
         self.assertEqual(kwargs["num_beams"], 1)
         self.assertEqual(kwargs["max_new_tokens"], 512)
+        self.assertEqual((kwargs["eos_token_id"], kwargs["pad_token_id"]), (2, 3))
+
+    def test_native_rejections_never_become_finish_or_dispatch(self):
+        from lifemate.adapters.qwen_native import NativeProposalRejected
+        planner = self.load()
+        cases = (([7, 8, 9], "Đã kết thúc.", "NATIVE_EOS_MISSING", False),      # no EOS
+                 ([7, 8, 9, 3, 3], "Đã kết thúc.", "NATIVE_EOS_MISSING", False),  # padding is not EOS
+                 ([7, 2], "Xong rồi.", "NATIVE_FINAL_INVALID", True))             # unknown final text
+        for body, text, code, repairable in cases:
+            with self.subTest(code=code, body=body):
+                self.model.generate.return_value = [Ids(self.prompt_ids + body)]
+                self.tokenizer.decode.return_value = text
+                with self.assertRaises(NativeProposalRejected) as caught:
+                    planner.next_action(self.input, 30)
+                self.assertEqual(caught.exception.record["code"], code)
+                self.assertIs(caught.exception.record["repairable"], repairable)
+
+    def test_selection_filter_is_rejected_for_native_protocol(self):
+        with patch("lifemate.adapters.planner.dependencies", return_value=(self.torch, self.hf, self.np)),              self.assertRaises(PipelineError) as caught:
+            LocalPlanner(self.weights, "cpu", Limits(), selection_filter=True)
+        self.assertEqual(caught.exception.code, "INPUT_INVALID")
 
     def test_prompt_and_output_budget_reject_before_generate(self):
         planner = self.load(Limits(context_tokens=20, output_tokens=15))

@@ -1,0 +1,57 @@
+{
+  "schema": "lifemate-native-selection-policy-v1",
+  "primary": {
+    "mode": "A",
+    "trusted_metric": "state_gated_tool_call_f1",
+    "fallback_metric": "tool_call_f1",
+    "fallback_status": "provisional"
+  },
+  "controls": {
+    "weighting_selection": {
+      "candidate": "L2",
+      "control": "L1"
+    },
+    "final_promotion": {
+      "control": "L0",
+      "candidates": [
+        "L1",
+        "L2",
+        "L3"
+      ]
+    }
+  },
+  "improvement_epsilon": 1e-06,
+  "tie_epsilon": 1e-06,
+  "tie_order": [
+    "L1",
+    "L2",
+    "L3"
+  ],
+  "tolerances": {
+    "ask_strict_tp_drop": 1,
+    "no_action_tp_drop": 1,
+    "minority_precision_drop": 0.05,
+    "minority_fp_increase_when_precision_undefined": 1,
+    "failed_sources_increase": 1,
+    "timed_out_sources_increase": 1,
+    "g_macro_f1_drop": 0.01,
+    "critical_argument_error_increase": 0,
+    "latency_p95_relative_increase": 0.1
+  },
+  "mandatory_supports": [
+    "primary_A",
+    "g_tool_call_f1",
+    "ask_confusion",
+    "no_action_confusion",
+    "failure_counts",
+    "timeout_counts"
+  ],
+  "optional_guards": [
+    "critical_argument_errors",
+    "latency_p95"
+  ],
+  "missing_metric_handling": {
+    "mandatory": "pending",
+    "optional": "unverified"
+  }
+}

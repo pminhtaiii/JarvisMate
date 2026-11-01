@@ -1,0 +1,43 @@
+{
+  "schema": "lifemate-llm-suite-config-v1",
+  "project_root": "../..",
+  "data_root": "resources/lifemate",
+  "model_dir": "resources/models/qwen3-4b-instruct-2507",
+  "asr_model_dir": null,
+  "split_manifest": ".agent-work/asr-benchmark/split42.json",
+  "fit_asr_cache": null,
+  "validation_asr_cache": null,
+  "output_root": ".agent-work/llm-finetune",
+  "runtime_dir": "tools/train",
+  "native_decoder_proof": null,
+  "selection_policy": "fine-tune-llm/configs/selection-policy.json",
+  "manual_reviews": null,
+  "environment_profile": "windows-py311-cu128",
+  "base_model": {
+    "id": "Qwen/Qwen3-4B-Instruct-2507",
+    "revision": "cdbee75f17c01a7cc42f958dc650907174af0554"
+  },
+  "identities": {
+    "protocol": "qwen3-native-next-action-v1",
+    "prompt": "lifemate-native-p1-vi-v1",
+    "decoder": "lifemate-qwen-native-single-v2",
+    "terminal_policy": "lifemate-native-final-vi-v1",
+    "rejection_schema": "lifemate-native-rejection-v1",
+    "row_schema": "lifemate-native-next-action-row-v2",
+    "catalog_adapter": "lifemate-native-catalog-adapter-v1"
+  },
+  "seeds": {
+    "split": 42,
+    "training": 42,
+    "sampler": 42,
+    "inference": 20261027,
+    "bootstrap": 42
+  },
+  "limits": {
+    "context_tokens": 16384,
+    "output_tokens": 512,
+    "max_steps": 16,
+    "response_bytes": 65536,
+    "timeout_seconds": 30.0
+  }
+}

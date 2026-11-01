@@ -17,3 +17,5 @@ __pycache__/
 .venv/
 .venv-asr-train/
 build/
+# Local LLM SFT resources (data, weights, caches); never commit.
+/resources/

@@ -1,4 +1,9 @@
-"""Token-level action grammar. Tool argument semantics remain owned by ToolEnv."""
+"""Legacy custom action/finish grammar (lifemate-react-v4 era).
+
+Retired for the native protocol: LocalPlanner uses adapters.qwen_native instead, and
+this module must not be wrapped in native tool tags (specs §2.4, O13). It is kept
+only so historical custom-format tests/artifacts remain inspectable.
+"""
 from __future__ import annotations
 
 from importlib.metadata import version

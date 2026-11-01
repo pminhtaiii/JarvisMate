@@ -12,10 +12,20 @@ from .jsonio import digest, read_json, visible_path
 
 
 class RuntimeFactory:
-    def __init__(self, module, config: RunConfig, metadata: JSON, selected_ids: set[str]):
+    def __init__(self, module, config: RunConfig, metadata: JSON, selected_ids: set[str],
+                 catalog: JSON | None = None):
         self.module, self.config, self.metadata = module, config, metadata
         self.selected_ids = selected_ids
+        self.catalog = catalog
         self.opened: set[str] = set()
+
+    def schema_precheck(self, sample, name: str, arguments: JSON) -> JSON:
+        """Pure organizer schema result before dispatch; never a substitute for env.call."""
+        check = getattr(self.module, "schema_error", None)
+        if self.catalog is None or not callable(check):
+            return {"status": "unavailable", "error": None}
+        error = check(name, arguments, self.catalog, {tool["name"] for tool in sample.tools})
+        return {"status": "valid" if error is None else "invalid", "error": error}
 
     def __call__(self, split: str, sample_id: str, root: Path):
         require(split == self.config.split and root.resolve() == self.config.data_root.resolve(),
@@ -70,4 +80,4 @@ def load_runtime(config: RunConfig, dataset: PreparedDataset) -> RuntimeFactory:
     files = sorted(directory.rglob("*.py"))
     fingerprints = {str(p.relative_to(directory)).replace("\\", "/"): digest(p) for p in files}
     return RuntimeFactory(module, config, {"directory": str(directory), "source_sha256": fingerprints},
-                          {sample.id for sample in dataset.samples})
+                          {sample.id for sample in dataset.samples}, dataset.catalog)

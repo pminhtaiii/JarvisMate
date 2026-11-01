@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-import json
 import time
 
 from .adapters.common import inference_session
+from .adapters.qwen_native import MAX_REPAIRS, NativeProposalRejected, fingerprint, rejection_record
 from .contracts import (ASR, Deadline, EnvironmentFactory, JSON, Limits,
                         PipelineError, Planner, SampleInput, SampleOutcome, TraceSink)
 from .dataset import prepare_request
@@ -61,56 +61,73 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
             env = environment_factory(split, sample.id, data_root)
             deadline.remaining()
             allowed = {t["name"] for t in sample.tools}
+            precheck = getattr(environment_factory, "schema_precheck", None)
             observations: list[JSON] = []
-            last_rejected, repeated_rejections = None, 0
+            rejections = 0
             last_failure, repeated_failures = None, 0
             status, reason = "completed", "finish"
             for steps in range(1, limits.max_steps + 1):
                 stage = "planner"
                 started = clock()
+                rejected = None
                 try:
                     raw = planner.next_action(planner_input(prepared, observations), deadline.remaining())
+                except NativeProposalRejected as exc:
+                    rejected, raw = exc, None
                 finally:
                     for detail in getattr(planner, "last_decision_details", ()):
                         trace.emit("planner_selection", step=steps, payload=detail)
+                    generation = getattr(planner, "last_generation", None)
+                    if generation:
+                        trace.emit("native_generation", step=steps, payload={"text": generation.get("text")},
+                                   **{k: v for k, v in generation.items() if k != "text"})
                 timings["planner"] += clock() - started
                 deadline.remaining()
-                # Bound raw output before even debug tracing it.
-                if not isinstance(raw, str) or len(raw.encode("utf-8")) > limits.response_bytes:
-                    raise PipelineError("PLANNER_ERROR", "Planner output is not bounded text", stage)
-                trace.emit("planner_action", step=steps, payload={"response": raw})
-                unavailable = False
-                try:
-                    action = parse_action(raw, limits.response_bytes)
-                    if action["action"] == "call" and action["name"] not in allowed:
-                        unavailable = True
-                        raise ValueError("Tool unavailable in this sample")
-                except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
-                    reason = (f"Invalid JSON: {exc.msg}." if isinstance(exc, json.JSONDecodeError)
-                              else "Invalid action shape or unavailable tool name.")
-                    if unavailable:
-                        reason = ("The top-level name is not in available_tools. Copy an exact name from "
-                                  "available_tools into the top-level name field. Put that tool's parameters "
-                                  "directly in arguments, without nesting another name/arguments call.")
-                    feedback = {"step": steps, "kind": "validation_rejection",
-                                "code": "UNAVAILABLE_TOOL" if unavailable else "INVALID_ACTION",
-                                "message": reason + " No tool was executed. Correct the previous response; "
-                                "return exactly one call/finish JSON object, with balanced braces and no extra text.",
-                                "rejected_response": raw[:4096], "response_truncated": len(raw) > 4096}
+                if rejected is None:
+                    # Bound raw output before even debug tracing it.
+                    if not isinstance(raw, str) or len(raw.encode("utf-8")) > limits.response_bytes:
+                        raise PipelineError("PLANNER_ERROR", "Planner output is not bounded text", stage)
+                    trace.emit("planner_action", step=steps, payload={"response": raw})
+                    try:
+                        action = parse_action(raw, limits.response_bytes)
+                        if action["action"] == "call" and action["name"] not in allowed:
+                            rejected = ("NATIVE_UNAVAILABLE_TOOL", raw)
+                    except (ValueError, TypeError, UnicodeError, RecursionError):
+                        rejected = ("NATIVE_JSON_INVALID", raw)
+                if rejected is not None:
+                    if isinstance(rejected, NativeProposalRejected):
+                        record, identity = dict(rejected.record, step=steps), rejected.full_output_sha256
+                    else:
+                        # A compatibility planner returned a complete internal string; no
+                        # native stop evidence exists, so stop metadata is unknown (null).
+                        code, text = rejected
+                        record = rejection_record(steps, code, text, stop_reason=None,
+                                                  eos_observed=None, repairable=True)
+                        identity = fingerprint(code, text)
                     trace.emit("validation_result", step=steps, accepted=False,
-                               scope="action_shape_and_eligibility", payload=feedback)
-                    observations.append(feedback)
-                    repeated_rejections = repeated_rejections + 1 if raw == last_rejected else 1
-                    last_rejected = raw
-                    if repeated_rejections >= 3:
-                        raise PipelineError("PLANNER_FORMAT", "Planner repeated the same invalid action three times", "planner")
+                               scope="native_shape_and_eligibility", code=record["code"],
+                               output_fingerprint=identity, payload=record)
+                    if not record["repairable"]:
+                        code = "OUTPUT_LIMIT" if record["code"] == "NATIVE_TRUNCATED" else "PLANNER_FORMAT"
+                        raise PipelineError(code, f"Unrepairable native proposal: {record['code']}", "planner")
+                    # A third invalid proposal (identical or not) exceeds the total cap.
+                    rejections += 1
+                    if rejections > MAX_REPAIRS:
+                        raise PipelineError("PLANNER_FORMAT", "Native repair budget exhausted", "planner")
+                    # Prior actual calls/results stay intact; nothing was dispatched.
+                    observations.append({"step": steps, "kind": "native_rejection", "record": record})
                     continue
-                last_rejected, repeated_rejections = None, 0
                 trace.emit("validation_result", step=steps, accepted=True, action=action["action"],
-                           scope="action_shape_and_eligibility",
+                           scope="native_shape_and_eligibility",
                            arguments_schema="delegated_to_env.call" if action["action"] == "call" else "not_applicable")
                 if action["action"] == "finish":
                     break
+                if precheck is not None:
+                    # Pure organizer schema check; records a violation but never replaces env.call.
+                    checked = precheck(sample, action["name"], action["arguments"])
+                    trace.emit("validation_result", step=steps, accepted=checked["status"] != "invalid",
+                               scope="pure_schema_precheck", status=checked["status"], dispatch="env.call",
+                               error=None if checked["error"] is None else str(checked["error"])[:500])
                 stage = "dispatch"
                 trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
                 deadline.remaining()

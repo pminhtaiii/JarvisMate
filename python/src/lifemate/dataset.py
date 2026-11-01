@@ -93,10 +93,11 @@ def audio_path(base: Path, value, required: bool) -> Path:
     return result
 
 
-def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> SampleInput:
-    sample_id = safe_id(row["id"])
-    base = (config.data_root / config.split).resolve()
-    ctx = row.get("context")
+def visible_context(ctx, specs: dict[str, JSON]) -> tuple[JSON, list[str]]:
+    """Pure whitelist of planner-visible context and exact permitted tool order.
+
+    Shared by inference preflight and the SFT exporter; reads no files or labels.
+    """
     require(isinstance(ctx, dict), "Missing context")
     for name in ("current_time", "timezone"):
         text(ctx.get(name), name)
@@ -125,6 +126,17 @@ def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> Sa
             names.append(name)
     if "sys.ask_missing_info" not in names:
         names.append("sys.ask_missing_info")
+    context = {"current_time": ctx["current_time"], "timezone": ctx["timezone"],
+               "location": {k: loc[k] for k in ("lat", "lng")},
+               "user_profile": {k: profile[k] for k in ("name", "home_address", "work_address", "city")},
+               "installed_apps": {app: {"tools": list(info["tools"])} for app, info in installed.items()}}
+    return context, names
+
+
+def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> SampleInput:
+    sample_id = safe_id(row["id"])
+    base = (config.data_root / config.split).resolve()
+    context, names = visible_context(row.get("context"), specs)
     audio_mode = config.input_mode == "audio"
     audio = audio_path(base, row.get("audio"), audio_mode)
     history = row.get("history")
@@ -155,10 +167,6 @@ def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> Sa
     require(len(history) % 2 == 0, "History must end with assistant")
     # Resolve the path and check existence only. The original runtime owns reading it.
     contained(base, f"{config.split}_environment/{sample_id}/state.json", allow_environment=True)
-    context = {"current_time": ctx["current_time"], "timezone": ctx["timezone"],
-               "location": {k: loc[k] for k in ("lat", "lng")},
-               "user_profile": {k: profile[k] for k in ("name", "home_address", "work_address", "city")},
-               "installed_apps": {app: {"tools": list(info["tools"])} for app, info in installed.items()}}
     return SampleInput(sample_id, context, tuple(normalized),
                        tuple(copy.deepcopy(specs[n]) for n in names), config.input_mode,
                        audio, None if audio_mode else text(row.get("audio_text"), "current transcript"))
