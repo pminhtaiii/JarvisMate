@@ -656,17 +656,21 @@ class NativeTargetTests(ExportCase):
         self.assertEqual(self.reasons(exclusions), {("train_0001", 0, "token_boundary_mismatch")})
 
     def test_template_render_failure_excludes_only_that_row(self):
-        class RejectingTokenizer(QwenLikeTokenizer):
-            def apply_chat_template(self, turns, **kwargs):
-                if "REJECTED_BY_TEMPLATE" in turns[1]["content"]:
-                    raise ValueError("template error")
-                return super().apply_chat_template(turns, **kwargs)
+        # The generation prompt renders first; the target-appended conversation ends in an assistant turn.
+        for render, failing in (("generation prompt", lambda turns: True),
+                                ("target-appended conversation", lambda turns: turns[-1]["role"] == "assistant")):
+            class RejectingTokenizer(QwenLikeTokenizer):
+                def apply_chat_template(self, turns, **kwargs):
+                    if "REJECTED_BY_TEMPLATE" in turns[1]["content"] and failing(turns):
+                        raise ValueError("template error")
+                    return super().apply_chat_template(turns, **kwargs)
 
-        rows, exclusions, _ = self.fit_rows([sample("train_0001", request="Kể chuyện cười"),
-                                             sample("train_0002", request="REJECTED_BY_TEMPLATE")],
-                                            tokenizer=RejectingTokenizer())
-        self.assertEqual(list(rows), ["train_0001:0"])
-        self.assertEqual(self.reasons(exclusions), {("train_0002", 0, "template_render_failed")})
+            with self.subTest(render=render):
+                rows, exclusions, _ = self.fit_rows([sample("train_0001", request="Kể chuyện cười"),
+                                                     sample("train_0002", request="REJECTED_BY_TEMPLATE")],
+                                                    tokenizer=RejectingTokenizer())
+                self.assertEqual(list(rows), ["train_0001:0"])
+                self.assertEqual(self.reasons(exclusions), {("train_0002", 0, "template_render_failed")})
 
     def test_template_that_does_not_extend_the_generation_prompt_is_quarantined(self):
         with self.assertRaises(PipelineError) as caught:
