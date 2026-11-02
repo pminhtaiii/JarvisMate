@@ -8,6 +8,7 @@ from asr.pretrained.models import read_samples
 from asr.pretrained.data import inspect_audio
 from lifemate.jsonio import digest, visible_path
 from .storage import read
+from .relocation import resolve_path
 
 
 def load_noises(manifest: Path | None, data_root: Path) -> list[dict]:
@@ -17,7 +18,7 @@ def load_noises(manifest: Path | None, data_root: Path) -> list[dict]:
     if not isinstance(entries, list) or not entries:
         raise ValueError("Empty noise manifest")
     for entry in entries:
-        path = Path(entry["path"]).resolve()
+        path = resolve_path(entry["path"]).resolve()
         visible_path(path)
         if path.is_relative_to(data_root.resolve()) or not entry.get("license"):
             raise ValueError("Noise must be licensed and outside the competition dataset")

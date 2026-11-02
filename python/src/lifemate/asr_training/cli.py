@@ -21,7 +21,7 @@ def parser():
     prepare_model.add_argument("--revision", default="main")
     prepare = commands.add_parser("prepare", help="Verify existing split/audio and create immutable suite; no training")
     prepare.add_argument("--suite-dir", type=Path, required=True)
-    prepare.add_argument("--data-root", type=Path, default=REPO / "../train+public_test/train+public_test")
+    prepare.add_argument("--data-root", type=Path, default=REPO / "DATA_JarvisMate/train+public_test")
     prepare.add_argument("--split-manifest", type=Path, default=REPO / ".agent-work/asr-benchmark/split42.json")
     prepare.add_argument("--model", type=Path, default=REPO / ".agent-work/asr-finetune/models/phowhisper-large")
     prepare.add_argument("--slot-annotations", type=Path)

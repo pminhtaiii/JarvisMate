@@ -1,0 +1,23 @@
+{
+  "schema": "lifemate-llm-training-v1",
+  "method": "lora",
+  "precision": "bf16",
+  "rank": 8,
+  "alpha": 16,
+  "dropout": 0.05,
+  "seed": 42,
+  "sampler_seed": 42,
+  "view_seed": 43,
+  "max_updates": 500,
+  "accumulation": 16,
+  "lr": 0.0001,
+  "betas": [
+    0.9,
+    0.999
+  ],
+  "eps": 1e-08,
+  "weight_decay": 0.01,
+  "warmup_updates": 25,
+  "save_every": 100,
+  "p_noisy": 0.5
+}

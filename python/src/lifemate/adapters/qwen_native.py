@@ -248,10 +248,10 @@ def parse_native_text(text: str, allowed: Sequence[str]) -> NativeParse:
 def classify_stop(ids: Sequence[int], *, eos_id: int, max_new_tokens: int,
                   deadline_expired: bool = False) -> tuple[str, bool]:
     """(stop_reason, eos_observed) from raw generated IDs, before any decoding."""
+    if deadline_expired:
+        return "deadline", bool(ids and ids[-1] == eos_id)
     if ids and ids[-1] == eos_id:
         return "eos", True
-    if deadline_expired:
-        return "deadline", False
     if len(ids) >= max_new_tokens:
         return "max_tokens", False
     return "unknown", False
@@ -286,6 +286,8 @@ def parse_native_ids(ids: Sequence[int], *, eos_id: int, pad_id: int | None,
 
     if internal_error:
         return result(_reject("NATIVE_INTERNAL_ERROR", internal_error, text))
+    if deadline_expired:
+        return result(_reject("NATIVE_TRUNCATED", "sample deadline expired, including after EOS", text))
     if len(text.encode("utf-8")) > response_bytes:
         return result(_reject("NATIVE_TRUNCATED", "response exceeds byte bound", text))
     if not eos:
@@ -406,6 +408,68 @@ def native_decoder_parser(tools: list[dict], config):
     """LMFE union of one wrapped call per tool/schema branch and the exact final."""
     from lmformatenforcer import JsonSchemaParser
     from lmformatenforcer.characterlevelparser import SequenceParser, StringParser, UnionParser
+    from functools import cached_property
+
+    class NativeUnion(UnionParser):
+        @cached_property
+        def _allowed_characters(self):
+            # add_character returns new compositions. Reusing this immutable
+            # state's alphabet avoids repeatedly unioning large Unicode sets.
+            chunks = list(dict.fromkeys(p.get_allowed_characters() for p in self.parsers))
+            return chunks[0] if len(chunks) == 1 else ''.join(set(''.join(chunks)))
+
+        def get_allowed_characters(self):
+            return self._allowed_characters
+
+        def add_character(self, character):
+            next_parsers = [p.add_character(character) for p in self.parsers if character in p.get_allowed_characters()]
+            return next_parsers[0] if len(next_parsers) == 1 else NativeUnion(next_parsers)
+
+        def shortcut_key(self):
+            keys = [p.shortcut_key() for p in self.parsers]
+            if keys and all(isinstance(k, tuple) and len(k) == 4 and k[0] == "json_freetext" for k in keys):
+                intervals = [(max(0, k[2] - k[1]), k[3] - k[1]) for k in keys]
+                # The union of overlapping free-string length intervals is one interval.
+                # This preserves both x-one-of branches, including both-complete groups.
+                if max(lo for lo, _ in intervals) <= min(hi for _, hi in intervals):
+                    return ("json_freetext", 0, min(lo for lo, _ in intervals), max(hi for _, hi in intervals))
+            return super().shortcut_key()
+
+    class NativeSequence(SequenceParser):
+        """Preserve LMFE's JSON free-text shortcut inside a non-ending native body.
+
+        Stock SequenceParser drops the shortcut whenever a closing wrapper remains.
+        That expands the entire vocabulary tree at every free-text token. Delegation
+        is safe only while the first parser cannot end, so no suffix branch is live.
+        The character language is exactly the stock sequence language.
+        """
+        @cached_property
+        def _allowed_characters(self):
+            chunks = []
+            for parser in self.parsers:
+                chunks.append(parser.get_allowed_characters())
+                if not parser.can_end():
+                    break
+            # The common case has one live child; no Unicode set is needed.
+            return chunks[0] if len(chunks) == 1 else ''.join(set(''.join(chunks)))
+
+        def get_allowed_characters(self):
+            return self._allowed_characters
+
+        def add_character(self, character):
+            legal = []
+            for index, parser in enumerate(self.parsers):
+                if character in parser.get_allowed_characters():
+                    rest = [parser.add_character(character), *self.parsers[index + 1:]]
+                    legal.append(rest[0] if len(rest) == 1 else NativeSequence(rest))
+                if not parser.can_end():
+                    break
+            return legal[0] if len(legal) == 1 else NativeUnion(legal)
+
+        def shortcut_key(self):
+            if len(self.parsers) == 1 or not self.parsers[0].can_end():
+                return self.parsers[0].shortcut_key()
+            return None
 
     branches = [StringParser(FINAL_CONTENT)]
     for tool in tools:
@@ -415,9 +479,9 @@ def native_decoder_parser(tools: list[dict], config):
             if not schema["properties"]:
                 branches.append(StringParser(prefix + "{}" + CALL_SUFFIX_TEXT))
             else:
-                branches.append(SequenceParser([StringParser(prefix), JsonSchemaParser(schema, config=config),
+                branches.append(NativeSequence([StringParser(prefix), JsonSchemaParser(schema, config=config),
                                                 StringParser(CALL_SUFFIX_TEXT)]))
-    return UnionParser(branches)
+    return NativeUnion(branches)
 
 
 class GuardedPrefix:
@@ -459,6 +523,9 @@ class NativeConstraint:
         from lmformatenforcer import CharacterLevelParserConfig
         from lmformatenforcer.integrations.transformers import (
             build_token_enforcer_tokenizer_data, build_transformers_prefix_allowed_tokens_fn)
+
+        if version("lm-format-enforcer") != DECODER_CONFIG["required_version"]:
+            raise ValueError("Native decoder backend version differs from the frozen pin")
 
         self.build_prefix = build_transformers_prefix_allowed_tokens_fn
         self.config = CharacterLevelParserConfig(

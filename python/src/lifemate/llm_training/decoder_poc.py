@@ -10,6 +10,8 @@ missing resources produce failed/blocked records, never a fallback decoder.
 from __future__ import annotations
 
 import copy
+import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -21,9 +23,9 @@ from ..native_tools import adapt_tools
 from ..prompting import SYSTEM, current_user_message
 from .config import CATALOG_SHA256, LIMITS, content_hash
 from .data import load_catalog
-from .storage import new_directory, now, write_json, write_jsonl
+from .storage import file_hash, new_directory, now, write_json, write_jsonl
 from .tokenization import (PROOF_SCHEMA, TokenizationError, backend_version, flag_equivalent,
-                           proof_binding, supervised)
+                           proof_binding, proof_packages, supervised)
 
 FIXTURE_TOOLS = ("banking.get_balance", "banking.transfer", "alarm.list", "notes.create", "ewallet.transfer",
                  "food_delivery.place_order", "bill_payment.pay", "sys.ask_missing_info")
@@ -80,11 +82,7 @@ class Sequence(list):
 
 
 def _sequence(ids):
-    try:
-        import torch  # LMFE's transformers integration receives tensors during generate.
-        return torch.tensor(ids)
-    except ImportError:
-        return Sequence(ids)
+    return Sequence(ids)  # LMFE needs .tolist(); CPU proof never needs tensors/CUDA.
 
 
 def walk(function: Callable, prompt: list[int], completion: list[int], eos: int) -> dict:
@@ -94,7 +92,13 @@ def walk(function: Callable, prompt: list[int], completion: list[int], eos: int)
     ``eos_gated``: EOS was permitted only after the complete body (never mid-response).
     """
     transitions, rejected_at, early_eos = [], None, None
+    started = time.monotonic()
     for index, token in enumerate(completion):
+        if time.monotonic() - started > 60:
+            return {"transitions": transitions, "rejected_at": rejected_at, "early_eos_at": early_eos,
+                    "sequence_allowed": False, "eos_gated": early_eos is None, "accepted": False,
+                    "blocked_reason": "CPU token-walk exceeded 60 seconds; no language fallback",
+                    "elapsed_seconds": time.monotonic() - started}
         allowed = set(function(0, _sequence(prompt + completion[:index])))
         entry = {"index": index, "token": token, "allowed": token in allowed, "eos_allowed": eos in allowed}
         transitions.append(entry)
@@ -123,6 +127,7 @@ def run_cases(tokenizer, constraint_factory: Callable, catalog_tools: dict[str, 
 
     results = []
     for case in fixtures():
+        print(f"CPU decoder proof: {case['case']}", file=sys.stderr, flush=True)
         outcome = {"case": case["case"], "group": case["group"], "kind": case["kind"], "passed": False}
         try:
             messages = base + case.get("prefix", [])
@@ -152,10 +157,11 @@ def run_cases(tokenizer, constraint_factory: Callable, catalog_tools: dict[str, 
                              else parse.kind == "rejected" and parse.code == case["expected_code"])
                 # The decoder must refuse the sequence; the parser never salvages a first call.
                 outcome.update(walk=walked, observed={"kind": parse.kind, "code": parse.code},
-                               passed=not walked["sequence_allowed"] and parser_ok)
+                               passed=not walked["sequence_allowed"] and parser_ok and not walked.get("blocked_reason"))
         except (TokenizationError, ValueError, KeyError) as exc:
             outcome.update(error=f"{type(exc).__name__}: {exc}"[:300])
         results.append(outcome)
+        print(f"CPU decoder proof: {case['case']} {'passed' if outcome['passed'] else 'failed'}", file=sys.stderr, flush=True)
     results += boundary_cases(tokenizer, decode, eos, pad, allowed_names)
     results += backend_failure_cases(eos, decode, allowed_names)
     flags = flag_equivalent(tokenizer, base, native_tools)
@@ -170,6 +176,7 @@ def boundary_cases(tokenizer, decode, eos, pad, allowed) -> list[dict]:
         ("8-eos-at-output-boundary", body + [eos], dict(max_new_tokens=len(body) + 1), "final", None),
         ("8-token-cap-without-eos", body, dict(max_new_tokens=len(body)), "rejected", "NATIVE_TRUNCATED"),
         ("8-deadline-stop", body, dict(max_new_tokens=512, deadline_expired=True), "rejected", "NATIVE_TRUNCATED"),
+        ("8-eos-after-deadline", body + [eos], dict(max_new_tokens=512, deadline_expired=True), "rejected", "NATIVE_TRUNCATED"),
         ("8-unknown-stop", body, dict(max_new_tokens=512), "rejected", "NATIVE_EOS_MISSING"),
         ("8-endoftext-is-not-eos", body + [end_of_text], dict(max_new_tokens=512), "rejected", None),
     ]
@@ -213,6 +220,9 @@ def run_proof(output_root: Path, model_dir: Path | None, catalog_path: Path, *,
                 "backend_version": backend_version(), "fixtures_sha256": content_hash(
                     [{k: v for k, v in case.items()} for case in fixtures()]),
                 "catalog_sha256": None, "scope": "decoder_poc", "weights_loaded": False, "gpu_used": False}
+    manifest["package_versions"] = proof_packages()
+    if tokenizer_loader is not None and manifest["package_versions"]["transformers"] is None:
+        manifest["package_versions"]["transformers"] = "4.57.1"  # Controlled injected tokenizer fixture only.
     status, reason, results = "blocked", None, []
     try:
         manifest["catalog_sha256"] = digest(catalog_path)
@@ -223,6 +233,8 @@ def run_proof(output_root: Path, model_dir: Path | None, catalog_path: Path, *,
         else:
             _, specs = load_catalog(catalog_path)
             if tokenizer_loader is None:
+                from .model_identity import snapshot_identity
+                snapshot_identity(model_dir, weights=False)  # Pin acquisition and tokenizer bytes; never open weights.
                 from .tokenization import load_tokenizer as tokenizer_loader
             tokenizer = tokenizer_loader(model_dir)
             results = run_cases(tokenizer, constraint_factory, specs)
@@ -232,9 +244,11 @@ def run_proof(output_root: Path, model_dir: Path | None, catalog_path: Path, *,
         reason = f"required CPU tokenizer/backend package unavailable: {exc.name}"
     except Exception as exc:  # Record the blocker with identities instead of a fake pass.
         status, reason = "failed", f"{type(exc).__name__}: {exc}"[:300]
-    manifest_hash = write_json(directory / "manifest.json", manifest)
     write_jsonl(directory / "cases.jsonl", [{k: v for k, v in r.items() if k != "walk"} for r in results])
     write_json(directory / "token-prefix-checks.json", {r["case"]: r.get("walk") for r in results})
+    manifest["artifact_hashes"] = {name: file_hash(directory / name)
+                                   for name in ("cases.jsonl", "token-prefix-checks.json")}
+    manifest_hash = write_json(directory / "manifest.json", manifest)
     outcome = {"schema": PROOF_SCHEMA, "status": status, "reason": reason, "manifest_sha256": manifest_hash,
                "cases": len(results), "passed_cases": sum(1 for r in results if r["passed"]),
                "groups_covered": sorted({r["group"] for r in results}), "recorded_at": now()}

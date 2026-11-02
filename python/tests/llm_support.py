@@ -232,17 +232,18 @@ class SuiteFixture:
         (self.model / "tokenizer_config.json").write_text('{"chat_template": "controlled"}', encoding="utf-8")
         self.proof = None
         if proof:
-            self.proof = self.root / ".agent-work" / "llm-finetune" / "decoder-poc" / "controlled"
-            self.proof.mkdir(parents=True)
-            manifest_hash = write_json(self.proof / "manifest.json", {
-                "schema": PROOF_SCHEMA, "proof_id": "controlled-test-proof", "binding": proof_binding(self.model),
-                "backend_version": backend_version()})
-            write_json(self.proof / "outcome.json", {"schema": PROOF_SCHEMA, "status": "passed",
-                                                     "manifest_sha256": manifest_hash})
+            from lifemate.llm_training.decoder_poc import run_proof
+            from unittest.mock import patch
+            catalog = REPO / "tools" / "train_tools_catalog.json"
+            with patch("lifemate.llm_training.decoder_poc.CATALOG_SHA256", digest(catalog)), \
+                    patch("lifemate.llm_training.decoder_poc.backend_version", return_value="0.11.3"):
+                result = run_proof(self.root / ".agent-work/llm-finetune/decoder-poc", self.model, catalog,
+                                   tokenizer_loader=lambda _: FakeQwenTokenizer(), constraint_factory=proof_constraint)
+            self.proof = Path(result["directory"])
         config = {"schema": SUITE_CONFIG_SCHEMA, "project_root": "..", "data_root": "resources/data",
                   "model_dir": "resources/model", "split_manifest": "resources/split42.json",
                   "output_root": ".agent-work/llm-finetune", "runtime_dir": str(REPO / "tools" / "train"),
-                  "native_decoder_proof": ".agent-work/llm-finetune/decoder-poc/controlled" if proof else None,
+                  "native_decoder_proof": self.proof.relative_to(self.root).as_posix() if proof else None,
                   "base_model": BASE_MODEL, "identities": IDENTITIES, "seeds": SEEDS, "limits": LIMITS}
         (self.root / "configs").mkdir()
         self.config_path = self.root / "configs" / "suite.json"
@@ -251,3 +252,21 @@ class SuiteFixture:
 
     def close(self):
         self.temp.cleanup()
+
+
+def proof_constraint(tokenizer):
+    from lifemate.llm_training.decoder_poc import fixtures
+    from lifemate.adapters.qwen_native import call_completion_text, FINAL_CONTENT
+    texts = []
+    for case in fixtures():
+        if case["kind"] == "valid":
+            calls = case["target"].get("tool_calls")
+            texts.append(call_completion_text(calls[0]["function"]["name"], calls[0]["function"]["arguments"])
+                         if calls else FINAL_CONTENT)
+    return WhitelistConstraint(tokenizer, texts)
+
+
+def accept_fixture(config, suite):
+    from lifemate.llm_training.acceptance import audit_corpus, native_acceptance
+    native_acceptance(config, suite, FakeQwenTokenizer())
+    return audit_corpus(config, suite, FakeQwenTokenizer())

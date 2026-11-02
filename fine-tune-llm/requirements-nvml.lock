@@ -1,0 +1,3 @@
+# Optional measurement provider; original 37-package lock remains unchanged.
+# Official metadata: https://pypi.org/pypi/nvidia-ml-py/13.595.45/json
+nvidia-ml-py @ https://files.pythonhosted.org/packages/8a/24/fc256107d23597fa33d319505ce77160fa1a2349c096d01901ffc7cb7fc4/nvidia_ml_py-13.595.45-py3-none-any.whl --hash=sha256:b65a7977f503d56154b14d683710125ef93594adb63fbf7e559336e3318f1376

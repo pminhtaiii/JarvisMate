@@ -1,13 +1,18 @@
 # Tasks: Native Qwen3-4B Next-Action SFT
 
+**Implementation update 2026-11-01:** source and scoped self-review/evidence are
+recorded in [HANDOFF.md](HANDOFF.md). The planning text below is retained as the
+task/acceptance contract; open checkboxes do not imply absent source. Real model,
+corpus and deployment acceptance remain separately unrun.
+
 **Project:** JarvisMate / LifeMate 2026. **Date:** 2026-11-01.
-**Status:** planned; all implementation and execution items below remain open.
+**Status:** source authored/self-reviewed; scoped execution and remaining acceptance
+are recorded in HANDOFF.md. Checkboxes below remain open for explicit review.
 **References:** [specs.md](specs.md), version 1.3, and [plan.md](plan.md).
-The specification is authoritative. New paths/commands are future deliverables.
-This revision adopts the approved native Qwen model-facing protocol in the design.
-It selects Vietnamese P1/final wording and refines specs/plan/tasks only, not
-runtime/source or executed/hash acceptance. Existing LL/RV checkboxes remain open.
-No main merge, PR reopening or experiment run is requested.
+The specification is authoritative. This checklist defines the approved native
+Qwen protocol and Vietnamese P1/final contracts. The original documentation-only
+stage has been followed by separately authorized implementation and scoped checks;
+this does not grant permission for actual experiments, a main merge or PR reopening.
 
 ## How to use this checklist
 
@@ -381,9 +386,9 @@ local GPU handoff when the user's chosen workflow is to finish source first.
   noisy coverage and A30 hard-deadline acceptance still need actual evidence.
   These do not require redesigning the agreed architecture or adding experiments.
 
-The native specs/plan/tasks are synchronized in this documentation change. The
-original review reports, runtime/source, models and datasets are unchanged. The
-branch remains fine-tune-llm; no merge into main or PR reopening is requested.
+The original review reports, model assets and datasets are unchanged. Runtime/source
+implementation and scoped evidence are listed in HANDOFF.md. The branch remains
+fine-tune-llm; no merge into main or PR reopening is requested.
 LL046–LL048 final delivery never becomes an early transfer/probe prerequisite.
 
 The receiving teammate records measured evidence in ignored run artifacts and links

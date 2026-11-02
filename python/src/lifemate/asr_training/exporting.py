@@ -10,6 +10,7 @@ from .orchestration import job, checked
 from .config import binding
 from .storage import code_identity, environment
 from .checkpoints import load as validate_checkpoint
+from .relocation import resolve_path
 
 
 def export(suite: dict, config: dict, hardware: dict, checkpoint: Path,
@@ -27,7 +28,7 @@ def export(suite: dict, config: dict, hardware: dict, checkpoint: Path,
     try:
         checked(session.receive(config["load_timeout_seconds"]), ready=True)
         for reference in reference_rows[:3]:
-            response = checked(session.request(audio_asset(Path(suite["data_root"])/"train", reference["audio"]),
+            response = checked(session.request(audio_asset(resolve_path(suite["data_root"])/"train", reference["audio"]),
                                                config["timeout_seconds"]))
             if response["prediction"] != reference["prediction"]:
                 raise ValueError("Export round-trip text differs from the same-dtype merged adapter evaluation")

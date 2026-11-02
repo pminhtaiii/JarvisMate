@@ -29,6 +29,10 @@ CORE_FILES = ("suite.json", "models.json", "prompt-contract.json", "native-forma
               "data/quarantine.jsonl", "data/token-audit.json", "data/row-index.json")
 
 
+def foundation_code():
+    return {name: file_hash(Path(__file__).with_name(name)) for name in ("data.py", "audit.py", "corpus.py", "storage.py")}
+
+
 class PreparationError(ValueError):
     def __init__(self, status: str, reason: str, **detail):
         super().__init__(reason)
@@ -143,6 +147,7 @@ def prepare(config: SuiteConfig, suite_dir: Path, *, draft: bool = False,
         "execution_metadata": {"resolved_paths": {k: None if v is None else str(v) for k, v in config.paths.items()}
                                | {"project_root": str(config.project_root)}},
         "identities": identities, "seeds": SEEDS, "limits": LIMITS, "experiments": EXPERIMENTS,
+        "foundation_code": foundation_code(),
         "decoder_proof": proof, "source": source_provenance(config.project_root),
         "counts": {"rows": counts["rows"], "by_status": counts["by_status"]}})
     if not draft:
@@ -160,6 +165,8 @@ def load_suite(suite_dir: Path) -> dict:
         raise PreparationError("failed_preflight", "Suite is missing, unsealed or modified") from exc
     if suite.get("schema") != SUITE_SCHEMA or suite.get("status") != "sealed":
         raise PreparationError("failed_preflight", "Only sealed native suites are usable")
+    if suite.get("foundation_code") != foundation_code():
+        raise PreparationError("failed_preflight", "Foundation code changed; re-audit/prepare a new suite")
     if suite["identities"]["protocol"] != native_identities()["protocol"] or suite["identities"]["prompt_sha256"] != PROMPT_HASH:
         raise PreparationError("failed_preflight", "Suite was prepared for a different native protocol/P1")
     return {"suite": suite, "seal": seal_record, "partition": read_json(suite_dir / "data" / "partition.json"),

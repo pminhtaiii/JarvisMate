@@ -48,7 +48,8 @@ EXPERIMENTS = {
 MODES = ("G", "A")
 REQUIRED_PATHS = ("data_root", "model_dir", "split_manifest", "output_root", "runtime_dir")
 OPTIONAL_PATHS = ("asr_model_dir", "fit_asr_cache", "validation_asr_cache", "native_decoder_proof",
-                  "selection_policy", "manual_reviews")
+                  "selection_policy", "manual_reviews", "environment_lock", "resource_qualification", "latency_decision",
+                  "native_acceptance")
 PATH_KEYS = REQUIRED_PATHS + OPTIONAL_PATHS
 CONFIG_KEYS = frozenset({"schema", "project_root", "environment_profile", "base_model", "identities",
                          "seeds", "limits", *PATH_KEYS})
@@ -60,6 +61,19 @@ class ConfigError(ValueError):
 
 def content_hash(value: Any) -> str:
     return hashlib.sha256(dumps(value).encode("utf-8")).hexdigest()
+
+
+def load_experiment(path: Path, experiment: str) -> dict:
+    visible_path(path)
+    raw = loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(raw, dict) or set(raw) != {"schema", "experiment", "initialization", "training_settings", "weights"}
+            or raw["schema"] != "lifemate-llm-experiment-v1" or raw["experiment"] != experiment
+            or raw["initialization"] != "independent_pinned_pretrained" or experiment not in EXPERIMENTS
+            or raw["weights"] != EXPERIMENTS[experiment]["weights"]
+            or (experiment == "L0" and raw["training_settings"] is not None)
+            or (experiment != "L0" and not isinstance(raw["training_settings"], str))):
+        raise ConfigError("Experiment config must preserve independent initialization and the declared treatment")
+    return raw
 
 
 def native_identities() -> dict:
@@ -156,7 +170,8 @@ def config_from_suite(suite: dict, *, project_root: Path | None = None,
     After relocation, pass root overrides; portable content identity is unchanged.
     """
     resolved = suite["execution_metadata"]["resolved_paths"]
-    raw = dict(suite["config"]) | {key: resolved.get(key) for key in PATH_KEYS}
+    raw = dict(suite["config"]) | {key: (suite["portable_paths"].get(key)
+        if project_root is not None and isinstance(suite["portable_paths"].get(key), str) else resolved.get(key)) for key in PATH_KEYS}
     raw["project_root"] = str(project_root) if project_root is not None else resolved.get("project_root") or "."
     root = project_root or Path(resolved.get("project_root") or ".")
     return resolve_config(raw, root, project_root=project_root or root, overrides=overrides)

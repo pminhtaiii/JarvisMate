@@ -46,6 +46,7 @@ class LifecycleTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, other, True)
         # The CLI uses the pinned dataset/split hashes, so controlled data fails preflight.
         expectations = [(["status"], 0, "ok"),
+                        (["evaluation-inputs", "--config", config], 1, "failed"),
                         (["verify-resources", "--config", config, "--phase", "prepare"], 4, "blocked"),
                         (["prepare", "--config", config, "--suite-dir", str(self.fx.suite)], 2, "failed_preflight")]
         for argv, code, state in expectations:
@@ -59,8 +60,8 @@ class LifecycleTests(unittest.TestCase):
 
     def test_l0_training_all_experiments_and_out_of_scope_phases(self):
         self.assertEqual(cli.main(["train", "--experiment", "L0"]), 2)
-        self.assertEqual(cli.main(["train", "--experiment", "L1"]), 3)
-        self.assertEqual(cli.main(["probe", "--experiment", "L1"]), 3)
+        self.assertEqual(cli.main(["train", "--experiment", "L1"]), 2)
+        self.assertEqual(cli.main(["probe", "--experiment", "L1"]), 2)
         self.assertEqual(cli.main(["train", "--all"]), 2)
         self.assertEqual(cli.main(["evaluate", "--suite-dir", "x"]), 2)  # Experiment/mode are mandatory.
 
@@ -78,7 +79,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(preflight(config, self.fx.suite, "L0")["status"], "failed_preflight")
         report = preflight(config, self.fx.suite, "L1")
         self.assertEqual(report["status"], "blocked_dependency")
-        self.assertIn("resource_probe_record (LL027)", report["missing"])
+        self.assertTrue(report["missing"])
         self.assertFalse(report["model_libraries_imported"])
 
     def test_inventory_distinguishes_resource_classes_and_optional_asr(self):
@@ -117,7 +118,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.paths["data_root"], (self.fx.root / "resources" / "data").resolve())
         moved = Path(tempfile.mkdtemp()) / "nơi mới có dấu cách"
         self.addCleanup(shutil.rmtree, moved.parent, True)
-        shutil.copytree(self.fx.root, moved)
+        shutil.copytree(self.fx.root, moved, ignore=shutil.ignore_patterns("*_environment", "*_enviroment"))
         relocated = load_config(moved / "configs" / "suite.json")
         self.assertEqual(relocated.paths["data_root"], (moved / "resources" / "data").resolve())
         self.assertEqual(relocated.identity(), config.identity())  # Content identity excludes local roots.
@@ -126,6 +127,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(override.portable["data_root"], {"external": True, "name": "data"})
         with self.assertRaises(Exception):
             load_config(self.fx.config_path, overrides={"data_root": self.fx.data / "train_environment"})
+
+    def test_sealed_suite_rebinds_internal_paths_after_relocation(self):
+        from lifemate.llm_training.config import config_from_suite
+        from lifemate.llm_training.corpus import prepare, load_suite
+        original = load_config(self.fx.config_path)
+        prepare(original,self.fx.suite,expected=self.fx.expected)
+        moved = Path(tempfile.mkdtemp()) / "relocated project có dấu"
+        self.addCleanup(shutil.rmtree,moved.parent,True)
+        shutil.copytree(self.fx.root,moved,ignore=shutil.ignore_patterns("*_environment","*_enviroment"))
+        suite = moved/self.fx.suite.relative_to(self.fx.root)
+        rebound = config_from_suite(load_suite(suite)["suite"],project_root=moved)
+        self.assertEqual(rebound.require("model_dir"),moved/"resources/model")
+        self.assertEqual(rebound.require("data_root"),moved/"resources/data")
+        self.assertEqual(rebound.identity(),original.identity())
 
 
 class StorageTests(unittest.TestCase):

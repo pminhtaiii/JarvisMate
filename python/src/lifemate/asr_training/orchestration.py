@@ -13,6 +13,7 @@ from .storage import (read, write, rows, now, environment, code_identity, run_di
                       suite_lock, records, seal, verify, identity, outcome)
 from .workers import once, Session
 from . import checkpoints
+from .relocation import resolve_path
 
 
 class WorkerFailure(RuntimeError):
@@ -32,12 +33,12 @@ def resolve(suite_path: Path, config_path: Path, experiment: str,
     suite, fit, val = load_suite(suite_path)
     config = prerequisites(suite_path, load_config(config_path, experiment))
     if experiment == "E4":
-        config["noises"] = load_noises(noise_manifest, Path(suite["data_root"]))
+        config["noises"] = load_noises(noise_manifest, resolve_path(suite["data_root"], suite_path))
     return suite, fit, val, config
 
 
 def job(suite: dict, config: dict, *, mode: str, hardware: dict | None = None, **extra) -> dict:
-    return {"mode": mode, "config": config, "snapshot": suite["model"]["path"],
+    return {"mode": mode, "config": config, "snapshot": str(resolve_path(suite["model"]["path"])),
             "base_parameters": suite["model"]["provenance"]["parameter_count"],
             "expected_hardware": hardware, **extra}
 
@@ -101,9 +102,9 @@ def token_audit(suite, fit, validation):
     from asr.pretrained.models import offline
     offline()
     from transformers import WhisperTokenizer
-    tokenizer = WhisperTokenizer.from_pretrained(suite["model"]["path"], local_files_only=True,
+    tokenizer = WhisperTokenizer.from_pretrained(resolve_path(suite["model"]["path"]), local_files_only=True,
                                                  language="vi", task="transcribe")
-    config = read(Path(suite["model"]["path"]) / "config.json")
+    config = read(resolve_path(suite["model"]["path"]) / "config.json")
     limit = config.get("max_target_positions", 448) - 1
     maximum, longest = 0, None
     for row in fit + validation:
@@ -151,7 +152,7 @@ def preflight(suite_path: Path, config_path: Path, experiment: str, noise_manife
                     raise WorkerFailure({"status": "unsupported", "error": "No real NF4 modules after reload"})
                 selected = [max(fit, key=lambda r: r["duration_seconds"]), fit[len(fit)//2], fit[0]]
                 for row in selected:
-                    checked(session.request(audio_asset(Path(suite["data_root"]) / "train", row["audio"]),
+                    checked(session.request(audio_asset(resolve_path(suite["data_root"]) / "train", row["audio"]),
                                             config["timeout_seconds"]))
             finally:
                 closing = session.close()

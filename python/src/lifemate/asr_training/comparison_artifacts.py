@@ -8,6 +8,7 @@ from asr.pretrained.metrics import NORMALIZATION, score, summarize
 from asr.pretrained.runner import TIMING
 from .slots import SlotEvaluator
 from .storage import digest, identity, read, rows, verify
+from .relocation import resolve_path
 
 METHODS = {"E0": "Pretrained", "E1": "Decoder LoRA", "E2": "Encoder + Decoder LoRA",
            "E3": "QLoRA", "E4": "LoRA + Augmentation"}
@@ -37,7 +38,7 @@ def suite_inputs(suite: Path):
 
 
 def owned_evaluation(suite: Path, run: Path, value: str) -> Path:
-    path = Path(value)
+    path = resolve_path(value, suite)
     path = path.resolve() if path.is_absolute() else (run / path).resolve()
     if not path.is_relative_to(run.resolve()) or not path.is_relative_to(suite.resolve()):
         raise ValueError("Evaluation must belong to the selected run in this suite")

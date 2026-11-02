@@ -1,0 +1,7 @@
+{
+  "experiment": "L0",
+  "initialization": "independent_pinned_pretrained",
+  "training_settings": null,
+  "weights": null,
+  "schema": "lifemate-llm-experiment-v1"
+}

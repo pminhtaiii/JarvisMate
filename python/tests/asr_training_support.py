@@ -63,3 +63,39 @@ def annotation(row, values):
         slots.append({"type":kind,"surface":surface,"span":[start,start+len(surface)],"canonical":value})
     return {"utterance_id":row["utterance_id"],"annotation_status":"reviewed","reviewer":"fixture-only",
             "reference_sha256":hashlib.sha256(row["reference"].encode()).hexdigest(),"slots":slots}
+
+
+def saved_run(suite, metadata, validation, experiment="E0", predictions=None):
+    """Complete synthetic artifacts with real text scores, no model execution."""
+    from asr.pretrained.metrics import NORMALIZATION, summarize
+    from asr.pretrained.runner import TIMING, result_row
+    from lifemate.asr_training.config import DEFAULTS
+    from lifemate.asr_training.slots import SlotEvaluator
+    from lifemate.asr_training.storage import identity, read, rows, write_rows
+    path = suite / experiment / 'run-fixture'
+    representation = 'base_fp16' if experiment == 'E0' else 'merged_fp16'
+    predictions = predictions if predictions is not None else [r['reference'] for r in validation]
+    records = [result_row(r, {'status':'ok','prediction':p,'latency_seconds':.1}) |
+               {'experiment':experiment,'representation':representation}
+               for r,p in zip(validation,predictions,strict=True)]
+    evaluation = path / 'primary'
+    evaluation.mkdir(parents=True, exist_ok=True)
+    write_rows(evaluation / 'transcripts.jsonl', records)
+    annotations = rows(suite/'data/slots.jsonl') if (suite/'data/slots.jsonl').exists() else None
+    rules = read(suite/'data/slot-rules.json') if (suite/'data/slot-rules.json').exists() else None
+    metrics = summarize(records) | {'slots':SlotEvaluator(validation,annotations,rules).summarize(records),
+        'normalization':NORMALIZATION,'timing':TIMING,'representation':representation,
+        'memory':{'peak_allocated_gib':1.,'peak_reserved_gib':1.5}}
+    write(evaluation / 'metrics.json', metrics)
+    config = DEFAULTS | {'experiment':experiment,'scope':'none' if experiment=='E0' else 'decoder'}
+    write(path/'resolved-config.json',config)
+    manifest = {'kind':'run','experiment':experiment,'status':'completed','metrics':metrics,
+        'best_evaluation':str(evaluation),'best_checkpoint':None if experiment=='E0' else str(path/'checkpoints/best'),
+        'best_step':0 if experiment=='E0' else 10,'source':metadata['source'],
+        'suite_identity':metadata['identity'],'model_revision':metadata['model']['provenance']['revision'],
+        'model_identity':identity(metadata['model']),'evaluation_policy':metadata['policy'],
+        'hardware':{'name':'fixture-only'},'environment':{'python':'fixture'},'code':{'hash':'fixture'},
+        'train_memory':None if experiment=='E0' else {'peak_allocated_gib':2.,'peak_reserved_gib':2.5}}
+    manifest.update({k:metadata[k] for k in ('split_identity','selection_identity','fit_identity')})
+    write(path/'manifest.json',manifest)
+    return path, manifest

@@ -11,6 +11,7 @@ from asr.pretrained.runner import result_row, TIMING
 from .slots import SlotEvaluator
 from .storage import append, rows, read, write
 from .workers import Session
+from .relocation import resolve_path
 
 
 def slot_evaluator(suite: Path, validation: list[dict]):
@@ -22,6 +23,7 @@ def slot_evaluator(suite: Path, validation: list[dict]):
 def evaluate(job: dict, validation: list[dict], data_root: Path, output: Path, slots,
              *, session_factory=Session) -> dict:
     output.mkdir(parents=True, exist_ok=False)
+    data_root = resolve_path(data_root)
     config, results, initialization, failure, memory = job["config"], [], {}, None, None
     failure_status = None
     failure_memory = None

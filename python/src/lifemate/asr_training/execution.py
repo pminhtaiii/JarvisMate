@@ -10,10 +10,11 @@ from .workers import once
 from .evaluation import evaluate, slot_evaluator
 from .selection import checkpoint_key
 from .exporting import export
+from .relocation import resolve_path
 
 
 def owned(suite: Path, path: Path) -> Path:
-    path = path.resolve()
+    path = resolve_path(path, suite).resolve()
     if not path.is_relative_to(suite.resolve()):
         raise ValueError("Checkpoint/evaluation path must belong to this suite")
     return path

@@ -1,0 +1,7 @@
+{
+  "experiment": "L3",
+  "initialization": "independent_pinned_pretrained",
+  "training_settings": "fine-tune-llm/configs/training.json",
+  "weights": "selected_policy",
+  "schema": "lifemate-llm-experiment-v1"
+}

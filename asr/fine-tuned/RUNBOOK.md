@@ -1,18 +1,22 @@
 # Chạy PhoWhisper-large E0–E4 thủ công
 
-Chạy từ repo root, trên branch `fine-tuned-asr`. **Mỗi lần chỉ chạy một experiment**:
+Chạy từ repo root. Checkout nhận hiện tại ở branch `fine-tune-llm`; không đổi
+branch để đọc artifacts ASR đã chuyển. **Mỗi lần chỉ chạy một experiment**:
 đọc kết quả/status trước khi gọi experiment tiếp theo. Không có `run --all` và không
 script nào tự chuyển E0 → E1 → E2 → E3 → E4. `compare` chỉ đọc artifacts.
 
-Các lệnh dưới đây dành cho người vận hành; tác giả chưa chạy large/GPU/full training.
-Máy Raccoon hiện có Torch CPU không dùng để xác nhận chạy vừa GPU NVIDIA 12 GiB.
+E0–E4 đã chạy ở workspace nguồn và được chuyển sang máy nhận với hash xác minh.
+Xem [TRANSFER.md](TRANSFER.md) để đọc status, đường dẫn E4 và giới hạn bằng chứng.
+Các hướng dẫn tạo suite/chạy mới bên dưới là thao tác riêng, không chạy lại suite
+đã chuyển chỉ để sửa đường dẫn. Không copy venv cũ.
 
 ## 1. Cài environment riêng trên máy GPU
 
-Ví dụ Windows PowerShell với Python 3.12 đã cài:
+Windows PowerShell với Python 3.12 đã cài. Checkout hiện tại nằm trực tiếp tại
+`D:\JarvisMate_5\JarvisMate`:
 
 ```powershell
-Set-Location 'C:\Users\Windows\Downloads\ZaloAI\JarvisMate'
+Set-Location 'D:\JarvisMate_5\JarvisMate'
 py -3.12 -m venv .venv-asr-train
 $python = (Resolve-Path '.\.venv-asr-train\Scripts\python.exe').Path
 & $python -m pip install --upgrade pip
@@ -37,23 +41,47 @@ giống nhau. Không cần activate venv nếu gọi đúng interpreter. `.venv-
 
 ## 2. Prepare: giữ nguyên split
 
-Chuyển nguyên dataset và `.agent-work/asr-benchmark/split42.json` sang máy GPU.
-Không chạy lại splitter. Root dữ liệu phải trực tiếp chứa `train/`.
+Dataset Train được chuyển tại `D:\JarvisMate_5\JarvisMate\DATA_JarvisMate\train+public_test`;
+root này trực tiếp chứa `train/` với `train.jsonl` và `audio/`. Không dùng thư mục
+`__MACOSX` hoặc file ZIP làm data root.
+
+Vẫn cần file split gốc `.agent-work/asr-benchmark/split42.json`. Nếu chưa có,
+chép file này từ máy/bản benchmark trước vào đúng vị trí đó; tạo thư mục cha nếu
+cần. Dataset ZIP không thay thế split manifest. Không chạy lại splitter.
 
 ```powershell
+Set-Location 'D:\JarvisMate_2'
+$python = (Resolve-Path '.\.venv-asr-train\Scripts\python.exe' -ErrorAction Stop).Path
 $suite = '.agent-work/asr-finetune/suite-01'
-$dataRoot = (Resolve-Path '../train+public_test/train+public_test').Path
+$dataRoot = (Resolve-Path '.\DATA_JarvisMate\train+public_test' -ErrorAction Stop).Path
 $split = '.agent-work/asr-benchmark/split42.json'
 $model = '.agent-work/asr-finetune/models/phowhisper-large'
 
+# Kiểm tra đầu vào trước khi tải model. Thiếu split thì dừng, không tạo split mới.
+if (-not (Test-Path -LiteralPath (Join-Path $dataRoot 'train/train.jsonl') -PathType Leaf)) {
+    throw 'Data root phai truc tiep chua train/train.jsonl.'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $dataRoot 'train/audio') -PathType Container)) {
+    throw 'Thieu thu muc train/audio trong data root.'
+}
+if (-not (Test-Path -LiteralPath $split -PathType Leaf)) {
+    throw 'Thieu split42.json goc. Chep vao .agent-work/asr-benchmark/split42.json; khong chia lai split.'
+}
+
 # Bước chủ động tải weights/processor; các bước sau không tải model ngầm.
 & $python asr/fine-tuned/scripts/prepare_model.py
+if ($LASTEXITCODE -ne 0) { throw 'Prepare model failed; stop here.' }
 # Khi tái lập: thêm --revision <SHA publisher đã lưu>, mỗi source model có SHA riêng.
 
 # Audit toàn bộ audio/current/history, hashes và tạo suite immutable; không train.
 & $python asr/fine-tuned/scripts/prepare_data.py --suite-dir $suite --data-root $dataRoot --split-manifest $split --model $model
+if ($LASTEXITCODE -ne 0) { throw 'Prepare data failed; stop here.' }
 & $python -m lifemate.asr_training status --suite-dir $suite
 ```
+
+Chạy các block tiếp theo trong cùng cửa sổ PowerShell để giữ `$python` và `$suite`.
+Nếu mở cửa sổ mới, đặt lại `Set-Location`, `$python` và `$suite` như ở đầu block trên;
+không chạy lại `prepare_data.py` cho suite đã tồn tại.
 
 Prepare kiểm tra đúng source/identity seed 42, ghép transcript với chính turn user,
 WAV/hashes, group membership, conflict PCM và dedup Train có provenance. Fit tối đa
@@ -223,10 +251,33 @@ Exit: 0 passed/completed, 1 execution/resource failure, 2 input/integrity, 3 uns
 ```
 
 Mỗi lần tạo `$suite/comparisons/<timestamp-UUID>/` với `comparison.csv` đủ E0–E4,
-`comparison-variants.csv`, `details.json`, `report.md`. Không ghi đè report cũ.
-Failed/skipped/unsupported/not_run vẫn có dòng; unavailable là ô trống/null, không 0 giả.
-WER/CER trong CSV là ratio; Markdown đổi %. Raw counts, CSA/support/per-type, memory
-phases và bootstrap nằm trong JSON. Variants tách native NF4 và matched-budget E4/control.
+`comparison.md`, `examples_10.csv`, `examples_10.md`, `comparison-variants.csv`,
+`details.json` và `report.md` (alias tương thích của `comparison.md`). Không ghi đè
+report cũ. Lệnh chỉ đọc artifacts/predictions đã lưu; không đọc WAV, load weights,
+gọi GPU hoặc chạy lại training/inference.
+
+Chỉ runs `completed` có cùng frozen selection/reference/audio, source/model,
+normalization, timing, hardware/environment/code và FP16 primary protocol mới được
+xếp hạng. Identity và scores được kiểm tra từ từng run, không gán lại từ suite.
+Run chưa hoàn thành/không tương thích vẫn có dòng và lý do; primary metrics là
+`N/A` trong CSV/Markdown, `null` trong JSON. Không dùng metrics còn lại từ epoch cũ
+của run đang chạy. Prepared suite bị đổi identity/hashes thì từ chối tạo comparison.
+
+Các cột WER/CER cũ trong CSV giữ đơn vị ratio. Các cột `*_pct` ghi phần trăm;
+`delta_raw_wer_pp`, `delta_raw_cer_pp`, `delta_normalized_wer_pp` và
+`delta_normalized_cer_pp` là candidate trừ E0 theo percentage points, âm tốt hơn.
+Markdown chứa raw/normalized WER/CER, delta, slot P/R/F1 nếu có frozen gold hợp lệ,
+latency/P95/RTF, allocated/reserved VRAM, coverage và checkpoint. Raw counts,
+CSA/support/per-type, memory phases, input SHA256 và group bootstrap nằm trong JSON.
+Variants tách native NF4 và matched-budget E4/control khỏi primary ranking.
+
+10 examples được chọn deterministic: tối đa hai cải thiện lớn nhất và hai regression
+lớn nhất so E0 của candidate có WER thấp nhất, bổ sung money/time/name/code-switch
+reference hints, lỗi còn lại và seed-42 fill; không trùng ID. Predictions được highlight
+theo raw word edits, kèm raw/normalized WER/CER từng câu. Đây là minh họa được chọn,
+không thay thế kết quả toàn bộ 309 câu. Topic hints chỉ hỗ trợ review định tính, không
+là gold slot labels; insertion không tự chứng minh hallucination. Báo cáo giữ kết luận
+provisional khi thiếu semantic evidence và nêu riêng CI E4 so với control.
 
 CSA chưa sẵn sàng thì checkpoint best-WER là provisional, không khẳng định giữ đúng
 ý nghĩa. Giữ E0 nếu không có cải thiện đủ evidence. `compare` bootstrap theo group,

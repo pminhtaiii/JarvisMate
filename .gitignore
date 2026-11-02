@@ -19,3 +19,5 @@ __pycache__/
 build/
 # Local LLM SFT resources (data, weights, caches); never commit.
 /resources/
+.venv-llm/
+/DATA_JarvisMate/

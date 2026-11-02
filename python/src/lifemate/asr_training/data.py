@@ -8,6 +8,7 @@ from asr.pretrained.metrics import normalize
 from asr.pretrained.models import local_spec
 from lifemate.jsonio import digest, visible_path
 from .storage import read, write, write_rows, rows, ignored, now, seal, verify
+from .relocation import resolve_path
 
 SPLIT_ID = "da6b2725c4a7136e66e6ee93d2cda9a30561edd0905b4a78b258de35996dfcfa"
 
@@ -110,13 +111,13 @@ def load_suite(path: Path, *, assets: bool = True) -> tuple[dict, list, list]:
     if identity(fit) != metadata["fit_identity"] or identity(val) != metadata["validation_identity"]:
         raise ValueError("Prepared rows changed")
     if assets:
-        root = Path(metadata["data_root"])
-        if digest(Path(metadata["split_manifest"])) != metadata["split_manifest_sha256"]:
+        root = resolve_path(metadata["data_root"], path)
+        if digest(resolve_path(metadata["split_manifest"], path)) != metadata["split_manifest_sha256"]:
             raise ValueError("Original frozen split manifest changed")
         if digest(root / "train/train.jsonl") != metadata["source"]["train_jsonl_sha256"]:
             raise ValueError("Source JSONL changed")
-        spec = local_spec("phowhisper-large", Path(metadata["model"]["path"]).parent)
-        if spec != metadata["model"]:
+        spec = local_spec("phowhisper-large", resolve_path(metadata["model"]["path"], path).parent)
+        if spec | {"path": metadata["model"]["path"]} != metadata["model"]:
             raise ValueError("Model snapshot/provenance changed")
         for row in fit + rows(path / "data/validation-history.jsonl"):
             actual = inspect_audio(audio_asset(root / "train", row["audio"]))

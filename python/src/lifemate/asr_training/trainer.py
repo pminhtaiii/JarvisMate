@@ -10,6 +10,7 @@ from . import checkpoints
 from .models import batch, gradient_report, prepare_labels, validate_trainable
 from .resources import Unsupported
 from .storage import append, rows, read, write
+from .relocation import resolve_path
 
 
 def schedule_factor(step: int, total: int, ratio: float) -> float:
@@ -48,7 +49,7 @@ def train_epoch(model, processor, job: dict, torch, np, memory) -> dict:
         state = {"step": 0, "epoch": 0, "cursor": 0}
     noises = job.get("noises", [])
     directory = Path(job["output"])
-    data_root = Path(job["data_root"])
+    data_root = resolve_path(job["data_root"])
     stop_step = config.get("update_budget", total)
     changed = {"encoder": False, "decoder": False}
     checkpoint = None

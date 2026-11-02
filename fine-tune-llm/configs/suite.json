@@ -1,7 +1,7 @@
 {
   "schema": "lifemate-llm-suite-config-v1",
   "project_root": "../..",
-  "data_root": "resources/lifemate",
+  "data_root": "DATA_JarvisMate/train+public_test",
   "model_dir": "resources/models/qwen3-4b-instruct-2507",
   "asr_model_dir": null,
   "split_manifest": ".agent-work/asr-benchmark/split42.json",
@@ -12,7 +12,7 @@
   "native_decoder_proof": null,
   "selection_policy": "fine-tune-llm/configs/selection-policy.json",
   "manual_reviews": null,
-  "environment_profile": "windows-py311-cu128",
+  "environment_profile": "windows-py312-cu128",
   "base_model": {
     "id": "Qwen/Qwen3-4B-Instruct-2507",
     "revision": "cdbee75f17c01a7cc42f958dc650907174af0554"
@@ -39,5 +39,6 @@
     "max_steps": 16,
     "response_bytes": 65536,
     "timeout_seconds": 30.0
-  }
+  },
+  "environment_lock": "fine-tune-llm/locks/windows-py312-cu128.lock"
 }

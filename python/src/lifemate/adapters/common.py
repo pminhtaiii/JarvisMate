@@ -20,15 +20,53 @@ class ModelResidency:
         if not self.cpu_offload:
             yield
             return
+        saved = None
+        if (isinstance(getattr(self.model,'_parameters',None),dict)
+                and isinstance(getattr(self.model,'_buffers',None),dict)
+                and callable(getattr(self.model,'modules',None))):
+            if self.model.training:
+                raise PipelineError('MODEL_UNAVAILABLE','CPU-master offload is inference-only','model_load')
+            parameters,buffers = [],[]
+            for module in self.model.modules():
+                for name,param in module._parameters.items():
+                    if param is not None:
+                        if param.device.type != 'cpu' or param.grad is not None:
+                            raise PipelineError('MODEL_UNAVAILABLE','Offload requires gradient-free CPU weights','model_load')
+                        parameters.append((module,name,param,param.detach()))
+                for name,buffer in module._buffers.items():
+                    if buffer is not None:
+                        if buffer.device.type != 'cpu':
+                            raise PipelineError('MODEL_UNAVAILABLE','Offload buffers must start on CPU','model_load')
+                        buffers.append((module,name,buffer))
+            saved = parameters,buffers
+
+        def restore():
+            if saved is None:
+                self.model.to('cpu')  # Preserve the ordinary custom-adapter protocol.
+                return
+            for module,name,param,data in saved[0]:
+                param.data = data
+                module._parameters[name] = param
+            for module,name,buffer in saved[1]:
+                module._buffers[name] = buffer
+
         try:
             self.model.to(self.device)
+            tie = getattr(self.model,'tie_weights',None)
+            if saved is not None and callable(tie):
+                tie()
         except Exception as exc:
+            if saved is not None:
+                restore()
+                self.torch.cuda.empty_cache()
             raise PipelineError("MODEL_UNAVAILABLE", "Cannot transfer the offloaded model to its device",
                                 "model_load") from exc
         try:
             yield
         finally:
-            self.model.to("cpu")
+            # Inference did not update weights. Keep the CPU master storage and
+            # release GPU views instead of transferring unchanged weights back.
+            restore()
             self.torch.cuda.empty_cache()
 
 

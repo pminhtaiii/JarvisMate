@@ -6,14 +6,16 @@ written path passes the visible-path guard. Sealed directories are append-never.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..jsonio import digest, dumps, loads, visible_path
+from ..jsonio import contained, digest, dumps, loads, visible_path
 
 SEAL_NAME = "SEAL.json"
 SEALED_MARKER = "SEALED"  # Marks subdirectories whose files a parent SEAL.json covers.
@@ -66,15 +68,24 @@ def _fsync_write(path: Path, data: bytes, *, exclusive: bool) -> None:
 
 
 def write_json(path: Path, value: Any, *, exclusive: bool = True) -> str:
-    data = (dumps(value) + "\n").encode("utf-8")
+    data = (ordered_json(value) + "\n").encode("utf-8")
     _fsync_write(path, data, exclusive=exclusive)
     return hashlib.sha256(data).hexdigest()
 
 
 def write_jsonl(path: Path, rows: Iterable[Any], *, exclusive: bool = True) -> str:
-    data = "".join(dumps(row) + "\n" for row in rows).encode("utf-8")
+    data = "".join(ordered_json(row) + "\n" for row in rows).encode("utf-8")
     _fsync_write(path, data, exclusive=exclusive)
     return hashlib.sha256(data).hexdigest()
+
+
+def ordered_json(value: Any) -> str:
+    """Persist native schemas/arguments recursively in their original insertion order."""
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
+def ordered_hash(value: Any) -> str:
+    return text_hash(ordered_json(value))
 
 
 def write_text(path: Path, text: str, *, exclusive: bool = True) -> str:
@@ -105,6 +116,8 @@ def _sealed(directory: Path) -> bool:
 
 def new_directory(parent: Path, prefix: str) -> Path:
     """A fresh unique directory; identity of its content is recorded separately."""
+    if not isinstance(prefix, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", prefix):
+        raise StorageError("Artifact directory prefix must be a bounded plain identifier")
     visible_path(parent)
     parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -133,9 +146,11 @@ def seal(directory: Path, files: Iterable[str]) -> dict:
     """Record SHA-256/size of each named file, then commit SEAL.json last."""
     entries = []
     for relative in sorted(files):
-        path = directory / relative
+        path = contained(directory, relative)
         if not path.is_file() or path.name == SEAL_NAME:
             raise StorageError(f"Cannot seal missing artifact {relative}")
+        with path.open("rb+") as stream:
+            os.fsync(stream.fileno())  # Third-party model/optimizer writers closed before manifest commit.
         entries.append({"path": relative, "sha256": file_hash(path), "bytes": path.stat().st_size})
     record = {"schema": SEAL_SCHEMA, "sealed_at": now(), "files": entries}
     record["identity"] = value_hash(entries)
@@ -150,7 +165,10 @@ def verify_seal(directory: Path) -> dict:
     if record.get("schema") != SEAL_SCHEMA or record.get("identity") != value_hash(record.get("files")):
         raise StorageError("Seal record is invalid")
     for entry in record["files"]:
-        path = directory / entry["path"]
+        try:
+            path = contained(directory, entry["path"])
+        except Exception as exc:
+            raise StorageError("Sealed artifact path is missing or escapes its root") from exc
         if not path.is_file() or path.stat().st_size != entry["bytes"] or file_hash(path) != entry["sha256"]:
             raise StorageError(f"Sealed artifact changed: {entry['path']}")
     return record
@@ -167,8 +185,10 @@ def source_provenance(repository: Path) -> dict:
         revision = git("rev-parse", "HEAD").decode().strip()
         status = git("status", "--porcelain", "--untracked-files=all")
         patch = git("diff", "HEAD", "--binary")
+        untracked = git("ls-files", "--others", "--exclude-standard", "-z").decode("utf-8").split("\0")
+        untracked_hashes = {name: file_hash(repository / name) for name in untracked if name}
     except (OSError, subprocess.SubprocessError):
         return {"revision": None, "dirty": None, "dirty_patch_sha256": None, "unavailable": True}
     dirty = bool(status.strip())
     return {"revision": revision, "dirty": dirty,
-            "dirty_patch_sha256": hashlib.sha256(patch + b"\0" + status).hexdigest() if dirty else None}
+            "dirty_patch_sha256": hashlib.sha256(patch + b"\0" + status + dumps(untracked_hashes).encode()).hexdigest() if dirty else None}

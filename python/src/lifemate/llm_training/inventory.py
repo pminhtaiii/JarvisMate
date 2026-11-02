@@ -9,12 +9,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..jsonio import digest, loads, visible_path
+from ..contracts import PipelineError
 from .config import CATALOG_SHA256, DATASET_SHA256, EXPERIMENTS, SPLIT_IDENTITY, SuiteConfig, content_hash
 from .corpus import PreparationError, load_suite, sealed_policy
 from .storage import read_json, source_provenance
 from .tokenization import tokenizer_identity, verify_proof
 
 PHASES = {
+    "transfer": ("source", "dataset", "catalog", "split_manifest", "weights", "tokenizer", "environment_lock"),
     "prepare": ("source", "dataset", "catalog", "split_manifest", "runtime_validator", "decoder_proof"),
     "decoder-poc": ("source", "catalog", "tokenizer"),
     "token-audit": ("source", "suite", "tokenizer"),
@@ -97,7 +99,15 @@ def resource_report(config: SuiteConfig, phase: str, *, suite_dir: Path | None =
             target = paths["runtime_dir"] / ("__init__.py" if name == "runtime" else "validate.py")
             report[name] = _file(target)
         elif name == "weights":
-            report[name] = _weights(paths["model_dir"], hash_weights)
+            if hash_weights:
+                from .model_identity import snapshot_identity
+                try:
+                    identity = snapshot_identity(paths["model_dir"])
+                    report[name] = _entry("present", identity=identity)
+                except (ValueError, OSError, PipelineError) as exc:
+                    report[name] = _entry("missing", reason=str(exc)[:200])
+            else:
+                report[name] = _entry("unverified", reason="weight hashes explicitly skipped; not readiness evidence")
         elif name == "tokenizer":
             identity = tokenizer_identity(paths["model_dir"])
             report[name] = (_entry("present", **identity) if identity and "tokenizer_config.json" in identity["files"]
@@ -117,11 +127,23 @@ def resource_report(config: SuiteConfig, phase: str, *, suite_dir: Path | None =
         elif name == "suite":
             report[name] = _suite(suite_dir)
         elif name == "token_audit":
-            report[name] = _token_audit(suite_dir)
+            try:
+                from .acceptance import accepted_corpus
+                corpus = accepted_corpus(config, suite_dir)
+                report[name] = _entry("present", identity=corpus["identity"], support=corpus["report"]["accepted_support"])
+            except (ValueError, OSError, TypeError) as exc:
+                report[name] = _entry("missing", reason=str(exc)[:200])
         elif name == "environment_lock":
-            locks = sorted((config.project_root / "fine-tune-llm" / "locks").glob("*.lock"))
-            report[name] = (_entry("present", files={p.name: digest(p) for p in locks}) if locks
-                            else _entry("missing", reason="platform lock not authored (LL046)"))
+            lock = paths.get("environment_lock")
+            report[name] = _file(lock)
+            if report[name]["status"] == "present":
+                manifest_path = lock.with_suffix(".manifest.json")
+                if not manifest_path.is_file():
+                    report[name] = _entry("missing", reason="platform lock manifest is required")
+                else:
+                    manifest = read_json(manifest_path)
+                    if manifest.get("profile") != config.source["environment_profile"] or manifest.get("lock_sha256") != digest(lock):
+                        report[name] = _entry("mismatch", reason="platform lock profile/hash mismatch")
     for name, entry in report.items():
         entry["required"] = name in required
     blocking = sorted(n for n, e in report.items() if e["required"] and e["status"] not in {"present"})
@@ -162,18 +184,32 @@ def _token_audit(suite_dir: Path | None) -> dict:
     return _entry("missing", reason="no passed clean token audit")
 
 
-def preflight(config: SuiteConfig, suite_dir: Path, experiment: str) -> dict:
+def preflight(config: SuiteConfig, suite_dir: Path, experiment: str, *, settings_path=None, policy_report=None) -> dict:
     """Training readiness for one experiment; L0 has no training phase."""
     if experiment not in EXPERIMENTS:
         raise ValueError("Unknown experiment")
     if not EXPERIMENTS[experiment]["trainable"]:
         return {"status": "failed_preflight", "experiment": experiment,
                 "reason": "L0 is the pretrained baseline and cannot be trained"}
-    report = resource_report(config, "train", suite_dir=suite_dir, hash_weights=False)
+    report = resource_report(config, "train", suite_dir=suite_dir, hash_weights=True)
     missing = list(report["blocking"])
-    # Execution evidence produced by later, separately authored tasks.
-    missing += ["gpu_preflight_record (LL025)", "resource_probe_record (LL027)", "trainer (LL029)"]
+    try:
+        from .acceptance import evaluation_readiness, accepted_corpus
+        from .qualification import verify_qualification
+        from .trainer import training_settings
+        evaluation_readiness(config, suite_dir, teacher_forced=True)
+        settings = training_settings(settings_path or config.project_root / "fine-tune-llm/configs/training.json")
+        verify_qualification(config.require("resource_qualification"), accepted_corpus(config, suite_dir), settings, config)
+        decision = read_json(config.require("latency_decision"))
+        if not decision.get("operator") or decision.get("decision") not in {"pilot_reviewed", "proceed_with_unresolved_audio_latency"}:
+            missing.append("explicit_operator_latency_decision")
+    except (ValueError, OSError) as exc:
+        missing.append(str(exc))
     if experiment == "L3":
-        missing += ["selected_policy_report (RV018)", "approved_asr_views (LL036-LL038)"]
-    return {"status": "blocked_dependency", "experiment": experiment, "missing": missing,
+        try:
+            from .trainer import l3_dependencies
+            l3_dependencies(suite_dir, policy_report, accepted_corpus(config, suite_dir), config=config)
+        except (ValueError, OSError) as exc:
+            missing.append(str(exc))
+    return {"status": "blocked_dependency" if missing else "ready", "experiment": experiment, "missing": missing,
             "inventory": report, "model_libraries_imported": False}

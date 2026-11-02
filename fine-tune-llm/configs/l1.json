@@ -1,0 +1,12 @@
+{
+  "experiment": "L1",
+  "initialization": "independent_pinned_pretrained",
+  "training_settings": "fine-tune-llm/configs/training.json",
+  "weights": {
+    "normal_call": 1,
+    "ask_missing_info": 1,
+    "initial_finish": 1,
+    "finish_after_calls": 1
+  },
+  "schema": "lifemate-llm-experiment-v1"
+}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import time
+from contextlib import contextmanager
 
 from ..contracts import JSON, Limits, PipelineError
 from ..agent import parse_action
@@ -20,6 +21,8 @@ from ..selection import (FILTER_SYSTEM, filter_schema, referenced_records,
 from .common import ModelResidency, dependencies, metadata, model_directory, parameter_count, stopping_criteria
 from .qwen_native import (GuardedPrefix, NativeConstraint, NativeProposalRejected, assistant_eos_id,
                           fingerprint, parse_native_ids, policy_identity, rejection_record, render_native)
+from .prefix_cache import ExactPrefixCache, POLICY as PREFIX_CACHE_POLICY
+from .fast_greedy import generate as fast_generate, supported as supports_fast_generate, POLICY as GENERATION_POLICY
 
 
 def sdpa_expanded_kv(module, query, key, value, attention_mask, dropout=0.0,
@@ -58,6 +61,7 @@ class LocalPlanner(ModelResidency):
         self.last_decision_details = []
         self.last_generation = None
         self._selection_filters = {}
+        self._prefix_cache = None
         dtype = torch.float32 if device == "cpu" else torch.float16
         # Avoid materializing quadratic attention scores for long CUDA prompts.
         attention = "sdpa" if device == "cuda" else "eager"
@@ -94,6 +98,8 @@ class LocalPlanner(ModelResidency):
                 "cpu_offload": self.cpu_offload,
                 "selection_filter": "task-completion-predicates-v1" if selection_filter else "disabled",
                 "cuda_cache_policy": "release_before_action" if device == "cuda" else "not_applicable"}
+            self.metadata['prefix_cache_policy'] = PREFIX_CACHE_POLICY
+            self.metadata['native_generation_policy'] = GENERATION_POLICY if supports_fast_generate(self.model) else 'hf_generate'
         except PipelineError:
             raise
         except Exception as exc:
@@ -103,6 +109,16 @@ class LocalPlanner(ModelResidency):
         # A request's criteria stay fixed while its records change. Never reuse
         # model-derived criteria in another sample, even with identical text.
         self._selection_filters.clear()
+        self._prefix_cache = ExactPrefixCache()
+
+    @contextmanager
+    def inference_session(self):
+        with super().inference_session():
+            try:
+                yield
+            finally:
+                # Also clear on tool/engine failures outside generate_native.
+                self._prefix_cache = None
 
     def next_action(self, planner_input: JSON, remaining_seconds: float) -> str:
         started = time.monotonic()
@@ -207,6 +223,7 @@ class LocalPlanner(ModelResidency):
         """One constrained native decision for exact messages/tools (shared by all paths)."""
         started = time.monotonic()
         self.last_generation = None
+        cache = getattr(self,'_prefix_cache',None)
         try:
             _, prompt_ids = render_native(self.tokenizer, messages, native_tools)
             length = len(prompt_ids)
@@ -228,25 +245,49 @@ class LocalPlanner(ModelResidency):
             guard = GuardedPrefix(self.constraint.prefix(decoder_tools), prompt_length=length,
                                   eos_id=self.eos_id, decode=decode, allowed=allowed)
             inputs = self.torch.tensor([prompt_ids])
+            cache_kwargs, reused = cache.prepare(prompt_ids) if cache is not None else ({},0)
+            fast = supports_fast_generate(self.model)
+            forward_calls = forced_tokens = None
             with self.torch.inference_mode():
-                output = self.model.generate(
-                    input_ids=inputs.to(self.device), attention_mask=self.torch.ones_like(inputs).to(self.device),
-                    do_sample=False, num_beams=1, max_new_tokens=self.limits.output_tokens,
-                    prefix_allowed_tokens_fn=guard, stopping_criteria=stop,
-                    eos_token_id=self.eos_id, pad_token_id=self.pad_id if self.pad_id is not None else self.eos_id)
+                if fast:
+                    output = fast_generate(self.model,prompt_ids,guard,torch=self.torch,device=self.device,
+                        eos_id=self.eos_id,max_new_tokens=self.limits.output_tokens,
+                        ends_at=started+remaining_seconds,past=cache_kwargs.get('past_key_values'))
+                    full_ids, past = output.ids, output.past
+                    forward_calls, forced_tokens = output.forward_calls, output.forced_tokens
+                else:
+                    output = self.model.generate(
+                        input_ids=inputs.to(self.device), attention_mask=self.torch.ones_like(inputs).to(self.device),
+                        do_sample=False, num_beams=1, max_new_tokens=self.limits.output_tokens,
+                        prefix_allowed_tokens_fn=guard, stopping_criteria=stop,
+                        eos_token_id=self.eos_id, pad_token_id=self.pad_id if self.pad_id is not None else self.eos_id,
+                        **cache_kwargs)
+                    sequences = output.sequences if cache is not None else output
+                    full_ids = [int(i) for i in sequences[0].tolist()]
+                    past = getattr(output,'past_key_values',None)
             expired = time.monotonic() - started >= remaining_seconds
-            generated = [int(i) for i in output[0][length:].tolist()]
+            generated = full_ids[length:]
             parse = parse_native_ids(generated, eos_id=self.eos_id, pad_id=self.pad_id, decode=decode,
                                      allowed=allowed, max_new_tokens=self.limits.output_tokens,
                                      response_bytes=self.limits.response_bytes, deadline_expired=expired,
                                      internal_error=guard.error, special_ids=self.special_ids)
             self.last_generation = {"text": parse.text, "prompt_tokens": length, **parse.metadata,
-                                    "parse": parse.kind, "code": parse.code}
+                                    "parse": parse.kind, "code": parse.code,"cached_prefix_tokens":reused,
+                                    "model_forward_calls":forward_calls,"forced_tokens":forced_tokens}
             if expired:
                 # An expired sample deadline stays a failure, never a repair or final.
                 raise PipelineError("TIME_LIMIT", "Planner generation exceeded deadline", "planner")
+            if cache is not None:
+                if parse.kind == 'call':
+                    cache.commit(full_ids,past)
+                else:
+                    cache.clear()
             return parse
         except PipelineError:
+            if cache is not None:
+                cache.clear()
             raise
         except Exception as exc:
+            if cache is not None:
+                cache.clear()
             raise PipelineError("PLANNER_ERROR", "Local planner generation failed", "planner") from exc

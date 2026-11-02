@@ -125,7 +125,8 @@ class DecoderProofHarnessTests(unittest.TestCase):
             model = root / "tokenizer files with spaces đ"
             model.mkdir()
             (model / "tokenizer_config.json").write_text('{"chat_template": "controlled"}', encoding="utf-8")
-            with patch.object(decoder_poc, "CATALOG_SHA256", digest(CATALOG_PATH)):
+            with patch.object(decoder_poc, "CATALOG_SHA256", digest(CATALOG_PATH)), \
+                    patch.object(decoder_poc, "backend_version", return_value="0.11.3"):
                 outcome = decoder_poc.run_proof(root / "out", model, CATALOG_PATH,
                                                 tokenizer_loader=lambda _: self.tok, constraint_factory=self.constraint)
             self.assertEqual(outcome["status"], "passed", outcome["reason"])
