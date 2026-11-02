@@ -2,7 +2,8 @@
 
 Implementation handoff for [feature 001](../specs/001-python-sample-pipeline/spec.md),
 extended by [feature 002](../specs/002-measurement-prompt-experiments/spec.md) (timing,
-offline reports, opt-in prompt profiles). **Package installation, real-runtime checks
+offline reports, opt-in prompt profiles) and [feature 003](../specs/003-native-qwen-planner-sft/spec.md)
+(opt-in native Qwen tool calling, offline SFT tooling). **Package installation, real-runtime checks
 and model inference have not been run by the author, at the user's request.** The
 controlled unittest suite was run directly against `python/src` (no package install) on
 2026-10-30; see [feature 002 validation](../specs/002-measurement-prompt-experiments/validation.md)
@@ -22,22 +23,25 @@ CLI -> dataset/runtime preflight -> load models once
   -> validate exact selection coverage -> publish predictions.jsonl
 ```
 
-Python owns complete sample execution. No TypeScript transport, HTTP service, training,
-custom scorer, full-container supervisor, or Docker submission is added here.
+Python owns complete sample execution. No TypeScript transport, HTTP service, custom
+scorer, full-container supervisor, or Docker submission is added here. Offline
+training tools live in `lifemate.training`, which `lifemate run` never imports.
 
 | Module | Responsibility |
 |---|---|
 | `contracts.py` | Configuration/bounds, protocols, failure codes and outcomes |
 | `jsonio.py`, `dataset.py` | Strict visible JSON, input whitelist, contained selected assets, ordered user-turn preparation |
 | `runtime.py` | Trusted split package import, matching catalogs, implementation coverage, one-open factory |
-| `prompting.py`, `agent.py` | Versioned Vietnamese structured ReAct prompt, strict action grammar, bounded dispatch |
-| `adapters/planner.py` | Local Qwen3 tokenizer/model, greedy actions, token and time budgets |
+| `prompting.py`, `agent.py` | Versioned Vietnamese structured ReAct and native system prompts, strict action grammar, bounded dispatch |
+| `adapters/planner.py` | Local Qwen3 tokenizer/model, greedy actions, token and time budgets, protocol selection |
+| `adapters/qwen_protocol.py`, `adapters/constrained.py` | Native tool/message rendering shared with SFT export, strict native decoding, LMFE grammars |
 | `adapters/asr.py` | Local Whisper/PhoWhisper Vietnamese transcription from PCM WAV, no text fallback |
 | `artifacts.py` | Durable exact predictions, bounded/redacted debug traces, manifest/publication lifecycle |
 | `cli.py` | Preflight, sequential model reuse, stop-on-first-failure orchestration, `report`/`compare-runs`/`audit-examples` |
 | `metrics.py` | Injectable monotonic clock, nested spans, per-generation token/role telemetry |
 | `reporting.py` | Offline manifest reader (spans/generations from `measurements`, never `traces/*.jsonl`), nearest-rank distributions, single-factor comparison |
 | `prompt_profiles.py`, `example_audit.py` | Baseline/precise-v1 profile identity, fit-only bundle/partition validation |
+| `training/` | Offline `partition`/`export`/`fit`/`merge`; training libraries are lazy imports |
 
 ## Install on the receiving machine
 
@@ -119,6 +123,37 @@ Verify licenses/release eligibility. Record immutable publisher revisions and we
 checksums with the handoff experiment; model config hashes in the manifest do not
 by themselves fingerprint every weight file. Missing local assets/dependencies or
 an unavailable requested device fail; the runner never substitutes a remote service.
+
+## Native protocol and offline training
+
+[Feature 003](../specs/003-native-qwen-planner-sft/spec.md) adds an opt-in planner
+protocol and the offline tooling to fine-tune it. Its evidence is the controlled suite
+plus a CPU smoke on a tiny random Qwen3 checkpoint, recorded with exact commands in
+[feature 003 validation](../specs/003-native-qwen-planner-sft/validation.md). No real
+tokenizer, Qwen3-4B fit, protocol comparison, score or timing exists yet.
+
+- `run --planner-protocol {structured-v1,qwen-native-v1}`. `structured-v1` stays the
+  default and the comparison control. `qwen-native-v1` passes the sample's eligible
+  tools through the chat template's `tools=` channel and constrains each decision to one
+  `<tool_call>` block or the final text `Mình hiểu.`, each ending in EOS. It decodes
+  that output strictly into the same canonical call/finish the runner already executes.
+  It requires the baseline profile without examples. `compare-runs --factor protocol`
+  and `--factor planner-model` compare protocol and checkpoint changes.
+- `python -m lifemate.training partition|export|fit|merge`, run from `python/` with
+  `PYTHONPATH=src` or after installation. `partition` freezes grouped Train fit/validation
+  IDs, and `export` writes audited native next-action rows from fit gold only. Both read
+  Train JSONL/catalog only, never environments. `fit --config PATH [--preflight-only]`
+  trains all-linear LoRA or NF4 QLoRA adapters on those rows and saves per-epoch
+  checkpoints with provenance. `merge` writes a self-contained BF16 checkpoint that
+  `run --planner-model` loads without PEFT. The
+  [training contract](../specs/003-native-qwen-planner-sft/contracts/training.md) and
+  [quickstart](../specs/003-native-qwen-planner-sft/quickstart.md) give the config
+  schema and the full sequence.
+- `fit` and `merge` need a separate environment installed from the exact candidate lock
+  `requirements-training.txt` (inference pins plus PEFT, Accelerate and bitsandbytes).
+  `fit` verifies every installed version against it. That lock has passed only the
+  CPU smoke; the GPU/QLoRA smoke is still open. Keep partitions, exports, adapters and
+  merged checkpoints under the ignored `.agent-work/`.
 
 ## Data layout and preflight
 
@@ -241,8 +276,11 @@ offline/replay validation, A30 timing and full-split coverage checks.
 Record receiving-machine commands, outcomes, package/model identities and evidence in
 [validation.md](../specs/001-python-sample-pipeline/validation.md) for the baseline and
 [validation.md](../specs/002-measurement-prompt-experiments/validation.md) for
-measurement/prompt-profile acceptance. The task ledgers
+measurement/prompt-profile acceptance and
+[validation.md](../specs/003-native-qwen-planner-sft/validation.md) for the native
+protocol and SFT tooling. The task ledgers
 ([001](../specs/001-python-sample-pipeline/tasks.md),
-[002](../specs/002-measurement-prompt-experiments/tasks.md)) distinguish delivered
+[002](../specs/002-measurement-prompt-experiments/tasks.md),
+[003](../specs/003-native-qwen-planner-sft/tasks.md)) distinguish delivered
 implementation from unexecuted acceptance gates. Follow the [roadmap](../context/roadmap.md) for Train
-Validation/error analysis; conditional SFT remains design-only.
+Validation/error analysis; real fine-tuning remains conditional on that gate.

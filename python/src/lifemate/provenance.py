@@ -13,16 +13,19 @@ def code_identity() -> dict:
     return {str(p.relative_to(root)).replace("\\", "/"): digest(p) for p in files}
 
 
+def model_identity(path: Path) -> dict:
+    """Digests of a local checkpoint's weights, configs and tokenizer files."""
+    path = path.resolve()
+    # Hash actual local weights/tokenizers, not just their directory name or mtime.
+    files = sorted(p for p in path.rglob("*") if p.is_file() and
+                   p.suffix in {".json", ".jinja", ".safetensors", ".bin", ".model", ".txt", ".tiktoken"})
+    return {"path": str(path), "files": {str(p.relative_to(path)).replace("\\", "/"): digest(p)
+                                        for p in files}}
+
+
 def execution_identity(config) -> dict:
     def model(path):
-        if path is None:
-            return None
-        path = path.resolve()
-        # Hash actual local weights/tokenizers, not just their directory name or mtime.
-        files = sorted(p for p in path.rglob("*") if p.is_file() and
-                       p.suffix in {".json", ".jinja", ".safetensors", ".bin", ".model", ".txt", ".tiktoken"})
-        return {"path": str(path), "files": {str(p.relative_to(path)).replace("\\", "/"): digest(p)
-                                            for p in files}}
+        return None if path is None else model_identity(path)
 
     packages = {}
     for name in ("torch", "transformers", "tokenizers", "numpy", "lm-format-enforcer", "pydantic", "interegular"):

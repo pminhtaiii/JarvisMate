@@ -47,7 +47,15 @@ PyTorch 2.9.0, Transformers 4.57.1 and NumPy 2.3.4 as candidates to validate on 
 receiving host. Local Qwen3 and Whisper/PhoWhisper adapters disable downloads/remote
 code, reuse weights and configure deterministic generation. Pins and settings do not
 establish compatibility, model eligibility, accuracy, reproducibility or A30 latency.
-No new Node dependencies or training libraries are added.
+No new Node dependencies are added.
+
+Offline training uses a separate environment from the exact candidate lock
+`python/requirements-training.txt`: the inference pins plus PEFT 0.17.1, Accelerate
+1.10.1 and bitsandbytes 0.48.1. TRL is not needed because the exporter supplies verified
+completion-only labels. The accepted method is all-linear LoRA, with NF4 QLoRA only if
+measured memory requires it ([feature 003](../specs/003-native-qwen-planner-sft/plan.md)).
+The lock has passed only a CPU smoke on a tiny model; GPU memory, the method choice,
+hyperparameters and the decision to train remain open.
 
 ## Decision rationale
 

@@ -43,9 +43,14 @@ environment files, change `ToolEnv`, or expose labels/future observations to inf
 
 A tuned checkpoint must implement the same planner interface and call/finish grammar.
 ASR remains replaceable; the Python loop still controls validation, eligibility,
-bounds, dispatch and authoritative output. Training/export/evaluation remain separate
-from the inference sample loop and eventual TypeScript worker protocol. No training
-implementation or runtime result is established by this design.
+bounds, dispatch and authoritative output. The opt-in `qwen-native-v1` protocol keeps
+Qwen's native tool-call serialization and strict decoding inside the planner adapter,
+which returns the same canonical decision; `structured-v1` remains the default. The
+offline `lifemate.training` commands (partition, export, fit, merge) are separate from
+the inference sample loop and eventual TypeScript worker protocol. A tuned candidate
+reaches inference only as a merged checkpoint loaded through the existing planner
+path. See [feature 003](../specs/003-native-qwen-planner-sft/plan.md); its controlled
+and tiny-model CPU evidence establishes no real training or runtime result.
 
 ## Provisional contracts
 

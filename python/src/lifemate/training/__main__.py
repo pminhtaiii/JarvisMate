@@ -8,6 +8,8 @@ from pathlib import Path
 from ..contracts import Limits, PipelineError
 from ..jsonio import dumps
 from .data import DEFAULT_SEED, DEFAULT_VALIDATION_FRACTION, export, partition
+from .export import merge
+from .fit import fit
 
 
 class Parser(argparse.ArgumentParser):
@@ -33,12 +35,31 @@ def parser() -> Parser:
                       help="Also write teacher-forced validation rows to a separate diagnostic file")
     rows.add_argument("--context-tokens", default=Limits.context_tokens, type=int)
     rows.add_argument("--output-tokens", default=Limits.output_tokens, type=int)
+    train = sub.add_parser("fit", help="Fit a LoRA/QLoRA adapter on audited fit rows")
+    train.add_argument("--config", required=True, type=Path, help="JSON fit configuration")
+    train.add_argument("--preflight-only", action="store_true",
+                       help="Audit inputs, packages, device and memory without updating weights")
+    join = sub.add_parser("merge", help="Merge an adapter onto its original base for deployment")
+    join.add_argument("--base-model", required=True, type=Path)
+    join.add_argument("--adapter", required=True, type=Path, help="A checkpoint directory written by fit")
+    join.add_argument("--output", required=True, type=Path, help="New directory; never overwritten")
     return root
 
 
 def main(argv=None) -> int:
     try:
         args = parser().parse_args(argv)
+        if args.command == "fit":
+            manifest = fit(args.config, preflight_only=args.preflight_only)
+            print(dumps({"status": manifest["status"], "output": manifest["output_dir"],
+                         "checkpoints": [c["path"] for c in manifest["checkpoints"]],
+                         "memory": manifest.get("memory")}))
+            return 0
+        if args.command == "merge":
+            marker = merge(args.base_model, args.adapter, args.output)
+            print(dumps({"status": marker["status"], "output": str(args.output.resolve()),
+                         "parameters": marker["parameters"], "reload_verified": marker["reload_verified"]}))
+            return 0
         if args.command == "export":
             limits = Limits(context_tokens=args.context_tokens, output_tokens=args.output_tokens)
             manifest = export(args.data_root, args.partition, args.base_model, args.output,

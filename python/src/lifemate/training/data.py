@@ -679,7 +679,7 @@ def partition_audit(accepted: dict[str, list[JSON]], members: dict[str, JSON]) -
             "non_fit_rows_in_fit": 0}
 
 
-def load_tokenizer(base_model: Path):
+def load_tokenizer(base_model: Path, stage: str = "export"):
     """The base checkpoint's own tokenizer and chat template, offline."""
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -687,14 +687,14 @@ def load_tokenizer(base_model: Path):
         from transformers import AutoTokenizer
     except ImportError as exc:
         raise PipelineError("MODEL_UNAVAILABLE", "Export needs the inference extra (transformers, "
-                            "lm-format-enforcer)", "export") from exc
+                            "lm-format-enforcer)", stage) from exc
     try:
         tokenizer = AutoTokenizer.from_pretrained(base_model, local_files_only=True, trust_remote_code=False)
     except Exception as exc:
-        raise PipelineError("MODEL_UNAVAILABLE", "Cannot load the base model tokenizer", "export") from exc
+        raise PipelineError("MODEL_UNAVAILABLE", "Cannot load the base model tokenizer", stage) from exc
     if not isinstance(getattr(tokenizer, "chat_template", None), str) or not tokenizer.eos_token:
         raise PipelineError("MODEL_UNAVAILABLE", "Native export requires the checkpoint chat template and EOS",
-                            "export")
+                            stage)
     return tokenizer
 
 
@@ -704,11 +704,16 @@ def native_grammar(tokenizer):
     return ActionConstraint(tokenizer).native_admits
 
 
-def base_identity(path: Path, tokenizer) -> JSON:
-    """Tokenizer/template/config identity of the base checkpoint; weights are verified by fit/merge."""
+def base_files(path: Path) -> JSON:
+    """Digests of the base checkpoint's tokenizer, template and config files, not its weights."""
     files = sorted(p for p in path.iterdir()
                    if p.is_file() and p.suffix in {".json", ".jinja", ".txt", ".model", ".tiktoken"})
-    return {"path": str(path), "snapshot": path.name, "files": {p.name: digest(p) for p in files},
+    return {p.name: digest(p) for p in files}
+
+
+def base_identity(path: Path, tokenizer) -> JSON:
+    """Tokenizer/template/config identity of the base checkpoint; weights are verified by fit/merge."""
+    return {"path": str(path), "snapshot": path.name, "files": base_files(path),
             "weights_hashed": False, "tokenizer_class": type(tokenizer).__name__,
             "chat_template_sha256": hashlib.sha256(tokenizer.chat_template.encode()).hexdigest(),
             "eos_token": tokenizer.eos_token, "eos_token_id": tokenizer.eos_token_id}

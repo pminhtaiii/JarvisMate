@@ -323,3 +323,156 @@ python -m lifemate.training export --data-root <data> --partition ../.agent-work
 Until then, no real export, row count, length distribution or exclusion review exists.
 The real template's tool-call rendering, token boundary and EOS behavior are proven only
 by the T013 smoke tests, which have not run either.
+
+## T027–T030 — Adapter fit and merge, controlled plus CPU smoke (recorded 2026-11-01)
+
+**Branch**: `feat/native-sft-fit`, stacked on `feat/native-sft-export` (PR #13); code at
+`2be14cb`. **Evidence level**: controlled unittest fixtures, plus a real CPU
+fit/save/reload/merge/inference smoke on a tiny random two-layer Qwen3 checkpoint. The
+test generates that checkpoint with a character-level fast tokenizer and a Qwen3-style
+tool template. No Qwen3-4B weights, real tokenizer, Train data, GPU or evaluator was
+used. This proves the code path and its refusals, not Qwen3-4B memory, speed or quality.
+
+The isolated environment is a fresh venv outside the repository (Python 3.13.1,
+Windows-11-10.0.26200, CPU only), built from the candidate pins and then frozen into
+`python/requirements-training.txt`. The global interpreter has no training library.
+
+```bash
+# from python/, global interpreter (no torch/transformers/peft)
+PYTHONPATH=src python -X utf8 -m unittest discover -s tests -p "test_*.py"
+# from python/, isolated training venv
+PYTHONPATH=src <venv>/python -X utf8 -m unittest discover -s tests -p "test_*.py"
+```
+
+Exit `0` both times: 388 tests, OK. Global: 19 skipped, which are the 15 from T020–T025
+plus 4 in `test_training_fit.py` (the three `RealStackSmoke` tests and the CUDA-only
+QLoRA test). Venv: 10 skipped (2 symlink cases, 5 opt-in real-tokenizer tests,
+`test_real_samples.py`, the CUDA-only QLoRA preflight, and the missing-library check,
+which applies only outside the training environment). `test_training_fit.py` has 27
+tests: global OK with 4 skipped, venv OK with 2 skipped in 42 s.
+
+After the PR #14 review fixes, the same commands give 394 tests, OK: 20 skipped globally
+(one more `RealStackSmoke` test) and 10 in the venv. `test_training_fit.py` has 33 tests:
+global OK with 5 skipped, venv OK with 2 skipped in 40 s. Against the previous source,
+every new test fails. The fixes:
+- `merge` also refuses an adapter whose recorded prompt identity or final text differs
+  from this revision's native protocol, or whose `adapter_config.json` (the LoRA rank and
+  alpha that set the merge scaling) differs from the digest `fit` now records.
+- `merge` writes into a hidden staging directory beside the output and renames it into
+  place only after the marker is written. A killed merge leaves no partial checkpoint
+  at the output path.
+- The memory probe uses the longest rows and keeps logits for the longest completion of
+  any row, so it bounds every microbatch training can draw.
+- The first `fit_manifest.json` write is inside the failure handling.
+- The CUDA-only QLoRA test now pins `bitsandbytes` in its test lock; it still has not run.
+
+A second review round brings the suite to 396 tests, OK: 21 skipped globally, 10 in the
+venv. `merge` now also refuses provenance without a chat-template digest. It re-hashes
+the base before writing the marker and refuses a base that changed during the merge.
+Write failures report `OUTPUT_IO`. `fit` hashes its code inside the failure handling.
+New tests spy on the probe's `keep` argument and gate the QLoRA test on `bitsandbytes`.
+
+- **T027**: `training/fit.py` validates a strict JSON config: every field is required,
+  unknown fields are rejected, and relative paths resolve against the config file.
+  - The input gate accepts only unmodified, unique rows of the export's `fit.jsonl`.
+    That file's digest must match an export manifest with zero leakage and partition
+    failures, packing off, ignore index `-100` and the current native protocol prompt.
+    Validation diagnostics and relabelled validation rows are rejected.
+  - The base tokenizer re-derives every row's completion-only labels, which must equal
+    the export's token counts and decode to the canonical target. A row over
+    `context_limit` or `max_target_tokens` stops the run with `CONTEXT_LIMIT`; nothing
+    is dropped or truncated.
+  - Every lock pin must match the installed version, and the lock's sha256 must match
+    the config. A missing GPU, CUDA without BF16 or a microbatch that does not fit stops
+    the run; precision, method and device are never changed.
+  - Training uses all-linear LoRA, or NF4 double-quant BF16-compute QLoRA with k-bit
+    preparation. Base weights are BF16 with fp32 adapters and SDPA attention. The data
+    order is seeded per epoch; AdamW uses linear warmup/decay and gradient clipping 1.0.
+    The loss is row-level mean completion NLL. Logits are computed only at completion
+    positions (`logits_to_keep` with left padding), so a full-vocabulary matrix is
+    never built over a long prompt.
+  - Training libraries are lazy imports; the existing subprocess probe still finds none
+    of them imported by `python -m lifemate.training`.
+- **T028**: `fit --config PATH [--preflight-only]` claims a new output directory. Its
+  `fit_manifest.json` follows `preflight` → `fit` → `adapter-saved`, and a failed run
+  keeps the failing check and error. Each epoch writes `checkpoint-epoch-<n>/`: the PEFT
+  adapter plus `lifemate_adapter.json` with the full base file identity, protocol,
+  export/rows/config/lock digests and adapter digest. It is published only after the
+  saved tensors reload equal to the trained ones. On CPU, two runs of one config wrote
+  byte-identical adapters for both epochs. `--preflight-only` audits inputs, packages,
+  device and one worst-case forward/backward pass, then stops without a checkpoint. A
+  preflight claims its own output directory, so the following fit needs another one.
+  The export records no base weight digest; `fit` records the weights it trained on,
+  and `merge` enforces them.
+- **T029**: `merge --base-model --adapter --output` (`training/export.py`) refuses:
+  an incomplete or tampered adapter or adapter config; a non-native or foreign trainer;
+  a different native prompt or final text; a base whose weight, config or tokenizer
+  files differ from the adapter's provenance; an existing output; and outputs inside
+  the base or adapter. All refusals happen before training libraries load or the output
+  exists. It merges in BF16 and copies tokenizer and template files byte for byte, so
+  the `planner-model` factor still sees the identical tokenizer. The reloaded export's
+  state dict must equal the merged weights. It writes `lifemate_export.json` last in a
+  staging directory, renames that into place, and removes the staging directory on failure.
+- **T030**: in the venv, `RealStackSmoke` exports four fit rows through the real
+  tokenizer and pinned LMFE grammar, then fits, checkpoints, reloads and merges. A
+  finish-only adapter, merged and loaded by the unchanged native `LocalPlanner`,
+  returned the canonical finish with stop reason `eos`. Merging the same adapter onto a
+  second random base was refused with `INPUT_INVALID`. Only CUDA branches did not run:
+  peak-VRAM and headroom measurement, the out-of-memory refusal and QLoRA loading. On
+  CPU the manifest records the probe shape and optimizer-state estimate only.
+
+## T026 — Training environment and lock (PARTIAL, NOT CHECKED, 2026-11-01)
+
+`python/requirements-training.txt` holds the candidate lock. It pins PEFT 0.17.1,
+Accelerate 1.10.1 and bitsandbytes 0.48.1, the inference pins (PyTorch 2.9.0,
+Transformers 4.57.1, NumPy 2.3.4, LMFE 0.11.3) and their resolved dependencies. TRL is
+not used: the exporter's verified explicit labels replace `completion_only_loss`. The
+CPU smoke above passed with exactly this lock.
+
+Not done: the GPU one-batch smoke at real Qwen3-4B lengths, BF16 support, VRAM, the
+LoRA versus QLoRA choice, and a Linux install from this lock. Torch's CUDA wheels and
+platform installer packages are pinned by their parents, not by the lock. On the
+training host, run from `python/`:
+
+```bash
+python -m lifemate.training fit --config <config.json> --preflight-only
+```
+
+## T031, T032 — NOT RUN (2026-11-01)
+
+Blocked, not failed. Both need T016/T019 (frozen real partition, protocol comparison,
+SFT eligibility), the Qwen3-4B checkpoint, a GPU and the evaluator; T032 also needs the
+offline A30 target. No real adapter, merged export, tuned/base comparison, score,
+latency or promotion decision exists. The native base remains the fallback.
+
+## T033–T035 — Documentation and handoff (recorded 2026-11-01)
+
+- **T033**: `python/README.md`, `context/architecture.md`, `context/tech_stack.md`, the
+  [training contract](contracts/training.md), the [quickstart](quickstart.md) and the
+  [SFT design](../../docs/design/train-to-sft.md) describe the implemented commands and
+  only the evidence above. `structured-v1` stays the default control, and experiment
+  trade-offs stay open.
+- **T034**: quickstart checks at their applicable scope, from `python/`, each exit `0`:
+
+  | Check | Global interpreter | Training venv |
+  |---|---|---|
+  | `test_qwen_protocol.py` | 30 OK, 12 skipped | 30 OK, 5 skipped (real tokenizer) |
+  | `test_inference.py` | 41 OK | 41 OK |
+  | `test_agent.py` | 18 OK | 18 OK |
+  | `test_checkpoint.py` | 10 OK | 10 OK |
+  | `test_cli.py` | 37 OK | 37 OK |
+  | `test_training_data.py` | 52 OK | 52 OK |
+  | `test_training_fit.py` | 27 OK, 4 skipped | 27 OK, 2 skipped |
+
+  Not runnable here: the `LIFEMATE_QWEN_TEST_MODEL` checks (section 1), partition freeze
+  and protocol comparison (section 2), the real export audit (section 3), a real fit
+  (section 4) and deployment evaluation (section 5). They need the assets listed in
+  T001. `node scripts/ci/check-context.mjs` and `git diff --check` passed.
+- **T035**: FR-001–011 and FR-015 have controlled evidence (T002–T025, T027–T030).
+  FR-012 is implemented and CPU-smoked, but its GPU lock smoke (T026) is open. FR-013
+  and FR-014 (closed-loop tuned/base evaluation, A30 timing) have not run. Relative
+  links in the touched documents resolve. Data, partitions, exports, adapters, merged
+  checkpoints and run manifests default to the ignored `.agent-work/` tree
+  (`git check-ignore` confirmed), and no dataset, audio, JSONL or weight file is
+  tracked. The fit/merge work is under review in
+  [PR #14](https://github.com/pminhtaiii/JarvisMate/pull/14).
