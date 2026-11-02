@@ -94,8 +94,12 @@ directory first. Relative paths resolve against the config file. Set
  "package_lock": {"path": "../../../python/requirements-training.txt", "sha256": "<sha256>"}}
 ```
 
+Every `fit` run, including `--preflight-only`, claims its own new `output_dir` and
+never reuses one. Save a copy of the config as `preflight-config.json` with
+`"output_dir": "preflight-smoke"`, run the preflight with it, then fit with the original.
+
 ```powershell
-python -m lifemate.training fit --config ../.agent-work/lifemate-runs/native-sft/smoke-config.json --preflight-only
+python -m lifemate.training fit --config ../.agent-work/lifemate-runs/native-sft/preflight-config.json --preflight-only
 python -m lifemate.training fit --config ../.agent-work/lifemate-runs/native-sft/smoke-config.json
 python -m unittest discover -s tests -p test_training_fit.py
 ```

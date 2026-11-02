@@ -10,6 +10,7 @@ import hashlib
 import importlib.metadata
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 from ..adapters import qwen_protocol
@@ -17,13 +18,14 @@ from ..adapters.common import model_directory
 from ..artifacts import sync_write, utc_now
 from ..contracts import JSON, PipelineError
 from ..jsonio import digest, dumps, read_json
+from ..prompting import NATIVE_FINISH_TEXT
 from ..provenance import code_identity, model_identity
 from ..reporting import TOKENIZER_FILE
 from . import fit
 
 MERGER_VERSION = "lifemate-native-sft-merge-v1"
 EXPORT_MARKER = "lifemate_export.json"
-ADAPTER_FILES = ("adapter_config.json", fit.ADAPTER_WEIGHTS, fit.ADAPTER_PROVENANCE)
+ADAPTER_FILES = (fit.ADAPTER_CONFIG, fit.ADAPTER_WEIGHTS, fit.ADAPTER_PROVENANCE)
 
 
 def _invalid(message: str) -> PipelineError:
@@ -39,13 +41,19 @@ def adapter_provenance(adapter: Path) -> JSON:
         valid = (value["trainer"] == fit.TRAINER_VERSION
                  and value["protocol"]["protocol"] == qwen_protocol.PROTOCOL
                  and isinstance(value["base_model"]["files"], dict) and bool(value["base_model"]["files"])
-                 and isinstance(value["adapter_sha256"], str))
+                 and isinstance(value["adapter_sha256"], str) and isinstance(value["adapter_config_sha256"], str))
+        same_prompt = (value["protocol"]["prompt"] == fit.native_prompt_identity()
+                       and value["protocol"]["final_text"] == NATIVE_FINISH_TEXT)
     except (KeyError, TypeError) as exc:
         raise _invalid("The adapter provenance is incomplete") from exc
     if not valid:
         raise _invalid("The adapter was not trained by this trainer for the native protocol")
+    if not same_prompt:
+        raise _invalid("The adapter was trained with a different native prompt or final text than this revision")
     if digest(adapter / fit.ADAPTER_WEIGHTS) != value["adapter_sha256"]:
         raise _invalid("The adapter weights differ from their recorded provenance")
+    if digest(adapter / fit.ADAPTER_CONFIG) != value["adapter_config_sha256"]:
+        raise _invalid("The adapter configuration differs from its recorded provenance")
     return value
 
 
@@ -59,7 +67,9 @@ def merge(base_model: Path, adapter: Path, output: Path) -> JSON:
     """Verify the adapter's base, merge it in BF16 and write a reloaded, self-contained export.
 
     Refuses a different base, an existing output and an output inside the base or the
-    adapter. A failure removes the claimed output, so no partial checkpoint can be loaded.
+    adapter. Everything is written to a hidden staging directory beside `output`, which is
+    renamed to `output` only after the completion marker is written. A failed merge removes
+    the staging directory; a killed one leaves it, but never a partial checkpoint at `output`.
     """
     base = model_directory(Path(base_model))
     adapter, output = Path(adapter).resolve(), Path(output).resolve()
@@ -72,18 +82,28 @@ def merge(base_model: Path, adapter: Path, output: Path) -> JSON:
     if base_identity["files"] != provenance["base_model"]["files"]:
         raise _invalid("The adapter was trained on a different base: weights, config or tokenizer files differ")
     torch, hf, peft = fit.libraries("lora")
+    staging = output.with_name(f".{output.name}.partial-{uuid.uuid4().hex}")
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
-        os.mkdir(output)
-    except FileExistsError as exc:
-        raise _invalid("The merge output already exists; deployment exports are immutable") from exc
+        os.mkdir(staging)
     except OSError as exc:
-        raise PipelineError("OUTPUT_IO", "Cannot create the merge output", "merge") from exc
+        raise PipelineError("OUTPUT_IO", "Cannot create the merge staging directory", "merge") from exc
     try:
-        return _merge(torch, hf, peft, base, adapter, output, provenance, base_identity)
+        marker = _merge(torch, hf, peft, base, adapter, staging, provenance, base_identity)
+        published = _invalid("The merge output already exists; deployment exports are immutable")
+        if output.exists():
+            raise published
+        try:
+            # Windows refuses an existing target; POSIX replaces at most an empty directory.
+            os.rename(staging, output)
+        except OSError as exc:
+            if output.exists():
+                raise published from exc
+            raise PipelineError("OUTPUT_IO", "Cannot publish the merged export", "merge") from exc
+        return marker
     except BaseException as exc:
-        # The directory was created by this call; nothing else may have been written there.
-        shutil.rmtree(output, ignore_errors=True)
+        # The staging directory was created by this call; nothing else writes there.
+        shutil.rmtree(staging, ignore_errors=True)
         if isinstance(exc, (PipelineError, KeyboardInterrupt)):
             raise
         raise PipelineError("MODEL_UNAVAILABLE", f"Merging failed with {type(exc).__name__}", "merge") from exc
@@ -129,8 +149,8 @@ def _merge(torch, hf, peft, base: Path, adapter: Path, output: Path, provenance:
               "protocol": provenance["protocol"], "chat_template_sha256": template,
               "tokenizer_class": type(tokenizer).__name__, "tokenizer_files_copied": copied,
               "dtype": "bfloat16", "reload_verified": True, "inference_verified": False,
-              "parameters": {"base": base_parameters, "adapter_trainable": provenance.get("trainable_parameters"), "deployed": deployed_parameters,
-                             "limit": fit.PARAMETER_LIMIT},
+              "parameters": {"base": base_parameters, "adapter_trainable": provenance.get("trainable_parameters"),
+                             "deployed": deployed_parameters, "limit": fit.PARAMETER_LIMIT},
               "files": identity["files"],
               "packages": {name: importlib.metadata.version(name)
                            for name in ("torch", "transformers", "peft", "safetensors")},

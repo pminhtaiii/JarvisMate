@@ -351,6 +351,21 @@ QLoRA test). Venv: 10 skipped (2 symlink cases, 5 opt-in real-tokenizer tests,
 which applies only outside the training environment). `test_training_fit.py` has 27
 tests: global OK with 4 skipped, venv OK with 2 skipped in 42 s.
 
+After the PR #14 review fixes, the same commands give 394 tests, OK: 20 skipped globally
+(one more `RealStackSmoke` test) and 10 in the venv. `test_training_fit.py` has 33 tests:
+global OK with 5 skipped, venv OK with 2 skipped in 40 s. Against the previous source,
+every new test fails. The fixes:
+- `merge` also refuses an adapter whose recorded prompt identity or final text differs
+  from this revision's native protocol, or whose `adapter_config.json` (the LoRA rank and
+  alpha that set the merge scaling) differs from the digest `fit` now records.
+- `merge` writes into a hidden staging directory beside the output and renames it into
+  place only after the marker is written. A killed merge leaves no partial checkpoint
+  at the output path.
+- The memory probe uses the longest rows and keeps logits for the longest completion of
+  any row, so it bounds every microbatch training can draw.
+- The first `fit_manifest.json` write is inside the failure handling.
+- The CUDA-only QLoRA test now pins `bitsandbytes` in its test lock; it still has not run.
+
 - **T027**: `training/fit.py` validates a strict JSON config: every field is required,
   unknown fields are rejected, and relative paths resolve against the config file.
   - The input gate accepts only unmodified, unique rows of the export's `fit.jsonl`.
@@ -379,22 +394,26 @@ tests: global OK with 4 skipped, venv OK with 2 skipped in 42 s.
   export/rows/config/lock digests and adapter digest. It is published only after the
   saved tensors reload equal to the trained ones. On CPU, two runs of one config wrote
   byte-identical adapters for both epochs. `--preflight-only` audits inputs, packages,
-  device and one longest-row forward/backward pass, then stops without a checkpoint.
+  device and one worst-case forward/backward pass, then stops without a checkpoint. A
+  preflight claims its own output directory, so the following fit needs another one.
+  The export records no base weight digest; `fit` records the weights it trained on,
+  and `merge` enforces them.
 - **T029**: `merge --base-model --adapter --output` (`training/export.py`) refuses:
-  an incomplete or tampered adapter; a non-native or foreign trainer; a base whose
-  weight, config or tokenizer files differ from the adapter's provenance; an existing
-  output; and outputs inside the base or adapter. All refusals happen before training
-  libraries load or the output exists. It merges in BF16 and copies tokenizer and
-  template files byte for byte, so the `planner-model` factor still sees the identical
-  tokenizer. The reloaded export's state dict must equal the merged weights. It writes
-  `lifemate_export.json` last and removes its own output on failure.
+  an incomplete or tampered adapter or adapter config; a non-native or foreign trainer;
+  a different native prompt or final text; a base whose weight, config or tokenizer
+  files differ from the adapter's provenance; an existing output; and outputs inside
+  the base or adapter. All refusals happen before training libraries load or the output
+  exists. It merges in BF16 and copies tokenizer and template files byte for byte, so
+  the `planner-model` factor still sees the identical tokenizer. The reloaded export's
+  state dict must equal the merged weights. It writes `lifemate_export.json` last in a
+  staging directory, renames that into place, and removes the staging directory on failure.
 - **T030**: in the venv, `RealStackSmoke` exports four fit rows through the real
   tokenizer and pinned LMFE grammar, then fits, checkpoints, reloads and merges. A
   finish-only adapter, merged and loaded by the unchanged native `LocalPlanner`,
   returned the canonical finish with stop reason `eos`. Merging the same adapter onto a
   second random base was refused with `INPUT_INVALID`. Only CUDA branches did not run:
   peak-VRAM and headroom measurement, the out-of-memory refusal and QLoRA loading. On
-  CPU the manifest records the probe length and optimizer-state estimate only.
+  CPU the manifest records the probe shape and optimizer-state estimate only.
 
 ## T026 — Training environment and lock (PARTIAL, NOT CHECKED, 2026-11-01)
 

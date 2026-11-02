@@ -22,7 +22,7 @@ from unittest.mock import patch
 from lifemate.contracts import Limits, PipelineError
 from lifemate.dataset import validate_catalog
 from lifemate.jsonio import digest, dumps
-from lifemate.prompting import NATIVE_SYSTEM
+from lifemate.prompting import NATIVE_FINISH_TEXT, NATIVE_SYSTEM
 from lifemate.provenance import model_identity
 from lifemate.training import data as training_data
 from lifemate.training import export as merging
@@ -312,6 +312,23 @@ class FitCommandTests(AuditedExportCase):
         self.assertEqual((manifest["status"], manifest["check"]), ("failed", "inputs"))
         self.assertNotIn("packages", manifest)
 
+    def test_a_failed_first_manifest_write_is_still_recorded_as_a_failure(self):
+        real, calls = fit.atomic_json, []
+
+        def flaky(path, value):
+            calls.append(value["status"])
+            if len(calls) == 1:
+                raise PipelineError("OUTPUT_IO", "Cannot persist run manifest", "output")
+            real(path, value)
+
+        with patch.object(fit, "atomic_json", side_effect=flaky):
+            code, summary = self.run_fit(self.config())
+        self.assertEqual((code, summary["error"]["code"]), (1, "OUTPUT_IO"))
+        self.assertEqual(calls, ["running", "failed"])
+        manifest = self.manifest()
+        self.assertEqual((manifest["status"], manifest["check"], manifest["error"]["code"]),
+                         ("failed", "inputs", "OUTPUT_IO"))
+
     def test_an_existing_output_is_never_reused(self):
         existing = self.fx.root / "runs" / "fit-1"
         existing.mkdir(parents=True)
@@ -327,12 +344,15 @@ class MergeRejectionTests(ExportCase):
         super().setUp()
         self.adapter = self.fx.root / "runs" / "fit-1" / "checkpoint-epoch-1"
         self.adapter.mkdir(parents=True)
-        (self.adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+        (self.adapter / fit.ADAPTER_CONFIG).write_text('{"r": 8, "lora_alpha": 16}', encoding="utf-8")
         (self.adapter / fit.ADAPTER_WEIGHTS).write_bytes(b"weights")
-        self.provenance = {"trainer": fit.TRAINER_VERSION, "protocol": {"protocol": "qwen-native-v1"},
+        self.provenance = {"trainer": fit.TRAINER_VERSION,
+                           "protocol": {"protocol": "qwen-native-v1", "prompt": fit.native_prompt_identity(),
+                                        "final_text": NATIVE_FINISH_TEXT},
                            "base_model": {"files": model_identity(self.model)["files"],
                                           "chat_template_sha256": "0" * 64},
-                           "adapter_sha256": digest(self.adapter / fit.ADAPTER_WEIGHTS)}
+                           "adapter_sha256": digest(self.adapter / fit.ADAPTER_WEIGHTS),
+                           "adapter_config_sha256": digest(self.adapter / fit.ADAPTER_CONFIG)}
         self.write_provenance()
         self.output = self.fx.root / "deployment"
 
@@ -361,12 +381,56 @@ class MergeRejectionTests(ExportCase):
         (self.adapter / fit.ADAPTER_WEIGHTS).write_bytes(b"other weights")
         self.refused("differ from their recorded provenance")
         (self.adapter / fit.ADAPTER_WEIGHTS).write_bytes(b"weights")
-        self.write_provenance(protocol={"protocol": "structured-v1"})
+        self.write_provenance(protocol=self.provenance["protocol"] | {"protocol": "structured-v1"})
         self.refused("native protocol")
         self.write_provenance(trainer="other-trainer")
         self.refused("native protocol")
         (self.adapter / fit.ADAPTER_PROVENANCE).unlink()
         self.refused("complete checkpoint")
+
+    def test_a_changed_adapter_config_is_refused(self):
+        # r and lora_alpha set the scaling the merge applies.
+        (self.adapter / fit.ADAPTER_CONFIG).write_text('{"r": 8, "lora_alpha": 64}', encoding="utf-8")
+        self.refused("configuration differs")
+
+    def test_an_adapter_trained_with_another_prompt_or_final_text_is_refused(self):
+        native = self.provenance["protocol"]
+        for label, protocol in {"prompt": native | {"prompt": native["prompt"] | {"sha256": "0" * 64}},
+                                "final text": native | {"final_text": "Xong."}}.items():
+            with self.subTest(label):
+                self.write_provenance(protocol=protocol)
+                self.refused("different native prompt or final text")
+
+    def test_the_output_appears_only_after_a_completed_merge(self):
+        seen = {}
+
+        def merged(torch, hf, peft, base, adapter, staging, provenance, identity):
+            # A process killed here would leave only the hidden staging directory.
+            (staging / "config.json").write_text("{}", encoding="utf-8")
+            seen["output_during_merge"] = self.output.exists()
+            seen["staging"] = staging
+            return {"status": "completed"}
+
+        with patch.object(fit, "libraries", return_value=(None, None, None)), \
+                patch.object(merging, "_merge", side_effect=merged):
+            self.assertEqual(merging.merge(self.model, self.adapter, self.output), {"status": "completed"})
+        self.assertFalse(seen["output_during_merge"])
+        self.assertEqual(seen["staging"].parent, self.output.parent)
+        self.assertTrue(seen["staging"].name.startswith("."))
+        self.assertEqual([p.name for p in self.output.iterdir()], ["config.json"])
+        self.assertFalse(seen["staging"].exists())
+
+    def test_a_failed_merge_leaves_neither_output_nor_staging(self):
+        def broken(torch, hf, peft, base, adapter, staging, provenance, identity):
+            (staging / "model.safetensors").write_bytes(b"partial")
+            raise RuntimeError("disk full")
+
+        with patch.object(fit, "libraries", return_value=(None, None, None)), \
+                patch.object(merging, "_merge", side_effect=broken):
+            with self.assertRaises(PipelineError) as caught:
+                merging.merge(self.model, self.adapter, self.output)
+        self.assertEqual(caught.exception.code, "MODEL_UNAVAILABLE")
+        self.assertEqual(list(self.output.parent.glob("*deployment*")), [])
 
     def test_existing_or_nested_outputs_are_refused(self):
         self.refused("outside", output=self.model / "merged")
@@ -491,10 +555,25 @@ class RealStackSmoke(AuditedExportCase):
         manifest = self.fit_run("preflight", "--preflight-only")
         self.assertEqual((manifest["status"], manifest["checkpoints"]), ("preflight-passed", []))
         self.assertIn("optimizer_state_bytes_estimate", manifest["memory"])
+        # The probe bounds every microbatch: the longest rows with the longest completion's logits.
+        self.assertEqual((manifest["memory"]["probe_tokens"], manifest["memory"]["probe_completion_tokens"]),
+                         (manifest["mask_audit"]["max_total_tokens"], manifest["mask_audit"]["max_completion_tokens"]))
         self.assertEqual(sorted(p.name for p in (self.fx.root / "runs" / "preflight").iterdir()), [fit.RUN_MANIFEST])
+
+    def test_the_probe_batch_keeps_logits_for_the_longest_completion(self):
+        import torch
+
+        short = {"input_ids": [5, 6, 7, 8, 2], "labels": [-100, -100, -100, 8, 2], "completion_tokens": 2}
+        ids, _, _, targets, keep = fit._batch(torch, [short], 3, "cpu", keep=5)
+        self.assertEqual((keep, tuple(targets.shape)), (5, (1, 4)))
+        self.assertEqual(targets.tolist(), [[-100, -100, 8, 2]])
+        self.assertEqual(fit._batch(torch, [short], 3, "cpu")[4], 3)
 
     @unittest.skipUnless(CUDA, "QLoRA needs CUDA and bitsandbytes")
     def test_qlora_preflight_on_cuda(self):
+        # QLoRA requires a bitsandbytes pin in the lock.
+        with self.lock.open("a", encoding="utf-8") as stream:
+            stream.write(f"bitsandbytes=={importlib.metadata.version('bitsandbytes')}\n")
         manifest = self.fit_run("qlora", "--preflight-only", method="qlora", device="cuda")
         self.assertEqual(manifest["model"]["qlora"]["quant_type"], "nf4")
         self.assertGreater(manifest["memory"]["peak_allocated_bytes"], 0)

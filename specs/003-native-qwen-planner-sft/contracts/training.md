@@ -29,8 +29,8 @@ are optional and must not become mandatory imports for ordinary `lifemate run`.
 4. `merge --base-model PATH --adapter PATH --output PATH` verifies matching base and
    tokenizer/protocol identity, loads original non-quantized base, merges adapter,
    and writes self-contained checkpoint/tokenizer plus export manifest
-   (`lifemate_export.json`, written last). Refuse overwrite and model/data input
-   directories as output targets.
+   (`lifemate_export.json`, written last in a staging directory that is then renamed
+   to the output). Refuse overwrite and model/data input directories as output targets.
 
 Each operation returns nonzero on input/audit/resource failure and a bounded summary
 with artifact paths. An export can quarantine bad rows but must report exclusions

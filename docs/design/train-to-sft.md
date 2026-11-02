@@ -251,7 +251,8 @@ fit row is accepted or when the leakage or partition audit fails.
 The manifest records source JSONL/catalog hashes and versions, partition file hash and
 grouping identity, exporter version and code digest, protocol/prompt/constraint
 identities, base tokenizer/template/config file hashes (export does not hash weights;
-`fit` and `merge` hash them and refuse a different base), budgets, supervision and weighting policy, per-partition row and
+`fit` records their digests in each adapter's provenance, and `merge` refuses a base
+whose weights differ from it), budgets, supervision and weighting policy, per-partition row and
 sample counts, per-tool/finish/missing-info distributions, token-length statistics,
 exclusions by reason and tool, audit counts and output file digests. Track experiment
 configuration and concise reports; do not publish competition data, derived examples

@@ -34,6 +34,7 @@ TRAINER_VERSION = "lifemate-native-sft-fit-v1"
 RUN_MANIFEST = "fit_manifest.json"
 ADAPTER_PROVENANCE = "lifemate_adapter.json"
 ADAPTER_WEIGHTS = "adapter_model.safetensors"
+ADAPTER_CONFIG = "adapter_config.json"
 PARAMETER_LIMIT = 5_000_000_000
 FIELDS = frozenset({
     "schema_version", "base_model", "export_manifest", "fit_rows", "output_dir", "method", "device", "seed",
@@ -134,6 +135,11 @@ def load_config(path: Path) -> JSON:
     return validate_config(value, path.parent) | {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
+def native_prompt_identity() -> JSON:
+    """The prompt identity the native planner renders with in this code revision."""
+    return profile_identity(protocol_profile(resolve_profile("baseline"), qwen_protocol.PROTOCOL))
+
+
 def _jsonl(raw: bytes, name: str) -> list[JSON]:
     try:
         rows = [loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
@@ -159,11 +165,10 @@ def audited_rows(paths: JSON) -> tuple[list[JSON], JSON, JSON]:
     manifest_bytes = _read(paths["export_manifest"], "export manifest")
     try:
         manifest = loads(manifest_bytes.decode("utf-8"))
-        expected_prompt = profile_identity(protocol_profile(resolve_profile("baseline"), qwen_protocol.PROTOCOL))
         audited = (manifest["export_schema_version"] == data.EXPORT_SCHEMA_VERSION
                    and manifest["exporter"]["version"] == data.EXPORTER_VERSION
                    and manifest["protocol"]["protocol"] == qwen_protocol.PROTOCOL
-                   and manifest["protocol"]["prompt"] == expected_prompt
+                   and manifest["protocol"]["prompt"] == native_prompt_identity()
                    and manifest["protocol"]["final_text"] == NATIVE_FINISH_TEXT
                    and manifest["supervision"]["ignore_index"] == data.IGNORE_INDEX
                    and manifest["supervision"]["packing"] is False
@@ -361,10 +366,14 @@ def load_model(libs, base: Path, settings: JSON):
                    "qlora": QLORA_SETTINGS if qlora else None}
 
 
-def _batch(torch, examples: list[JSON], pad_id: int, device: str):
-    """Left-padded tensors; every completion then ends at the last position."""
+def _batch(torch, examples: list[JSON], pad_id: int, device: str, keep: int | None = None):
+    """Left-padded tensors; every completion then ends at the last position.
+
+    `keep` (logit positions) defaults to the batch's longest completion plus one; a
+    larger value only adds positions whose labels are ignored.
+    """
     width = max(len(e["input_ids"]) for e in examples)
-    keep = max(e["completion_tokens"] for e in examples) + 1
+    keep = max(keep or 0, max(e["completion_tokens"] for e in examples) + 1)
     ids, mask, labels = [], [], []
     for example in examples:
         pad = width - len(example["input_ids"])
@@ -376,13 +385,13 @@ def _batch(torch, examples: list[JSON], pad_id: int, device: str):
     return ids, mask, positions, labels[:, width - keep + 1:], keep
 
 
-def row_losses(torch, model, examples: list[JSON], pad_id: int, device: str):
+def row_losses(torch, model, examples: list[JSON], pad_id: int, device: str, keep: int | None = None):
     """Mean completion NLL of each row.
 
     Only the positions that predict completion tokens get logits (`logits_to_keep`), so
     a full-vocabulary logit matrix is never built over a long prompt.
     """
-    ids, mask, positions, targets, keep = _batch(torch, examples, pad_id, device)
+    ids, mask, positions, targets, keep = _batch(torch, examples, pad_id, device, keep)
     logits = model(input_ids=ids, attention_mask=mask, position_ids=positions, logits_to_keep=keep,
                    use_cache=False).logits[:, :-1, :].float()
     losses = torch.nn.functional.cross_entropy(logits.transpose(1, 2), targets, ignore_index=data.IGNORE_INDEX,
@@ -391,19 +400,25 @@ def row_losses(torch, model, examples: list[JSON], pad_id: int, device: str):
 
 
 def memory_probe(torch, model, examples: list[JSON], settings: JSON, pad_id: int, hardware: JSON) -> JSON:
-    """One forward/backward pass on the longest accepted rows; the weights are not updated."""
+    """One worst-case forward/backward pass; the weights are not updated.
+
+    A microbatch's memory grows with its row count, its padded width and its number of
+    logit positions. The probe takes the longest rows and the longest completion among
+    all rows, so it bounds every microbatch training can draw.
+    """
     longest = sorted(examples, key=lambda e: len(e["input_ids"]), reverse=True)[:settings["microbatch"]]
+    widest_target = max(e["completion_tokens"] for e in examples)
     cuda = settings["device"] == "cuda"
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     # AdamW keeps two fp32 moments per trainable parameter.
     result = {"probe_rows": len(longest), "probe_tokens": len(longest[0]["input_ids"]),
-              "optimizer_state_bytes_estimate": 8 * trainable}
+              "probe_completion_tokens": widest_target, "optimizer_state_bytes_estimate": 8 * trainable}
     if cuda:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
     model.train()
     try:
-        row_losses(torch, model, longest, pad_id, settings["device"]).mean().backward()
+        row_losses(torch, model, longest, pad_id, settings["device"], widest_target + 1).mean().backward()
     except torch.cuda.OutOfMemoryError as exc:
         raise PipelineError("MODEL_UNAVAILABLE", "One microbatch of the longest accepted rows does not fit in GPU "
                             "memory; reduce microbatch or choose QLoRA explicitly", "fit") from exc
@@ -438,8 +453,10 @@ def save_checkpoint(libs, model, output: Path, name: str, provenance: JSON) -> J
     if not adapter_matches(torch, peft, model, staging):
         raise PipelineError("OUTPUT_IO", f"Reloaded adapter {name} differs from the trained weights", "fit")
     weights = digest(staging / ADAPTER_WEIGHTS)
+    # The config sets the LoRA scaling a merge applies, so it is bound to the provenance too.
     with (staging / ADAPTER_PROVENANCE).open("x", encoding="utf-8", newline="\n") as stream:
-        sync_write(stream, dumps(provenance | {"adapter_sha256": weights}) + "\n")
+        sync_write(stream, dumps(provenance | {"adapter_sha256": weights,
+                                               "adapter_config_sha256": digest(staging / ADAPTER_CONFIG)}) + "\n")
     os.rename(staging, output / name)
     return {"name": name, "path": str(output / name), "adapter_sha256": weights, "reload_verified": True}
 
@@ -527,8 +544,8 @@ def fit(config_path: Path, *, preflight_only: bool = False) -> JSON:
         manifest.update(values, check=check)
         atomic_json(path, manifest)
 
-    advance("inputs")
     try:
+        advance("inputs")
         rows, export_manifest, inputs = audited_rows(paths)
         advance("packages", inputs=inputs)
         packages = locked_packages(paths["package_lock"], settings["package_lock"]["sha256"], settings["method"])
