@@ -53,12 +53,12 @@ explicit missing evidence, transcript/audio separated and full-attempt timings.
 **Independent test**: Strict-prefix sentinels, source groups, terminal/empty cases,
 grounding exclusions and actual tokenizer final-completion masks.
 
-- [ ] T020 [US3] Add export fixtures for future-result leakage, label whitelist, native target parity, history, clarification, invalid gold and overflow in `python/tests/test_training_data.py`.
-- [ ] T021 [US3] Implement fit-only gold-prefix conversion, ID-grounding/pairing/terminal audits and declared policy-finish provenance in `python/src/lifemate/training/data.py`, using no environment access.
-- [ ] T022 [US3] Add `export` command and source/partition/template identities, exclusions, distributions and immutable artifact outputs in `python/src/lifemate/training/__main__.py` and `python/src/lifemate/training/data.py`.
-- [ ] T023 [US3] Implement actual-tokenizer target/EOS-only labels, prompt/completion boundary checks and context/output-budget exclusions in `python/src/lifemate/training/data.py`, sharing native runtime rendering.
+- [x] T020 [US3] Add export fixtures for future-result leakage, label whitelist, native target parity, history, clarification, invalid gold and overflow in `python/tests/test_training_data.py`.
+- [x] T021 [US3] Implement fit-only gold-prefix conversion, ID-grounding/pairing/terminal audits and declared policy-finish provenance in `python/src/lifemate/training/data.py`, using no environment access.
+- [x] T022 [US3] Add `export` command and source/partition/template identities, exclusions, distributions and immutable artifact outputs in `python/src/lifemate/training/__main__.py` and `python/src/lifemate/training/data.py`.
+- [x] T023 [US3] Implement actual-tokenizer target/EOS-only labels, prompt/completion boundary checks and context/output-budget exclusions in `python/src/lifemate/training/data.py`, sharing native runtime rendering.
 - [ ] T024 [US3] Run leakage/mask/rendering/coverage audits against actual tokenizer and supplied fit data; save manifests under `.agent-work/lifemate-runs/native-sft/sft/` and sanitized evidence in `specs/003-native-qwen-planner-sft/validation.md`.
-- [ ] T025 [US3] Reconcile native target serialization and accepted all-linear LoRA/conditional QLoRA method in `docs/design/train-to-sft.md` while retaining the existing single source of truth for conversion invariants and clearly marking implementation evidence limits.
+- [x] T025 [US3] Reconcile native target serialization and accepted all-linear LoRA/conditional QLoRA method in `docs/design/train-to-sft.md` while retaining the existing single source of truth for conversion invariants and clearly marking implementation evidence limits.
 
 ## Phase 6: US4 — Controlled adapter fitting and deployment evaluation (P3)
 

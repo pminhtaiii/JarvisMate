@@ -153,9 +153,7 @@ def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> Sa
                 entry["tool_results"] = copy.deepcopy(turn["tool_results"])
         normalized.append(entry)
     require(len(history) % 2 == 0, "History must end with assistant")
-    # Resolve the path and check existence only. The original runtime owns reading it.
-    contained(base, f"{config.split}_environment/{sample_id}/state.json", allow_environment=True)
-    context = {"current_time": ctx["current_time"], "timezone": ctx["timezone"],
+    context ={"current_time": ctx["current_time"], "timezone": ctx["timezone"],
                "location": {k: loc[k] for k in ("lat", "lng")},
                "user_profile": {k: profile[k] for k in ("name", "home_address", "work_address", "city")},
                "installed_apps": {app: {"tools": list(info["tools"])} for app, info in installed.items()}}
@@ -188,6 +186,10 @@ def preflight(config: RunConfig) -> PreparedDataset:
     selected = set(index) if config.select_all else set(config.selected_ids)
     require(bool(selected) and selected <= index.keys(), "Selection is empty or contains unknown IDs")
     samples = tuple(normalize_record(row, config, specs) for key, row in index.items() if key in selected)
+    for sample in samples:
+        # Resolve the path and check existence only. The original runtime owns reading it;
+        # offline conversion reuses normalize_record without touching environments at all.
+        contained(base, f"{config.split}_environment/{sample.id}/state.json", allow_environment=True)
     return PreparedDataset(samples, catalog, {
         "split": config.split, "input_mode": config.input_mode,
         "selected_ids": [s.id for s in samples], "selected_count": len(samples),

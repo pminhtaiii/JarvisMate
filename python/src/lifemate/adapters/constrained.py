@@ -37,6 +37,29 @@ def argument_schemas(tool: dict) -> list[dict]:
     return branches
 
 
+def grammar_ordered_arguments(tool: dict, arguments: dict) -> dict:
+    """The same arguments, keyed in an order the pinned grammar can generate.
+
+    With force_json_field_order, LMFE emits a branch's required keys first, in their
+    `required` order; optional keys may follow in any order (kept in schema order here).
+    Values are never changed; unknown keys stay last for the grammar check to reject.
+    """
+    def order(value, schema):
+        if isinstance(value, dict) and isinstance(schema, dict) and schema.get("type") == "object":
+            properties = schema.get("properties", {})
+            keys = [key for key in schema.get("required", []) if key in value]
+            keys += [key for key in properties if key in value and key not in keys]
+            keys += [key for key in value if key not in keys]
+            return {key: order(value[key], properties.get(key)) for key in keys}
+        if isinstance(value, list) and isinstance(schema, dict) and schema.get("type") == "array":
+            return [order(item, schema.get("items")) for item in value]
+        return value
+
+    branches = argument_schemas(tool)
+    branch = next((b for b in branches if set(b.get("required", [])) <= set(arguments)), branches[0])
+    return order(arguments, branch)
+
+
 def action_parser(tools: list[dict], config):
     """Independent parser contexts per tool/alternative; canonical outer envelope.
 
@@ -123,6 +146,21 @@ class ActionConstraint:
 
         config = replace(self.config, alphabet=self.tokenizer_data.tokenizer_alphabet)
         return self.build_prefix(self.tokenizer_data, native_action_parser(tools, config))
+
+    def native_admits(self, tools: list[dict], text: str) -> bool:
+        """Whether the inference grammar generates exactly `text` and may then end.
+
+        Offline SFT export uses this so a training target is one the decoder can produce.
+        """
+        from dataclasses import replace
+
+        config = replace(self.config, alphabet=self.tokenizer_data.tokenizer_alphabet)
+        parser = native_action_parser(tools, config)
+        for character in text:
+            if character not in parser.get_allowed_characters():
+                return False
+            parser = parser.add_character(character)
+        return parser.can_end()
 
     def schema_prefix(self, schema: dict):
         """Fresh parser for the optional, non-executing selection planning phase."""
