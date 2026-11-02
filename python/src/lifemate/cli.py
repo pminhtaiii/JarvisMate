@@ -21,7 +21,8 @@ from .prompt_profiles import (
     protocol_profile, reject_fit_in_selection, resolve_profile, validate_bundle,
 )
 from .reporting import (
-    build_comparison, build_report, load_manifest, validate_comparison_output, write_comparison, write_report,
+    FACTORS, build_comparison, build_report, load_manifest, validate_comparison_output, write_comparison,
+    write_report,
 )
 from .runtime import load_runtime
 
@@ -81,7 +82,7 @@ def parser() -> Parser:
     compare = sub.add_parser("compare-runs")
     compare.add_argument("--baseline-run", required=True, type=Path)
     compare.add_argument("--candidate-run", required=True, type=Path)
-    compare.add_argument("--factor", required=True, choices=("harness", "instructions", "few-shot"))
+    compare.add_argument("--factor", required=True, choices=FACTORS)
     compare.add_argument("--baseline-evaluation", type=Path)
     compare.add_argument("--candidate-evaluation", type=Path)
     compare.add_argument("--output-dir", required=True, type=Path)

@@ -108,6 +108,7 @@ class LocalPlanner(ModelResidency):
                     "adapter": "qwen3-native-tool-call", "structured_output": self.constraint.native_metadata,
                     "native_protocol": {"protocol": protocol, "final_text": NATIVE_FINISH_TEXT,
                                         "eos_token_id": self.tokenizer.eos_token_id,
+                                        "tokenizer_class": type(self.tokenizer).__name__,
                                         "chat_template_sha256": hashlib.sha256(template.encode()).hexdigest()}}
         except PipelineError:
             raise

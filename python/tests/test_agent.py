@@ -200,6 +200,16 @@ class AgentTests(unittest.TestCase):
         native = [fields for kind, fields in self.trace.events if kind == "planner_native_output"]
         self.assertEqual([(f["decision"], f["payload"]["canonical_action"]) for f in native], [("rejected", None)])
 
+    def test_native_output_trace_failure_prevents_dispatch(self):
+        search = call("contacts.search", query="Lan")
+        output = {"text": "<tool_call>…</tool_call>", "stop_reason": "eos", "output_tokens": 9,
+                  "decision": "call", "canonical_action": search}
+        self.env, self.trace = ControlledEnvironment(), MemoryTrace("planner_native_output")
+        outcome = run_sample(self.sample, self.native_planner([search], [output]), None,
+                             lambda *a: self.env, self.trace, Limits(), split="train", data_root=self.fx.data)
+        self.assertEqual(outcome.error["code"], "TRACE_IO")
+        self.assertEqual(self.env.calls, [])
+
     def test_step_and_deadline_exhaustion_have_no_fake_success(self):
         outcome = self.execute(['bad'], limits=Limits(max_steps=1))
         self.assertEqual(outcome.error["code"], "STEP_LIMIT")

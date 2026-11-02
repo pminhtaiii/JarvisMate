@@ -414,7 +414,7 @@ class NativeAdapterTests(unittest.TestCase):
         self.assertEqual(planner.metadata["prompt_profile"]["sha256"], NATIVE_PROMPT_HASH)
         self.assertEqual(planner.metadata["native_protocol"], {
             "protocol": "qwen-native-v1", "final_text": NATIVE_FINISH_TEXT, "eos_token_id": EOS,
-            "chat_template_sha256": hashlib.sha256(b"{{ qwen3 template }}").hexdigest()})
+            "tokenizer_class": "MagicMock", "chat_template_sha256": hashlib.sha256(b"{{ qwen3 template }}").hexdigest()})
 
     def test_unavailable_tool_is_a_format_failure_not_a_decision(self):
         self.generate('<tool_call>\n{"name": "bank.transfer", "arguments": {}}\n</tool_call>')

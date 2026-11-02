@@ -172,3 +172,69 @@ LIFEMATE_QWEN_TEST_MODEL=<tokenizer dir> PYTHONPATH=src python -m unittest disco
 
 The native generation path has not run with real weights. No accuracy, latency or
 protocol-comparison claim follows from this record.
+
+## T014, T015, T017 — Partition and comparison factors, controlled (recorded 2026-11-01)
+
+**Branch**: `feat/native-sft-partition`, stacked on `feat/native-qwen-protocol` (PR #10).
+**Evidence level**: controlled unittest suite on synthetic Train rows and run
+manifests. No real Train data, model or evaluator was used.
+
+```bash
+PYTHONPATH=src python -X utf8 -m unittest discover -s tests -p "test_*.py"
+```
+
+Exit `0`: 331 tests, OK, 15 skipped (the same skips as above). New or extended files:
+`test_training_data.py` 22 OK; `test_reporting.py` 51 OK; `test_cli.py` 37 OK;
+`test_agent.py` 18 OK. The pinned-LMFE grammar run of `test_qwen_protocol.py` is
+unchanged (30, 5 skipped). Counts include the PR #12 review fixes: malformed tool,
+history or decision entries now fail with `INPUT_INVALID` instead of a traceback; a
+`null` decisions file is rejected; a split with no validation members is rejected;
+`train.jsonl` and the catalog are hashed from the same bytes that are parsed; a failed
+write leaves no partial manifest; label-missing rows still count toward
+`long_history`; both model factors require each run's prompt identity to match its
+declared protocol; and `planner-model` also compares the loaded tokenizer class.
+Run against the previous source, each new check fails.
+
+- **T014**: `python -m lifemate.training partition --data-root PATH --output PATH
+  [--seed 20261027] [--validation-fraction 0.2] [--decisions PATH]` reads only
+  `train/train.jsonl` and the validated catalog, writes a partition-v1 manifest checked
+  by `prompt_profiles.validate_partition_manifest`, and refuses an existing output or an
+  output inside the data root. Grouping (`lifemate-train-grouping-v1`) unions
+  conversation links (a history replaying another sample's turns, or a shared opening
+  turn) and exact normalized duplicates. It reports near-duplicate (token-set Jaccard
+  ≥ 0.8) and masked request-skeleton candidates within one installed-tool signature and
+  co-groups them unless a recorded review decision separates them; every decision,
+  candidate, rule, parameter and limitation is written to the manifest. Smoke IDs
+  `train_1748`–`train_1751` and their groups are pinned to fit. Groups are assigned with
+  seed `20261027` toward the validation fraction; per-partition coverage counts
+  empty-gold, missing-info, multi-app and long-history samples and per-app usage, and
+  lists categories/apps absent from validation. Gold labels are read only for that
+  coverage audit. The command imports no model or training library, and no
+  `*_environment` file is opened (both tested). Visible Train inputs have no explicit
+  conversation or template IDs, so those links are inferred; paraphrase detection is
+  lexical only, and the manifest says so.
+- **T015**: tests cover partition-v1 shape and canonical `source_sha256`, determinism,
+  group separation, smoke IDs at a 0.9 validation fraction, exact duplicates (case and
+  whitespace only, diacritics kept, across tool signatures), transitive conversation
+  links, near-duplicates limited to one tool signature, skeleton masking of times and
+  names, unrelated same-tool requests, review decisions and their rejections, coverage,
+  no-overwrite, data-root output rejection and environment isolation.
+- **T017**: `compare-runs --factor protocol|planner-model`. `protocol` accepts only a
+  structured-v1 baseline against a qwen-native-v1 candidate with the identical planner
+  checkpoint/tokenizer, ASR, packages, code, dtype, limits and settings, the baseline
+  instruction policy, no examples and the selection filter off; only the protocol
+  prompt identity may differ. `planner-model` accepts two native runs that differ only
+  in planner weight/config files, with identical tokenizer and chat-template files,
+  loaded template hash, prompt, ASR, packages, code, limits and settings. Both report
+  `promotion_status: exploratory` and never an automatic recommendation. The existing
+  factors keep rejecting changed weights and protocol changes.
+
+## T016, T018, T019 — NOT RUN (2026-11-01)
+
+Blocked in this environment, not failed. T016 needs the real Train JSONL/catalog to
+freeze the actual partition under `.agent-work/lifemate-runs/native-sft/`, plus the
+eligible checkpoint and runtime identities. T018 needs the Train data, the
+Qwen3-4B-Instruct-2507 checkpoint, an ASR checkpoint and GPU time for paired
+transcript/audio runs. T019 depends on T018 and evaluator output. None of these assets
+is available here, so no partition, comparison report, protocol decision or SFT
+eligibility exists yet.
