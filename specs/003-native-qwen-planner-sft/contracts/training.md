@@ -31,6 +31,9 @@ are optional and must not become mandatory imports for ordinary `lifemate run`.
    and writes self-contained checkpoint/tokenizer plus export manifest
    (`lifemate_export.json`, written last in a staging directory that is then renamed
    to the output). Refuse overwrite and model/data input directories as output targets.
+   Accepted limitation: Python has no portable no-replace directory rename, so on POSIX
+   an empty directory created at the output between the existence check and the rename
+   is replaced. No file data can be lost; Windows refuses the rename.
 
 Each operation returns nonzero on input/audit/resource failure and a bounded summary
 with artifact paths. An export can quarantine bad rows but must report exclusions
