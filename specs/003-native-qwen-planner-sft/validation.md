@@ -366,6 +366,12 @@ every new test fails. The fixes:
 - The first `fit_manifest.json` write is inside the failure handling.
 - The CUDA-only QLoRA test now pins `bitsandbytes` in its test lock; it still has not run.
 
+A second review round brings the suite to 396 tests, OK: 21 skipped globally, 10 in the
+venv. `merge` now also refuses provenance without a chat-template digest. It re-hashes
+the base before writing the marker and refuses a base that changed during the merge.
+Write failures report `OUTPUT_IO`. `fit` hashes its code inside the failure handling.
+New tests spy on the probe's `keep` argument and gate the QLoRA test on `bitsandbytes`.
+
 - **T027**: `training/fit.py` validates a strict JSON config: every field is required,
   unknown fields are rejected, and relative paths resolve against the config file.
   - The input gate accepts only unmodified, unique rows of the export's `fit.jsonl`.

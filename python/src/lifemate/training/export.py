@@ -41,6 +41,7 @@ def adapter_provenance(adapter: Path) -> JSON:
         valid = (value["trainer"] == fit.TRAINER_VERSION
                  and value["protocol"]["protocol"] == qwen_protocol.PROTOCOL
                  and isinstance(value["base_model"]["files"], dict) and bool(value["base_model"]["files"])
+                 and isinstance(value["base_model"]["chat_template_sha256"], str)
                  and isinstance(value["adapter_sha256"], str) and isinstance(value["adapter_config_sha256"], str))
         same_prompt = (value["protocol"]["prompt"] == fit.native_prompt_identity()
                        and value["protocol"]["final_text"] == NATIVE_FINISH_TEXT)
@@ -120,13 +121,17 @@ def _merge(torch, hf, peft, base: Path, adapter: Path, output: Path, provenance:
     deployed_parameters = merged.num_parameters()
     if deployed_parameters >= fit.PARAMETER_LIMIT:
         raise PipelineError("MODEL_UNAVAILABLE", "The merged model exceeds the parameter budget", "merge")
-    merged.save_pretrained(output, safe_serialization=True)
     copied = {}
-    for name in tokenizer_files(base) + sorted(p.name for p in base.glob("LICENSE*") if p.is_file()):
-        (output / name).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(base / name, output / name)
-        copied[name] = digest(output / name)
-        if copied[name] != digest(base / name):
+    try:
+        merged.save_pretrained(output, safe_serialization=True)
+        for name in tokenizer_files(base) + sorted(p.name for p in base.glob("LICENSE*") if p.is_file()):
+            (output / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(base / name, output / name)
+            copied[name] = digest(output / name)
+    except OSError as exc:
+        raise PipelineError("OUTPUT_IO", "Cannot write the merged export", "merge") from exc
+    for name, value in copied.items():
+        if value != digest(base / name):
             raise PipelineError("OUTPUT_IO", f"Copied {name} differs from the base", "merge")
     if tokenizer_files(output) != tokenizer_files(base):
         raise PipelineError("OUTPUT_IO", "The export's tokenizer files differ from the base's", "merge")
@@ -140,6 +145,9 @@ def _merge(torch, hf, peft, base: Path, adapter: Path, output: Path, provenance:
     if template != provenance["base_model"]["chat_template_sha256"]:
         raise PipelineError("OUTPUT_IO", "The export's chat template differs from the training base", "merge")
 
+    # The base was hashed before loading; a file replaced since then must not be recorded as verified.
+    if model_identity(base)["files"] != base_identity["files"]:
+        raise _invalid("The base model changed during the merge")
     identity = model_identity(output)
     marker = {"schema_version": 1, "merger": MERGER_VERSION, "status": "completed", "finished_at": utc_now(),
               "state": "merged-export",
@@ -160,6 +168,9 @@ def _merge(torch, hf, peft, base: Path, adapter: Path, output: Path, provenance:
                               "Reload is verified here; native inference and benchmark evaluation are separate "
                               "steps through `lifemate run --planner-model`."]}
     # Written last: a directory without it is not a completed export.
-    with (output / EXPORT_MARKER).open("x", encoding="utf-8", newline="\n") as stream:
-        sync_write(stream, dumps(marker) + "\n")
+    try:
+        with (output / EXPORT_MARKER).open("x", encoding="utf-8", newline="\n") as stream:
+            sync_write(stream, dumps(marker) + "\n")
+    except OSError as exc:
+        raise PipelineError("OUTPUT_IO", "Cannot write the merged export", "merge") from exc
     return marker

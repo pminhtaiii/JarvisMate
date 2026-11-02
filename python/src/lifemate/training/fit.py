@@ -534,10 +534,7 @@ def fit(config_path: Path, *, preflight_only: bool = False) -> JSON:
                 "check": "inputs", "started_at": utc_now(), "preflight_only": preflight_only,
                 "output_dir": str(output),
                 "config": {"path": config["path"], "sha256": config["sha256"], "settings": settings},
-                "fixed_settings": FIXED_SETTINGS,
-                "code": {"sha256": hashlib.sha256(dumps(code_identity()).encode()).hexdigest(),
-                         **code_provenance()},
-                "checkpoints": []}
+                "fixed_settings": FIXED_SETTINGS, "checkpoints": []}
     path = output / RUN_MANIFEST
 
     def advance(check: str, **values) -> None:
@@ -545,6 +542,9 @@ def fit(config_path: Path, *, preflight_only: bool = False) -> JSON:
         atomic_json(path, manifest)
 
     try:
+        # Hashing the code reads package files, which can fail after the output is claimed.
+        manifest["code"] = {"sha256": hashlib.sha256(dumps(code_identity()).encode()).hexdigest(),
+                            **code_provenance()}
         advance("inputs")
         rows, export_manifest, inputs = audited_rows(paths)
         advance("packages", inputs=inputs)

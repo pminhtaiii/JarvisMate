@@ -34,6 +34,7 @@ from test_training_data import (EXPORT_CATALOG, FOUND, SEARCH, SEND, SENT, Expor
 TRAINING_STACK = all(importlib.util.find_spec(m) for m in ("torch", "transformers", "peft", "tokenizers"))
 LMFE = importlib.util.find_spec("lmformatenforcer") is not None
 CUDA = TRAINING_STACK and __import__("torch").cuda.is_available()
+BITSANDBYTES = importlib.util.find_spec("bitsandbytes") is not None
 ROWS = [sample("train_0001", calls=[SEARCH, SEND], results=[FOUND, SENT]),
         sample("train_0002", request="Kể chuyện cười"),
         sample("train_0003", request="Mở nhạc", calls=[SEARCH], results=[FOUND])]
@@ -329,6 +330,15 @@ class FitCommandTests(AuditedExportCase):
         self.assertEqual((manifest["status"], manifest["check"], manifest["error"]["code"]),
                          ("failed", "inputs", "OUTPUT_IO"))
 
+    def test_an_unreadable_code_identity_is_recorded_as_a_failure(self):
+        error = PipelineError("INPUT_INVALID", "Cannot fingerprint visible input")
+        with patch.object(fit, "code_identity", side_effect=error):
+            code, summary = self.run_fit(self.config())
+        self.assertEqual((code, summary["error"]["code"]), (2, "INPUT_INVALID"))
+        manifest = self.manifest()
+        self.assertEqual((manifest["status"], manifest["check"]), ("failed", "inputs"))
+        self.assertNotIn("code", manifest)
+
     def test_an_existing_output_is_never_reused(self):
         existing = self.fx.root / "runs" / "fit-1"
         existing.mkdir(parents=True)
@@ -385,6 +395,8 @@ class MergeRejectionTests(ExportCase):
         self.refused("native protocol")
         self.write_provenance(trainer="other-trainer")
         self.refused("native protocol")
+        self.write_provenance(base_model={"files": self.provenance["base_model"]["files"]})
+        self.refused("incomplete")
         (self.adapter / fit.ADAPTER_PROVENANCE).unlink()
         self.refused("complete checkpoint")
 
@@ -407,6 +419,7 @@ class MergeRejectionTests(ExportCase):
         def merged(torch, hf, peft, base, adapter, staging, provenance, identity):
             # A process killed here would leave only the hidden staging directory.
             (staging / "config.json").write_text("{}", encoding="utf-8")
+            (staging / merging.EXPORT_MARKER).write_text('{"status": "completed"}', encoding="utf-8")
             seen["output_during_merge"] = self.output.exists()
             seen["staging"] = staging
             return {"status": "completed"}
@@ -417,7 +430,7 @@ class MergeRejectionTests(ExportCase):
         self.assertFalse(seen["output_during_merge"])
         self.assertEqual(seen["staging"].parent, self.output.parent)
         self.assertTrue(seen["staging"].name.startswith("."))
-        self.assertEqual([p.name for p in self.output.iterdir()], ["config.json"])
+        self.assertEqual(sorted(p.name for p in self.output.iterdir()), ["config.json", merging.EXPORT_MARKER])
         self.assertFalse(seen["staging"].exists())
 
     def test_a_failed_merge_leaves_neither_output_nor_staging(self):
@@ -569,7 +582,21 @@ class RealStackSmoke(AuditedExportCase):
         self.assertEqual(targets.tolist(), [[-100, -100, 8, 2]])
         self.assertEqual(fit._batch(torch, [short], 3, "cpu")[4], 3)
 
-    @unittest.skipUnless(CUDA, "QLoRA needs CUDA and bitsandbytes")
+    def test_the_memory_probe_passes_the_widest_completion_to_the_loss(self):
+        libs = fit.libraries("lora")
+        values = settings(microbatch=1, adapter={"rank": 4, "alpha": 8, "dropout": 0.0, "targets": "all-linear"})
+        model, _ = fit.load_model(libs, self.model, values)
+        # The longest row has the shorter completion, so the default keep would differ.
+        longest = {"row_id": "a", "input_ids": list(range(10, 40)) + [2],
+                   "labels": [-100] * 29 + [39, 2], "completion_tokens": 2}
+        widest = {"row_id": "b", "input_ids": list(range(10, 20)) + [2],
+                  "labels": [-100] * 4 + list(range(14, 20)) + [2], "completion_tokens": 7}
+        with patch.object(fit, "row_losses", wraps=fit.row_losses) as spy:
+            fit.memory_probe(libs[0], model, [longest, widest], values, 3, {"device": "cpu"})
+        self.assertEqual(spy.call_args.args[2], [longest])
+        self.assertEqual(spy.call_args.args[5], 8)
+
+    @unittest.skipUnless(CUDA and BITSANDBYTES, "QLoRA needs CUDA and bitsandbytes")
     def test_qlora_preflight_on_cuda(self):
         # QLoRA requires a bitsandbytes pin in the lock.
         with self.lock.open("a", encoding="utf-8") as stream:
@@ -603,6 +630,31 @@ class RealStackSmoke(AuditedExportCase):
                                  "--output", str(self.fx.root / "other-deployment"))
         self.assertEqual((code, summary["error"]["code"]), (2, "INPUT_INVALID"))
         self.assertFalse((self.fx.root / "other-deployment").exists())
+
+        retry = self.fx.root / "retry-deployment"
+        with patch.object(merging.shutil, "copyfile", side_effect=OSError("disk full")):
+            code, summary = self.invoke("merge", "--base-model", str(self.model), "--adapter", adapter,
+                                        "--output", str(retry))
+        self.assertEqual((code, summary["error"]["code"]), (1, "OUTPUT_IO"))
+        self.assertEqual(list(self.fx.root.glob("*retry-deployment*")), [])
+
+        real_identity, calls = merging.model_identity, []
+        generation = self.model / "generation_config.json"
+        original = generation.read_bytes()
+
+        def replaced_mid_merge(path):
+            calls.append(path)
+            if len(calls) == 2:  # the re-check of the base, after its weights were loaded
+                generation.write_text('{"replaced": true}', encoding="utf-8")
+            return real_identity(path)
+
+        with patch.object(merging, "model_identity", side_effect=replaced_mid_merge):
+            code, summary = self.invoke("merge", "--base-model", str(self.model), "--adapter", adapter,
+                                        "--output", str(retry))
+        generation.write_bytes(original)
+        self.assertEqual((code, summary["error"]["code"]), (2, "INPUT_INVALID"))
+        self.assertIn("changed during the merge", summary["error"]["message"])
+        self.assertEqual(list(self.fx.root.glob("*retry-deployment*")), [])
 
         if not LMFE:
             self.skipTest("Native planner load needs lm-format-enforcer")
