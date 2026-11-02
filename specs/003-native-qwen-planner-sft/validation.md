@@ -449,4 +449,5 @@ latency or promotion decision exists. The native base remains the fallback.
   links in the touched documents resolve. Data, partitions, exports, adapters, merged
   checkpoints and run manifests default to the ignored `.agent-work/` tree
   (`git check-ignore` confirmed), and no dataset, audio, JSONL or weight file is
-  tracked. No issue or PR exists for this branch yet; link it here when one is opened.
+  tracked. The fit/merge work is under review in
+  [PR #14](https://github.com/pminhtaiii/JarvisMate/pull/14).
