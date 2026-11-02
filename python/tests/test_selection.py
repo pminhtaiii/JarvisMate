@@ -4,7 +4,9 @@ import unittest
 from unittest.mock import Mock
 
 from lifemate.adapters.planner import LocalPlanner
+from lifemate.adapters.qwen_protocol import render_messages
 from lifemate.contracts import Limits, PipelineError
+from lifemate.prompting import NATIVE_SYSTEM
 from lifemate.selection import referenced_records
 from support import call
 
@@ -70,6 +72,18 @@ class SelectionTests(unittest.TestCase):
         planner = self.planner([self.action, corrected])
         self.assertEqual(json.loads(planner.next_action(self.value, 30)), corrected)
         self.assertEqual(planner._action.call_count, 2)
+
+    def test_native_rejected_proposal_renders_as_correction_never_as_a_tool_result(self):
+        corrected = call("tasks.complete", task_id="allowed")
+        planner = self.planner([self.action, corrected])
+        self.value["observations"][0]["arguments"] = {}  # Runner-built results always carry arguments.
+        self.assertEqual(json.loads(planner.next_action(self.value, 30)), corrected)
+        retried = planner._action.call_args_list[1].args[0]
+        turns = render_messages(retried, system=NATIVE_SYSTEM)
+        executed = [c["function"] for t in turns for c in t.get("tool_calls", [])]
+        self.assertEqual(executed, [{"name": "tasks.list", "arguments": {}}])
+        correction = json.loads(turns[-1]["content"])["observation"]
+        self.assertEqual((turns[-1]["role"], correction["code"]), ("user", "SELECTION_MISMATCH"))
 
     def test_proposal_from_an_earlier_read_remains_eligible(self):
         planner = self.planner([call("tasks.complete", task_id="allowed")])

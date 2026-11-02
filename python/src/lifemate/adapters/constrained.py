@@ -64,6 +64,32 @@ def action_parser(tools: list[dict], config):
     return UnionParser(branches)
 
 
+def native_action_parser(tools: list[dict], config):
+    """One complete Qwen native call bound to its tool's schema, or the exact final text.
+
+    The envelope follows the checkpoint template's own tool_call rendering. LMFE admits
+    EOS only when the whole sequence can end, i.e. after the closing delimiter.
+    """
+    import json
+    from lmformatenforcer import JsonSchemaParser
+    from lmformatenforcer.characterlevelparser import SequenceParser, StringParser, UnionParser
+
+    from ..prompting import NATIVE_FINISH_TEXT
+    from .qwen_protocol import CALL_CLOSE, CALL_OPEN
+
+    branches = [StringParser(NATIVE_FINISH_TEXT)]
+    for tool in tools:
+        prefix = CALL_OPEN + '{"name": ' + json.dumps(tool["name"], ensure_ascii=False) + ', "arguments": '
+        suffix = "}" + CALL_CLOSE
+        for schema in argument_schemas(tool):
+            if not schema["properties"]:
+                branches.append(StringParser(prefix + "{}" + suffix))
+            else:
+                branches.append(SequenceParser([StringParser(prefix), JsonSchemaParser(schema, config=config),
+                                                StringParser(suffix)]))
+    return UnionParser(branches)
+
+
 class ActionConstraint:
     def __init__(self, tokenizer):
         try:
@@ -80,6 +106,7 @@ class ActionConstraint:
             self.metadata = {"library": "lm-format-enforcer", "version": version("lm-format-enforcer"),
                              "schema": "lifemate-tool-arguments-v2", "strict_field_order": True,
                              "max_consecutive_whitespaces": 2, "unconstrained_fallback": False}
+            self.native_metadata = self.metadata | {"schema": "lifemate-native-tool-call-v1"}
         except Exception as exc:
             raise PipelineError("MODEL_UNAVAILABLE", "Cannot initialize required JSON constraints; install inference extra",
                                 "model_load") from exc
@@ -90,6 +117,12 @@ class ActionConstraint:
 
         config = replace(self.config, alphabet=self.tokenizer_data.tokenizer_alphabet)
         return self.build_prefix(self.tokenizer_data, action_parser(tools, config))
+
+    def native_prefix(self, tools: list[dict]):
+        from dataclasses import replace
+
+        config = replace(self.config, alphabet=self.tokenizer_data.tokenizer_alphabet)
+        return self.build_prefix(self.tokenizer_data, native_action_parser(tools, config))
 
     def schema_prefix(self, schema: dict):
         """Fresh parser for the optional, non-executing selection planning phase."""

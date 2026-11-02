@@ -1,17 +1,23 @@
-"""Local Qwen structured-action adapter; execution remains outside the model."""
+"""Local Qwen planner adapter; execution remains outside the model.
+
+Both protocols return the same canonical call/finish JSON to the runner. The native
+protocol's model-facing serialization and strict decoding live in `qwen_protocol`.
+"""
 from __future__ import annotations
 
 import copy
+import hashlib
 import time
 
-from ..contracts import JSON, Limits, PipelineError
+from ..contracts import JSON, PLANNER_PROTOCOLS, Limits, PipelineError
 from ..agent import parse_action
 from ..metrics import Generation
-from ..prompt_profiles import profile_identity, resolve_profile
-from ..prompting import messages
+from ..prompt_profiles import profile_identity, protocol_profile, resolve_profile
+from ..prompting import NATIVE_FINISH_TEXT, messages
 from ..jsonio import dumps, loads
 from ..selection import (FILTER_SYSTEM, filter_schema, referenced_records,
                          restrict_references, selected_ids)
+from . import qwen_protocol
 from .common import ModelResidency, dependencies, metadata, model_directory, parameter_count, stopping_criteria
 from .constrained import ActionConstraint
 
@@ -41,16 +47,23 @@ def sdpa_expanded_kv(module, query, key, value, attention_mask, dropout=0.0,
 class LocalPlanner(ModelResidency):
     def __init__(self, path, device: str, limits: Limits, seed: int = 20261027, *, selection_filter=False,
                  cpu_offload=False, profile: JSON | None = None, examples: tuple[JSON, ...] = (),
-                 few_shot_token_budget: int | None = None):
+                 few_shot_token_budget: int | None = None, protocol: str = "structured-v1"):
+        if protocol not in PLANNER_PROTOCOLS:
+            raise PipelineError("INPUT_INVALID", "Unsupported planner protocol", "configuration")
+        self.protocol, self.native = protocol, protocol == qwen_protocol.PROTOCOL
+        if self.native and (examples or (profile is not None and profile["profile"] != "baseline")):
+            raise PipelineError("INPUT_INVALID", "qwen-native-v1 uses the baseline policy without examples",
+                                "configuration")
         path = model_directory(path)
         torch, hf, _ = dependencies(device, seed)
         self.torch, self.hf, self.device, self.limits = torch, hf, device, limits
         self.cpu_offload = cpu_offload and device == "cuda"
         self.selection_filter = selection_filter
-        self.profile = profile or resolve_profile("baseline")
+        self.profile = protocol_profile(profile or resolve_profile("baseline"), protocol)
         self.system, self.examples = self.profile["system"], tuple(examples)
         self.few_shot_token_budget = few_shot_token_budget
         self.last_decision_details = []
+        self.last_native_outputs = []
         self._selection_filters = {}
         self._generation_index = 0
         dtype = torch.float32 if device == "cpu" else torch.float16
@@ -65,6 +78,10 @@ class LocalPlanner(ModelResidency):
             if config.model_type != "qwen3":
                 raise PipelineError("MODEL_UNAVAILABLE", "Baseline planner requires a local Qwen3 checkpoint", "model_load")
             self.tokenizer = hf.AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False)
+            template = getattr(self.tokenizer, "chat_template", None)
+            if self.native and not isinstance(template, str):
+                raise PipelineError("MODEL_UNAVAILABLE", "Native protocol requires the checkpoint chat template",
+                                    "model_load")
             self.constraint = ActionConstraint(self.tokenizer)
             self.model = hf.AutoModelForCausalLM.from_pretrained(
                 path, config=config, local_files_only=True, trust_remote_code=False,
@@ -86,6 +103,12 @@ class LocalPlanner(ModelResidency):
                 "prompt_profile": profile_identity(self.profile),
                 "example_overhead_tokens": self.example_overhead_tokens,
                 "few_shot_token_budget": few_shot_token_budget}
+            if self.native:
+                self.metadata |= {
+                    "adapter": "qwen3-native-tool-call", "structured_output": self.constraint.native_metadata,
+                    "native_protocol": {"protocol": protocol, "final_text": NATIVE_FINISH_TEXT,
+                                        "eos_token_id": self.tokenizer.eos_token_id,
+                                        "chat_template_sha256": hashlib.sha256(template.encode()).hexdigest()}}
         except PipelineError:
             raise
         except Exception as exc:
@@ -103,6 +126,7 @@ class LocalPlanner(ModelResidency):
     def next_action(self, planner_input: JSON, remaining_seconds: float) -> str:
         started = time.monotonic()
         self.last_decision_details = []
+        self.last_native_outputs = []
         raw = self._action(planner_input, remaining_seconds)
         if not self.selection_filter:
             return raw
@@ -225,9 +249,15 @@ class LocalPlanner(ModelResidency):
         index = self._generation_index
         self._generation_index += 1
         try:
-            rendered = self.tokenizer.apply_chat_template(
-                messages(planner_input, system=self.system, examples=self.examples),
-                tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            if self.native:
+                rendered = self.tokenizer.apply_chat_template(
+                    qwen_protocol.render_messages(planner_input, system=self.system),
+                    tools=qwen_protocol.render_tools(planner_input["available_tools"]),
+                    tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            else:
+                rendered = self.tokenizer.apply_chat_template(
+                    messages(planner_input, system=self.system, examples=self.examples),
+                    tokenize=False, add_generation_prompt=True, enable_thinking=False)
             tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
             length = tokens["input_ids"].shape[-1]
             if self.examples and self.few_shot_token_budget is not None:
@@ -249,7 +279,8 @@ class LocalPlanner(ModelResidency):
             remaining = remaining_seconds - (time.monotonic() - started)
             stop = stopping_criteria(self.hf, remaining)
             allowed = [tool["name"] for tool in planner_input["available_tools"]]
-            prefix = self.constraint.prefix(planner_input["available_tools"])
+            prefix = (self.constraint.native_prefix if self.native
+                      else self.constraint.prefix)(planner_input["available_tools"])
             tokens = {k: v.to(self.device) for k, v in tokens.items()}
             generation_start = self._recorder.clock.offset() if self._recorder else None
             try:
@@ -264,13 +295,21 @@ class LocalPlanner(ModelResidency):
                 raise
             timed_out = time.monotonic() - started >= remaining_seconds
             generated = output[0][length:]
+            if self.native:
+                # Decoding with skip_special_tokens hides EOS; record the actual stop first.
+                ended = len(generated) > 0 and int(generated[-1]) == self.tokenizer.eos_token_id
+                stop_reason = ("deadline" if timed_out else "eos" if ended
+                               else "max_tokens" if len(generated) >= self.limits.output_tokens else "unknown")
+            else:
+                stop_reason = ("deadline" if timed_out
+                               else "max_tokens" if len(generated) >= self.limits.output_tokens else "eos")
             if self._recorder:
                 span = self._recorder.mark("generation", generation_start, index=index, parent_stage="planner_decision")
-                stop_reason = ("deadline" if timed_out
-                              else "max_tokens" if len(generated) >= self.limits.output_tokens else "eos")
                 self._recorder.record_generation(Generation("planner_action", index, seconds=span.duration,
                                                              input_tokens=length, output_tokens=len(generated),
                                                              stop_reason=stop_reason))
+            if self.native:
+                return self._native_decision(generated, stop_reason, allowed)
             if timed_out:
                 raise PipelineError("TIME_LIMIT", "Planner generation exceeded deadline", "planner")
             raw = self.tokenizer.decode(generated, skip_special_tokens=True)
@@ -289,3 +328,25 @@ class LocalPlanner(ModelResidency):
             raise
         except Exception as exc:
             raise PipelineError("PLANNER_ERROR", "Local planner generation failed", "planner") from exc
+
+    def _native_decision(self, generated, stop_reason: str, allowed: list[str]) -> str:
+        """Return canonical JSON only for one complete eligible decision ended by EOS."""
+        text = self.tokenizer.decode(generated, skip_special_tokens=True)
+        record = {"text": text, "stop_reason": stop_reason, "output_tokens": len(generated),
+                  "decision": "rejected", "canonical_action": None}
+        self.last_native_outputs.append(record)
+        if stop_reason == "deadline":
+            raise PipelineError("TIME_LIMIT", "Planner generation exceeded deadline", "planner")
+        if stop_reason != "eos":
+            # Even text that parses as a complete call is a cut, never a decision.
+            code = "OUTPUT_LIMIT" if stop_reason == "max_tokens" else "PLANNER_ERROR"
+            raise PipelineError(code, "Native generation ended without its terminal EOS", "planner")
+        try:
+            action = qwen_protocol.decode_decision(text, self.limits.response_bytes)
+            if action["action"] == "call" and action["name"] not in allowed:
+                raise ValueError("Unavailable tool")
+        except (ValueError, TypeError, UnicodeError, RecursionError) as exc:
+            raise PipelineError("PLANNER_FORMAT", "Native generation is not one complete eligible decision",
+                                "planner") from exc
+        record.update(decision=action["action"], canonical_action=action)
+        return dumps(action)

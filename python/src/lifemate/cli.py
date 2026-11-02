@@ -11,14 +11,14 @@ from .adapters.asr import LocalASR
 from .adapters.planner import LocalPlanner
 from .agent import run_sample
 from .artifacts import RunStore
-from .contracts import Limits, PipelineError, RunConfig
+from .contracts import PLANNER_PROTOCOLS, Limits, PipelineError, RunConfig
 from .dataset import preflight
 from .example_audit import AUDIT_SCHEMA_VERSION, audit_bundle, verified_content_sha256, write_audited_bundle
 from .jsonio import digest, dumps, read_json
 from .metrics import Clock, SpanRecorder
 from .prompt_profiles import (
     DEFAULT_FEW_SHOT_TOKEN_BUDGET, PROFILES, bundle_identity, load_partition_manifest, profile_identity,
-    reject_fit_in_selection, resolve_profile, validate_bundle,
+    protocol_profile, reject_fit_in_selection, resolve_profile, validate_bundle,
 )
 from .reporting import (
     build_comparison, build_report, load_manifest, validate_comparison_output, write_comparison, write_report,
@@ -65,6 +65,7 @@ def parser() -> Parser:
             child.add_argument("--context-limit", default=16_384, type=int)
             child.add_argument("--max-new-tokens", default=512, type=int)
             child.add_argument("--prompt-profile", default="baseline", choices=PROFILES)
+            child.add_argument("--planner-protocol", default="structured-v1", choices=PLANNER_PROTOCOLS)
             child.add_argument("--few-shot-bundle", type=Path)
             child.add_argument("--partition-manifest", type=Path)
             child.add_argument("--few-shot-token-budget", type=int)
@@ -106,6 +107,7 @@ def configuration(args) -> RunConfig:
         selection_filter=args.selection_filter if running else False,
         model_offload=args.model_offload if running else False,
         prompt_profile=args.prompt_profile if running else "baseline",
+        planner_protocol=args.planner_protocol if running else "structured-v1",
         few_shot_bundle=args.few_shot_bundle if running else None,
         partition_manifest=args.partition_manifest if running else None,
         few_shot_token_budget=((DEFAULT_FEW_SHOT_TOKEN_BUDGET if args.few_shot_token_budget is None
@@ -176,7 +178,7 @@ def cmd_audit_examples(args) -> int:
 
 def resolve_prompt_configuration(config: RunConfig, dataset_metadata) -> dict:
     """Resolve profile/bundle before any model load; reject invalid selections here."""
-    profile = resolve_profile(config.prompt_profile)
+    profile = protocol_profile(resolve_profile(config.prompt_profile), config.planner_protocol)
     result = {"profile": profile, "examples": (), "identity": {
         "profile": profile_identity(profile), "bundle": None, "few_shot_token_budget": None}}
     if config.few_shot_bundle is None:
@@ -265,6 +267,7 @@ def main(argv=None, *, planner_factory=LocalPlanner, asr_factory=LocalASR,
                     **({"selection_filter": True} if config.selection_filter else {}),
                     **({"cpu_offload": True} if config.model_offload else {}),
                     **({"profile": prompt_config["profile"]} if config.prompt_profile != "baseline" else {}),
+                    **({"protocol": config.planner_protocol} if config.planner_protocol != "structured-v1" else {}),
                     **({"examples": prompt_config["examples"], "few_shot_token_budget": config.few_shot_token_budget}
                        if prompt_config["examples"] else {}))
                 asr = (asr_factory(config.asr_model, config.device, config.limits, config.seed,

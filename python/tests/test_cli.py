@@ -10,6 +10,7 @@ from lifemate.cli import main
 from lifemate.contracts import PipelineError
 from lifemate.example_audit import AUDIT_SCHEMA_VERSION, verified_content_sha256
 from lifemate.jsonio import digest
+from lifemate.prompting import NATIVE_PROMPT_HASH, NATIVE_PROMPT_VERSION
 from lifemate.runtime import load_runtime
 from support import CATALOG, FINISH, ControlledASR, ControlledEnvironment, ControlledPlanner, Fixture, call
 
@@ -513,10 +514,39 @@ class FewShotCLITests(unittest.TestCase):
         code = self.execute(self.arguments("train_0001"))
         self.assertEqual(code, 0)
         self.assertNotIn("profile", self.model_loads[0][1])
+        self.assertNotIn("protocol", self.model_loads[0][1])
         manifest = json.loads((self.fx.root / "run" / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["prompt_version"], "lifemate-react-v4")
+        self.assertEqual(manifest["planner_protocol"], "structured-v1")
         self.assertEqual(manifest["effective_prompt"]["profile"]["profile"], "baseline")
         self.assertIsNone(manifest["effective_prompt"]["bundle"])
+
+    def test_native_protocol_is_passed_to_the_planner_and_recorded(self):
+        code = self.execute(self.arguments("train_0001", "--planner-protocol", "qwen-native-v1"))
+        self.assertEqual(code, 0)
+        _, kwargs = self.model_loads[0]
+        self.assertEqual(kwargs["protocol"], "qwen-native-v1")
+        self.assertNotIn("profile", kwargs)
+        manifest = json.loads((self.fx.root / "run" / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["planner_protocol"], "qwen-native-v1")
+        self.assertEqual((manifest["prompt_version"], manifest["prompt_sha256"]),
+                         (NATIVE_PROMPT_VERSION, NATIVE_PROMPT_HASH))
+        # The effective prompt names the same native system prompt, not the structured one.
+        self.assertEqual(manifest["effective_prompt"]["profile"],
+                         {"profile": "baseline", "version": NATIVE_PROMPT_VERSION, "sha256": NATIVE_PROMPT_HASH})
+
+    def test_native_protocol_rejects_structured_profiles_and_bundles_before_model_load(self):
+        bundle_path = self.write_bundle()
+        for extra in (["--prompt-profile", "precise-v1"],
+                      ["--few-shot-bundle", str(bundle_path), "--partition-manifest", str(self.partition_path)]):
+            with self.subTest(extra=extra[0]):
+                code = self.execute(self.arguments("train_0002", "--planner-protocol", "qwen-native-v1", *extra))
+                self.assertEqual(code, 2)
+                self.assertEqual(self.model_loads, [])
+
+    def test_unknown_planner_protocol_is_an_argument_error(self):
+        self.assertEqual(self.execute(self.arguments("train_0001", "--planner-protocol", "native")), 2)
+        self.assertEqual(self.model_loads, [])
 
 
 class AuditExamplesCLITests(unittest.TestCase):

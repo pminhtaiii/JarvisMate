@@ -2,17 +2,18 @@
 
 **Input**: [spec](spec.md), [plan](plan.md), [research](research.md),
 [data model](data-model.md), [contracts](contracts/), [quickstart](quickstart.md).
-All tasks are unchecked. Tests are explicitly required by FR-015. Task completion
-requires the stated behavior and recorded checks, not just authored source.
+Checked tasks have recorded evidence in [validation](validation.md). Tests are explicitly
+required by FR-015. Task completion requires the stated behavior and recorded checks,
+not just authored source.
 
 ## Phase 1: Setup
 
-- [ ] T001 Record baseline revision, existing dirty-file boundaries, dataset/model availability and feature 002 measurement status in `specs/003-native-qwen-planner-sft/validation.md`; do not claim absent runs passed.
+- [x] T001 Record baseline revision, existing dirty-file boundaries, dataset/model availability and feature 002 measurement status in `specs/003-native-qwen-planner-sft/validation.md`; do not claim absent runs passed.
 
 ## Phase 2: Foundational contracts
 
-- [ ] T002 Add explicit protocol configuration/default and preflight compatibility in `python/src/lifemate/contracts.py` and `python/src/lifemate/cli.py`, retaining structured control and rejecting incompatible profile/example combinations.
-- [ ] T003 Extend resolved protocol/prompt/template/constraint execution identity in `python/src/lifemate/artifacts.py`, `python/src/lifemate/provenance.py` and `python/src/lifemate/checkpoint.py`; keep structured feature 002 identity compatible.
+- [x] T002 Add explicit protocol configuration/default and preflight compatibility in `python/src/lifemate/contracts.py` and `python/src/lifemate/cli.py`, retaining structured control and rejecting incompatible profile/example combinations.
+- [x] T003 Extend resolved protocol/prompt/template/constraint execution identity in `python/src/lifemate/artifacts.py`, `python/src/lifemate/provenance.py` and `python/src/lifemate/checkpoint.py`; keep structured feature 002 identity compatible.
 
 ## Phase 3: US1 — Native protocol MVP (P1)
 
@@ -20,15 +21,15 @@ requires the stated behavior and recorded checks, not just authored source.
 **Independent test**: Lookup/result/action and finish/clarification fixtures preserve
 exact authoritative attempts, single ToolEnv and no unintended dispatch.
 
-- [ ] T004 [US1] Add strict native output/termination fixtures in `python/tests/test_qwen_protocol.py` for calls, finish, Unicode, zero args, malformed/multiple/prose output, duplicate keys and token/time cuts.
-- [ ] T005 [US1] Implement shared native function/message serialization and strict decision decoding in `python/src/lifemate/adapters/qwen_protocol.py`, preserving extensions, tool whitelist and historical-data interpretation.
-- [ ] T006 [US1] Add native system policy and protocol-aware rendering in `python/src/lifemate/prompting.py`, separating actual tool results from correction feedback without changing structured control rendering.
-- [ ] T007 [US1] Implement native single-call plus neutral-final LMFE branches in `python/src/lifemate/adapters/constrained.py`, preserving tool/schema binding and admitting EOS only after complete branches.
-- [ ] T008 [US1] Wire native tools/rendering/grammar and token-ID EOS detection into `python/src/lifemate/adapters/planner.py`; normalize to canonical decisions and retain existing hard adapter failure/deadline behavior.
-- [ ] T009 [US1] Preserve selection-filter JSON behavior and native rejection feedback in `python/src/lifemate/adapters/planner.py`; verify rejected proposals never appear as executed native tool results.
-- [ ] T010 [US1] Add bounded native-output/EOS/canonical trace metadata and provenance in `python/src/lifemate/adapters/planner.py` and `python/src/lifemate/agent.py` without changing authoritative submission or routine payload logging.
-- [ ] T011 [US1] Add and run execution invariants and native adapter integration in `python/tests/test_agent.py` and `python/tests/test_inference.py`, including schema-rejected attempts, done:false, empty finish, missing-info variants and uncertain execution.
-- [ ] T012 [US1] Add and run protocol CLI/preflight/resume tests in `python/tests/test_cli.py` and `python/tests/test_checkpoint.py`, rejecting mixed-protocol acceptance populations and mismatched template identities.
+- [x] T004 [US1] Add strict native output/termination fixtures in `python/tests/test_qwen_protocol.py` for calls, finish, Unicode, zero args, malformed/multiple/prose output, duplicate keys and token/time cuts.
+- [x] T005 [US1] Implement shared native function/message serialization and strict decision decoding in `python/src/lifemate/adapters/qwen_protocol.py`, preserving extensions, tool whitelist and historical-data interpretation.
+- [x] T006 [US1] Add native system policy and protocol-aware rendering in `python/src/lifemate/prompting.py`, separating actual tool results from correction feedback without changing structured control rendering.
+- [x] T007 [US1] Implement native single-call plus neutral-final LMFE branches in `python/src/lifemate/adapters/constrained.py`, preserving tool/schema binding and admitting EOS only after complete branches.
+- [x] T008 [US1] Wire native tools/rendering/grammar and token-ID EOS detection into `python/src/lifemate/adapters/planner.py`; normalize to canonical decisions and retain existing hard adapter failure/deadline behavior.
+- [x] T009 [US1] Preserve selection-filter JSON behavior and native rejection feedback in `python/src/lifemate/adapters/planner.py`; verify rejected proposals never appear as executed native tool results.
+- [x] T010 [US1] Add bounded native-output/EOS/canonical trace metadata and provenance in `python/src/lifemate/adapters/planner.py` and `python/src/lifemate/agent.py` without changing authoritative submission or routine payload logging.
+- [x] T011 [US1] Add and run execution invariants and native adapter integration in `python/tests/test_agent.py` and `python/tests/test_inference.py`, including schema-rejected attempts, done:false, empty finish, missing-info variants and uncertain execution.
+- [x] T012 [US1] Add and run protocol CLI/preflight/resume tests in `python/tests/test_cli.py` and `python/tests/test_checkpoint.py`, rejecting mixed-protocol acceptance populations and mismatched template identities.
 - [ ] T013 [US1] Run actual local tokenizer/LMFE grammar and supplied-runtime smoke cases from `python/tests/test_qwen_protocol.py` and `python/tests/test_real_samples.py`; record commands/assets/results or precise external blockers in `specs/003-native-qwen-planner-sft/validation.md`.
 
 **Checkpoint**: US1 is the smallest runnable feature; it needs no training packages.

@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 
 from . import artifacts
-from .contracts import JSON, PipelineError
+from .contracts import JSON, LEGACY_PLANNER_PROTOCOL, PLANNER_PROTOCOLS, PipelineError
 from .jsonio import digest, dumps, loads, read_json
 from .metrics import MODEL_ROLES, SPAN_STAGES
 
@@ -66,6 +66,8 @@ def validate_manifest(manifest: JSON) -> None:
         raise PipelineError("INPUT_INVALID", f"Run manifest is missing fields: {sorted(missing)}", "report")
     if manifest["schema_version"] != artifacts.SCHEMA_VERSION:
         raise PipelineError("INPUT_INVALID", "Unsupported run manifest schema version", "report")
+    if manifest.get("planner_protocol", LEGACY_PLANNER_PROTOCOL) not in PLANNER_PROTOCOLS:
+        raise PipelineError("INPUT_INVALID", "Unsupported run manifest planner_protocol", "report")
     selected = manifest["selected_ids"]
     samples, failures, not_started = manifest["samples"], manifest["failures"], manifest["not_started_ids"]
     if (not isinstance(selected, list) or len(set(selected)) != len(selected)
@@ -453,6 +455,9 @@ def validate_factor_identity(factor: str, baseline: JSON, candidate: JSON) -> No
             raise PipelineError("INPUT_INVALID", f"Baseline/candidate {key} differ", "compare")
     if baseline["limits"] != candidate["limits"]:
         raise PipelineError("INPUT_INVALID", "Baseline/candidate limits differ", "compare")
+    if (baseline.get("planner_protocol", LEGACY_PLANNER_PROTOCOL)
+            != candidate.get("planner_protocol", LEGACY_PLANNER_PROTOCOL)):
+        raise PipelineError("INPUT_INVALID", "Baseline/candidate planner_protocol differ", "compare")
     baseline_prompt, candidate_prompt = _comparable_prompt(baseline), _comparable_prompt(candidate)
     if factor == "harness":
         if (baseline["prompt_version"], baseline["prompt_sha256"]) != (candidate["prompt_version"], candidate["prompt_sha256"]):

@@ -13,6 +13,9 @@ ERROR_CODES = frozenset({
     "CONTEXT_LIMIT", "STEP_LIMIT", "TIME_LIMIT", "PLANNER_ERROR", "PLANNER_FORMAT", "OUTPUT_LIMIT",
     "EXECUTION_UNCERTAIN", "TRACE_IO", "OUTPUT_IO", "INTERRUPTED", "NO_PROGRESS",
 })
+PLANNER_PROTOCOLS = ("structured-v1", "qwen-native-v1")
+# Manifests written before protocol selection existed were structured by construction.
+LEGACY_PLANNER_PROTOCOL = "structured-v1"
 
 
 class PipelineError(Exception):
@@ -67,6 +70,7 @@ class RunConfig:
     selection_filter: bool = False
     model_offload: bool = False
     prompt_profile: str = "baseline"
+    planner_protocol: str = "structured-v1"
     few_shot_bundle: Path | None = None
     partition_manifest: Path | None = None
     few_shot_token_budget: int | None = None
@@ -80,6 +84,14 @@ class RunConfig:
             raise PipelineError("INPUT_INVALID", "Model/output paths must be paths")
         if self.prompt_profile not in {"baseline", "precise-v1"}:
             raise PipelineError("INPUT_INVALID", "Unsupported prompt profile")
+        if self.planner_protocol not in PLANNER_PROTOCOLS:
+            raise PipelineError("INPUT_INVALID", "Unsupported planner protocol")
+        # Instruction profiles and demonstrations are written for the structured
+        # protocol; native runs use only the baseline policy until they are ported.
+        if self.planner_protocol == "qwen-native-v1" and (
+                self.prompt_profile != "baseline" or self.few_shot_bundle is not None):
+            raise PipelineError("INPUT_INVALID",
+                                "qwen-native-v1 requires the baseline prompt profile and no few-shot bundle")
         if self.few_shot_bundle is None and self.partition_manifest is not None:
             raise PipelineError("INPUT_INVALID", "--partition-manifest requires --few-shot-bundle")
         if self.few_shot_bundle is not None and self.partition_manifest is None:

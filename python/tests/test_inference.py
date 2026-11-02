@@ -1,5 +1,7 @@
 """Adapter contract tests with model-library doubles; no weights or GPU."""
 import contextlib
+import hashlib
+import json
 import types
 import unittest
 from unittest.mock import MagicMock, patch
@@ -7,10 +9,12 @@ from unittest.mock import MagicMock, patch
 from lifemate.adapters.asr import LocalASR
 from lifemate.adapters.common import ModelResidency, dependencies, model_directory, stopping_criteria
 from lifemate.adapters.planner import LocalPlanner
+from lifemate.adapters.qwen_protocol import render_tools
 from lifemate.contracts import Limits, PipelineError
 from lifemate.metrics import SpanRecorder
 from lifemate.prompt_profiles import PRECISE_V1_SYSTEM, resolve_profile
-from support import Fixture
+from lifemate.prompting import NATIVE_FINISH_TEXT, NATIVE_PROMPT_HASH, NATIVE_SYSTEM
+from support import CATALOG, Fixture
 
 
 class Tensor:
@@ -320,6 +324,16 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(recorder.spans[0].status, "unfinished")
         self.assertEqual(recorder.generations, [])
 
+    def test_structured_protocol_is_the_default_and_keeps_its_metadata(self):
+        planner = self.load()
+        self.assertEqual(planner.protocol, "structured-v1")
+        self.assertEqual(planner.metadata["adapter"], "qwen3-structured-react")
+        self.assertNotIn("native_protocol", planner.metadata)
+        planner.next_action(self.input, 30)
+        self.assertNotIn("tools", self.tokenizer.apply_chat_template.call_args.kwargs)
+        planner.constraint.prefix.assert_called_once()
+        planner.constraint.native_prefix.assert_not_called()
+
     def test_whisper_rejects_truncated_payload(self):
         with patch("lifemate.adapters.asr.dependencies", return_value=(self.torch, self.hf, self.np)), \
              patch("lifemate.adapters.asr.metadata", return_value=self.metadata):
@@ -330,3 +344,173 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(PipelineError):
             asr.transcribe(target, 30)
         self.model.generate.assert_not_called()
+
+
+TOOLS = [tool for app in CATALOG["apps"] for tool in app["tools"]]
+EOS = 2
+CALL = '<tool_call>\n{"name": "contacts.search", "arguments": {"query": "Lan"}}\n</tool_call>'
+
+
+class NativeAdapterTests(unittest.TestCase):
+    """qwen-native-v1 inside LocalPlanner; model, tokenizer and grammar are doubles."""
+
+    setUp_shared = AdapterTests.setUp
+    load = AdapterTests.load
+
+    def setUp(self):
+        self.setUp_shared()
+        self.tokenizer.chat_template = "{{ qwen3 template }}"
+        self.input = {"request": "Nhắn Lan", "context": {}, "history": [],
+                      "available_tools": TOOLS, "observations": []}
+        self.generate(CALL)
+
+    def generate(self, text, tokens=(11, 12, EOS)):
+        # Ten prompt tokens followed by the generated ids; decode yields `text`.
+        self.model.generate.return_value = [list(range(10)) + list(tokens)]
+        self.tokenizer.decode.return_value = text
+
+    def native(self, limits=None, **kwargs):
+        return self.load(limits, protocol="qwen-native-v1", **kwargs)
+
+    def rejected(self, planner, code):
+        with self.assertRaises(PipelineError) as caught:
+            planner.next_action(self.input, 30)
+        self.assertEqual(caught.exception.code, code)
+        return caught.exception
+
+    def test_complete_call_returns_the_canonical_decision(self):
+        planner = self.native()
+        self.assertEqual(json.loads(planner.next_action(self.input, 30)),
+                         {"action": "call", "name": "contacts.search", "arguments": {"query": "Lan"}})
+
+    def test_exact_final_text_returns_canonical_finish(self):
+        self.generate(NATIVE_FINISH_TEXT)
+        self.assertEqual(json.loads(self.native().next_action(self.input, 30)), {"action": "finish"})
+
+    def test_native_rendering_passes_eligible_tools_through_the_template(self):
+        planner = self.native()
+        planner.next_action(self.input, 30)
+        args, kwargs = self.tokenizer.apply_chat_template.call_args
+        self.assertEqual(kwargs["tools"], render_tools(TOOLS))
+        self.assertIs(kwargs["add_generation_prompt"], True)
+        self.assertIs(kwargs["enable_thinking"], False)
+        turns = args[0]
+        self.assertEqual(turns[0], {"role": "system", "content": NATIVE_SYSTEM})
+        self.assertNotIn("available_tools", json.loads(turns[1]["content"]))
+        planner.constraint.native_prefix.assert_called_once_with(TOOLS)
+        planner.constraint.prefix.assert_not_called()
+
+    def test_executed_observations_render_as_tool_calls_and_results(self):
+        planner = self.native()
+        self.input["observations"] = [{"step": 1, "kind": "tool_result", "name": "contacts.search",
+                                       "arguments": {"query": "Lan"}, "result": {"ok": True, "items": []}}]
+        planner.next_action(self.input, 30)
+        turns = self.tokenizer.apply_chat_template.call_args.args[0]
+        self.assertEqual([t["role"] for t in turns], ["system", "user", "assistant", "tool"])
+
+    def test_metadata_records_native_protocol_identity(self):
+        planner = self.native()
+        self.assertEqual(planner.metadata["adapter"], "qwen3-native-tool-call")
+        self.assertEqual(planner.metadata["prompt_profile"]["sha256"], NATIVE_PROMPT_HASH)
+        self.assertEqual(planner.metadata["native_protocol"], {
+            "protocol": "qwen-native-v1", "final_text": NATIVE_FINISH_TEXT, "eos_token_id": EOS,
+            "chat_template_sha256": hashlib.sha256(b"{{ qwen3 template }}").hexdigest()})
+
+    def test_unavailable_tool_is_a_format_failure_not_a_decision(self):
+        self.generate('<tool_call>\n{"name": "bank.transfer", "arguments": {}}\n</tool_call>')
+        planner = self.native()
+        self.rejected(planner, "PLANNER_FORMAT")
+        self.assertEqual(planner.last_native_outputs[0]["decision"], "rejected")
+        self.assertIsNone(planner.last_native_outputs[0]["canonical_action"])
+
+    def test_malformed_output_ended_at_eos_is_a_format_failure(self):
+        for text in ("Mình hiểu", "Được.\n" + CALL, CALL + "\n" + CALL, '{"action":"finish"}', ""):
+            with self.subTest(text=text):
+                self.generate(text)
+                self.rejected(self.native(), "PLANNER_FORMAT")
+
+    def test_complete_looking_call_without_eos_at_the_token_budget_is_an_output_limit(self):
+        self.generate(CALL, tokens=(11, 12, 13))
+        planner = self.native(Limits(context_tokens=100, output_tokens=3))
+        self.rejected(planner, "OUTPUT_LIMIT")
+        self.assertEqual(planner.last_native_outputs[0]["stop_reason"], "max_tokens")
+
+    def test_stop_without_eos_below_the_budget_is_an_adapter_failure(self):
+        self.generate(CALL, tokens=(11, 12))
+        self.rejected(self.native(), "PLANNER_ERROR")
+
+    def test_deadline_cut_wins_over_complete_text(self):
+        clock = [0.0]
+
+        def generate(**_):
+            clock[0] = 100.0
+            return [list(range(10)) + [11, 12, EOS]]
+
+        self.model.generate.side_effect = generate
+        planner = self.native()
+        with patch("time.monotonic", lambda: clock[0]):
+            self.rejected(planner, "TIME_LIMIT")
+        self.assertEqual(planner.last_native_outputs[0]["stop_reason"], "deadline")
+
+    def test_generation_detail_reports_the_actual_eos(self):
+        planner = self.native()
+        recorder = SpanRecorder()
+        planner.set_metrics_recorder(recorder)
+        planner.next_action(self.input, 30)
+        self.assertEqual(recorder.generations[0].stop_reason, "eos")
+        self.assertEqual(planner.last_native_outputs, [{
+            "text": CALL, "stop_reason": "eos", "output_tokens": 3, "decision": "call",
+            "canonical_action": {"action": "call", "name": "contacts.search", "arguments": {"query": "Lan"}}}])
+
+    def test_eos_is_inspected_before_special_tokens_are_skipped(self):
+        self.native().next_action(self.input, 30)
+        self.assertIs(self.tokenizer.decode.call_args.kwargs["skip_special_tokens"], True)
+        self.assertEqual(list(self.tokenizer.decode.call_args.args[0])[-1], EOS)
+
+    def test_incompatible_profile_examples_or_template_fail_before_generation(self):
+        example = {"input": dict(self.input), "target": {"action": "finish"}}
+        for kwargs, code in (({"profile": resolve_profile("precise-v1")}, "INPUT_INVALID"),
+                             ({"examples": (example,)}, "INPUT_INVALID")):
+            with self.subTest(kwargs=list(kwargs)):
+                with self.assertRaises(PipelineError) as caught:
+                    self.native(**kwargs)
+                self.assertEqual(caught.exception.code, code)
+        self.hf.AutoModelForCausalLM.from_pretrained.assert_not_called()
+        self.tokenizer.chat_template = None
+        with self.assertRaises(PipelineError) as caught:
+            self.native()
+        self.assertEqual(caught.exception.code, "MODEL_UNAVAILABLE")
+        self.model.generate.assert_not_called()
+
+    def test_selection_correction_reaches_the_native_retry_as_correction_data(self):
+        tools = [{"name": "tasks.list", "kind": "read", "description": "Liệt kê",
+                  "parameters": {"type": "object", "properties": {}}},
+                 {"name": "tasks.complete", "kind": "write", "description": "Hoàn thành", "parameters": {
+                     "type": "object", "properties": {"task_id": {"type": "string", "x-ref": "tasks.tasks"}}}}]
+        self.input = {"request": "Hoàn thành việc phù hợp", "context": {}, "history": [], "available_tools": tools,
+                      "observations": [{"step": 1, "kind": "tool_result", "name": "tasks.list", "arguments": {},
+                                        "result": {"ok": True, "tasks": [{"id": "older", "title": "ineligible"},
+                                                                         {"id": "allowed", "title": "eligible"}]}}]}
+        rejected = '<tool_call>\n{"name": "tasks.complete", "arguments": {"task_id": "older"}}\n</tool_call>'
+        self.tokenizer.decode.side_effect = [rejected, rejected.replace("older", "allowed")]
+        planner = self.native(selection_filter=True)
+        planner._select = MagicMock(return_value={"supported": True, "filters": [
+            {"field": "title", "operator": "equals", "value": "eligible"}]})
+        self.assertEqual(json.loads(planner.next_action(self.input, 30))["arguments"], {"task_id": "allowed"})
+        self.assertEqual(self.tokenizer.apply_chat_template.call_count, 2)
+        retry = self.tokenizer.apply_chat_template.call_args_list[1].args[0]
+        executed = [c["function"] for t in retry for c in t.get("tool_calls", [])]
+        self.assertEqual(executed, [{"name": "tasks.list", "arguments": {}}])
+        correction = json.loads(retry[-1]["content"])["observation"]
+        self.assertEqual((retry[-1]["role"], correction["code"]), ("user", "SELECTION_MISMATCH"))
+        # The retry offers only the eligible IDs, so a fixed model reply cannot hide a lost restriction.
+        retry_tools = self.tokenizer.apply_chat_template.call_args_list[1].kwargs["tools"]
+        complete = next(t["function"] for t in retry_tools if t["function"]["name"] == "tasks.complete")
+        self.assertEqual(complete["parameters"]["properties"]["task_id"]["enum"], ["allowed"])
+        retry_grammar_tools = planner.constraint.native_prefix.call_args_list[1].args[0]
+        self.assertEqual(retry_grammar_tools[1]["parameters"]["properties"]["task_id"]["enum"], ["allowed"])
+
+    def test_unknown_protocol_is_rejected(self):
+        with self.assertRaises(PipelineError) as caught:
+            self.load(protocol="qwen-native-v2")
+        self.assertEqual(caught.exception.code, "INPUT_INVALID")
