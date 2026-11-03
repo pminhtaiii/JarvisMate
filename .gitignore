@@ -19,5 +19,17 @@ __pycache__/
 build/
 # Local-only large inputs (never commit)
 /train+public_test.zip
+/zaic-*.zip
 /document.pdf
 /AIRUN.bat
+/kaggle/output/
+/kaggle/pulled/
+/data_unz/
+/submission.jsonl
+/transcripts_public_test.txt
+# lm_work: Claude-as-LLM experiment; keep only the scripts
+/lm_work/.venv/
+/lm_work/asr_model/
+/lm_work/wheels/
+/lm_work/calls*/
+/lm_work/*.json
