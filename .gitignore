@@ -33,3 +33,5 @@ build/
 /lm_work/wheels/
 /lm_work/calls*/
 /lm_work/*.json
+/kaggle/push/
+/kaggle/output_v*/

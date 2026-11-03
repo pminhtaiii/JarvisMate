@@ -195,8 +195,9 @@ class ASR:
             texts[i] = (texts[i] + " " + out[k]).strip()
         return texts
 
-    def nbest(self, clips, n: int = 3, beams: int = 5, batch_size: int = 8) -> list[list[str]]:
-        """Beam search, n hypotheses per clip (first 30 s), best first."""
+    def nbest(self, clips, n: int = 3, beams: int = 8, batch_size: int = 8) -> list[list[str]]:
+        """Beam search, up to n distinct hypotheses per clip (first 30 s), best first. Beams often differ only in
+        tokenization, so ask for more and de-duplicate the text."""
         import numpy as np
         out = []
         for s in range(0, len(clips), batch_size):
@@ -204,9 +205,11 @@ class ASR:
             feats = self.processor(part, sampling_rate=16000, return_tensors="pt").input_features
             with self.torch.inference_mode():
                 ids = self.model.generate(feats.to(self.device, self.dtype), language="vi", task="transcribe", do_sample=False,
-                                          num_beams=beams, num_return_sequences=n, max_new_tokens=220)
+                                          num_beams=beams, num_return_sequences=min(beams, 2 * n), max_new_tokens=220)
             texts = [t.strip() for t in self.processor.batch_decode(ids, skip_special_tokens=True)]
-            out.extend(texts[i * n:(i + 1) * n] for i in range(len(part)))
+            r = min(beams, 2 * n)
+            for i in range(len(part)):
+                out.append(list(dict.fromkeys(t for t in texts[i * r:(i + 1) * r] if t))[:n])
         return out
 
     def prompted(self, clip, prompt: str) -> str:
