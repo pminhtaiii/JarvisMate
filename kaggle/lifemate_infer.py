@@ -195,19 +195,26 @@ class ASR:
             texts[i] = (texts[i] + " " + out[k]).strip()
         return texts
 
-    def nbest(self, clips, n: int = 3, beams: int = 8, batch_size: int = 8) -> list[list[str]]:
+    def nbest(self, clips, n: int = 3, beams: int = 8, batch_size: int = 1) -> list[list[str]]:
         """Beam search, up to n distinct hypotheses per clip (first 30 s), best first. Beams often differ only in
-        tokenization, so ask for more and de-duplicate the text."""
+        tokenization, so ask for more and de-duplicate the text. One clip at a time: the cross-attention cache grows with
+        batch x beams (Kaggle v13: batch 8 x 8 beams needed ~9 GB and OOM'd a T4). A clip that still OOMs gets no N-best."""
         import numpy as np
         out = []
+        r = min(beams, 2 * n)
         for s in range(0, len(clips), batch_size):
             part = [c[:480000] if len(c) else np.zeros(1600, dtype=np.float32) for c in clips[s:s + batch_size]]
             feats = self.processor(part, sampling_rate=16000, return_tensors="pt").input_features
-            with self.torch.inference_mode():
-                ids = self.model.generate(feats.to(self.device, self.dtype), language="vi", task="transcribe", do_sample=False,
-                                          num_beams=beams, num_return_sequences=min(beams, 2 * n), max_new_tokens=220)
+            try:
+                with self.torch.inference_mode():
+                    ids = self.model.generate(feats.to(self.device, self.dtype), language="vi", task="transcribe",
+                                              do_sample=False, num_beams=beams, num_return_sequences=r, max_new_tokens=220)
+            except self.torch.OutOfMemoryError:
+                if self.torch.cuda.is_available():
+                    self.torch.cuda.empty_cache()
+                out.extend([] for _ in part)
+                continue
             texts = [t.strip() for t in self.processor.batch_decode(ids, skip_special_tokens=True)]
-            r = min(beams, 2 * n)
             for i in range(len(part)):
                 out.append(list(dict.fromkeys(t for t in texts[i * r:(i + 1) * r] if t))[:n])
         return out
@@ -1261,7 +1268,9 @@ def run_agent(item, env, llm: LLM, catalog: dict, system_prompt: str, transcript
                             notes.append(f"nghe lại audio với các tên trong dữ liệu: «{again}»")
                             trace["asr_pass2"] = again
                     except Exception as exc:  # never lose the sample over the optional second pass
-                        trace["asr_pass2_error"] = f"{type(exc).__name__}: {exc}"
+                        trace["asr_pass2_error"] = f"{type(exc).__name__}: {exc}"[:300]
+                        if live.torch.cuda.is_available():
+                            live.torch.cuda.empty_cache()
                 if getattr(args, "asr_hints", True) and names:
                     h = phon_hints(heard, names)
                     if h:

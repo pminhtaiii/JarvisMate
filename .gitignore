@@ -35,3 +35,4 @@ build/
 /lm_work/*.json
 /kaggle/push/
 /kaggle/output_v*/
+/kaggle/submission_*.jsonl
