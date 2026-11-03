@@ -32,21 +32,24 @@ cells[find("%%writefile lifemate_infer.py")] = code("%%writefile lifemate_infer.
 # Step 2: compare v2 against the v1 behaviour on the same train subset (gold transcripts -> LLM only).
 cmp_i = find("# So sánh cấu hình LLM")
 cmp = "".join(cells[cmp_i]["source"])
-cmp = cmp.replace('N_EVAL, MAX_SEC = 30, 75', 'N_EVAL, MAX_SEC = 40, 75')
+cmp = cmp.replace('N_EVAL, MAX_SEC = 30, 75', 'N_EVAL, MAX_SEC = 60, 75')
 cmp = cmp.replace('MIN_SCORE = 0.25', 'MIN_SCORE = 0.0')
-V1 = '["--fewshot-k", "0", "--no-nudge", "--no-fix-args", "--asr-nbest", "1", "--no-asr-pass2", "--no-asr-hints"]'
+V2 = '["--read-prune-rate", "0.1", "--no-date-table", "--no-soft-nudge", "--no-read-notes"]'
+THINK = '["--llm-model", "Qwen/Qwen3-4B", "--think-budget", "192"]'
 cmp = cmp.replace('CONFIGS = {"qwen_fewshot": TB, "qwen_nofewshot": ["--no-few-shot"] + TB}',
-                  'CONFIGS = {"v2": TB, "v2_k5": ["--fewshot-k", "5"] + TB, "v1": ' + V1 + ' + TB}')
-cmp = cmp.replace('QUEUES = [["qwen_fewshot"], ["qwen_nofewshot"]]', 'QUEUES = [["v2", "v1"], ["v2_k5"]]')
-assert '"v2"' in cmp and "N_EVAL, MAX_SEC = 40" in cmp, "compare cell layout changed"
+                  'CONFIGS = {"v3": TB, "v3_nosoft": ["--no-soft-nudge"] + TB, "v2": ' + V2 + ' + TB, "v3_think": ' + THINK + ' + TB}')
+cmp = cmp.replace('QUEUES = [["qwen_fewshot"], ["qwen_nofewshot"]]', 'QUEUES = [["v3", "v3_nosoft", "v2"], ["v3_think"]]')
+assert '"v3_think"' in cmp and "N_EVAL, MAX_SEC = 60" in cmp, "compare cell layout changed"
 cells[cmp_i] = code(cmp)
 
-cells[0] = md("# LifeMate v2: ASR (zaic Whisper) + LLM (Qwen3-4B-Instruct-2507) trên Kaggle\n\n"
+cells[0] = md("# LifeMate v3 (từ v2): ASR (zaic Whisper) + LLM (Qwen3-4B-Instruct-2507) trên Kaggle\n\n"
               "v2 so với v1 (23 điểm public): few-shot lấy 3 câu train giống nhất cho từng mẫu, nhắc lại khi model nói "
               "\"đã làm\" mà chưa gọi tool ghi, sửa nhà/công ty → địa chỉ profile và thành phố → IATA, chặn "
               "ask_missing_info trỏ vào tool đọc. Phần ASR: đưa N-best khi greedy và beam lệch nhau, gợi ý tên theo "
               "phát âm sau mỗi tool đọc, và giải mã Whisper lần 2 với prompt là tên trong dữ liệu.\n\n"
-              "Bước 2 so v2 với cấu hình v1 trên 40 mẫu train (transcript gốc), chọn cấu hình tốt nhất cho public_test.")
+              "v3 thêm: bỏ bộ lọc tùy chọn của tool đọc mà gold hiếm dùng, bảng ngày tính sẵn, nhắc khi dừng sau khi đọc mà chưa "
+              "thao tác, gợi ý tìm lại khi danh bạ rỗng, tóm tắt mưa/không mưa, dòng 'Điều kiện: ... → ĐÚNG/SAI'. "
+              "Bước 2 so v3, v3 không nhắc mềm, v2 và v3 với Qwen3-4B có think (192 token) trên 60 mẫu train.")
 
 out = HERE / "push"
 out.mkdir(exist_ok=True)

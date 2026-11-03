@@ -340,10 +340,38 @@ def asr_alternatives(primary: str, hyps: list[str], k: int = 2) -> list[str]:
     return out[:k]
 
 
-def build_messages(item, system_prompt: str, transcripts: dict, gold_text: bool, nbest: dict | None = None) -> list[dict]:
+VI_DAYS = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ nhật"]
+
+
+def date_table(current_time: str) -> str:
+    """Precomputed calendar so the model never does date arithmetic (Kaggle v14: 'mai' -> +2 days, 5 giờ chiều -> 14:00)."""
+    from datetime import datetime, timedelta
+    try:
+        now = datetime.fromisoformat(current_time)
+    except (TypeError, ValueError):
+        return ""
+    d = now.date()
+    fmt = lambda x: f"{VI_DAYS[x.weekday()]} {x.isoformat()}"
+    monday = d - timedelta(days=d.weekday())
+    rows = [f"Bây giờ: {now.strftime('%H:%M')} {fmt(d)} (offset {now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})",
+            f"Hôm qua: {fmt(d - timedelta(days=1))}", f"Hôm nay: {fmt(d)}", f"Mai: {fmt(d + timedelta(days=1))}",
+            f"Ngày kia/mốt: {fmt(d + timedelta(days=2))}",
+            "Tuần này: " + ", ".join(fmt(monday + timedelta(days=i)) for i in range(7)),
+            "Tuần sau: " + ", ".join(fmt(monday + timedelta(days=7 + i)) for i in range(7)),
+            "Giờ: 'X giờ sáng' = X:00; 'X giờ chiều/tối' = (X+12):00 (vd 5 giờ chiều = 17:00, 8 giờ tối = 20:00); "
+            "'rưỡi' = :30; 'kém 15' = trừ 15 phút; 'trước giờ Y N tiếng' = Y − N giờ."]
+    return "\n".join(rows)
+
+
+def build_messages(item, system_prompt: str, transcripts: dict, gold_text: bool, nbest: dict | None = None,
+                   dates: bool = False) -> list[dict]:
     ctx = {k: v for k, v in item["context"].items() if k != "installed_apps"}
     ctx["installed_apps"] = list(item["context"]["installed_apps"])
     system = system_prompt.strip() + "\n\n# Ngữ cảnh người dùng\n" + dumps(ctx)
+    if dates:
+        table = date_table(item["context"].get("current_time", ""))
+        if table:
+            system += "\n\n# Lịch tham chiếu (đã tính sẵn, dùng trực tiếp)\n" + table
     msgs = [{"role": "system", "content": system}]
     for turn in item.get("history", []):
         if turn.get("role") == "user":
@@ -406,6 +434,8 @@ def looks_like_prose(head: str) -> bool:
     """True when the first tokens of an answer are plain text (closing reply or restarted reasoning), not a call."""
     rest = _PROSE_HEAD.sub("", head)
     if not rest.strip():
+        return False
+    if unicodedata.normalize("NFC", rest.lstrip()).lower().startswith(("điều kiện", "dieu kien", "kiểm tra điều kiện")):
         return False
     if rest.lstrip()[:1] in "<[/{":
         return False
@@ -707,6 +737,43 @@ def unfulfilled_claim(content: str, done_writes: list[str]) -> str:
                 if not any(p in w for w in done_writes for p in VERB_TOOLS[verb]):
                     return verb
                 break
+    return ""
+
+
+_ACTION_WORDS = ("đặt", "dời", "đổi", "chuyển", "nhắn", "gửi", "gọi", "hủy", "huỷ", "xóa", "xoá", "bật", "tắt", "trả",
+                 "thanh toán", "đóng tiền", "nạp", "mua", "thêm", "tạo", "nhắc", "lưu", "ghi", "book", "hẹn", "check in",
+                 "bán", "đánh dấu", "phát", "mở")
+_HONORIFIC = re.compile(r"^(?:anh|chị|chi|cô|co|chú|chu|bác|bac|em|ông|ong|bà|ba|cậu|dì|thím|mợ|bạn|thằng|con|bé)\s+",
+                        re.I)
+
+
+def soft_nudge_due(content: str, done_writes: list, trace: dict, messages: list) -> bool:
+    """Stopped with no write after reading, although the request asks for an action (Kaggle v14: ~100/634 public samples
+    read bills/balances/beneficiaries and stopped; the claim-based nudge did not fire because nothing was claimed)."""
+    low = unicodedata.normalize("NFC", content or "").lower()
+    if done_writes or "sai" in low.split() or "không thoả" in low or "không thỏa" in low or "không cần" in low:
+        return False
+    if len(trace.get("steps", [])) < 2:  # the model never read anything: an answer, not an abandoned plan
+        return False
+    req = unicodedata.normalize("NFC", trace.get("request", "")).lower()
+    return any(re.search(r"(?:^|\W)" + re.escape(w) + r"(?:\W|$)", req) for w in _ACTION_WORDS)
+
+
+def read_note(call: dict, result: dict) -> str:
+    """Plain-language facts the model kept misreading: empty contact search, rain yes/no."""
+    name = call["name"]
+    if name == "contacts.search" and result.get("contacts") == []:
+        q = str((call.get("arguments") or {}).get("query") or "")
+        core = _HONORIFIC.sub("", q).strip()
+        tip = f" Thử lại với '{core}'." if core and core.lower() != q.lower() else ""
+        return ("\n(Không tìm thấy: danh bạ tìm theo chuỗi con của tên, nên bỏ danh xưng (cô, anh, chú, bác...) và chỉ "
+                "dùng tên riêng." + tip + ")")
+    if name.startswith("weather.") and isinstance(result.get("forecast"), list):
+        days = [f"{f.get('date')}: {'CÓ mưa' if f.get('rain') else 'KHÔNG mưa'} ({f.get('condition', '')})"
+                for f in result["forecast"] if isinstance(f, dict)]
+        return "\n(Tóm tắt: " + "; ".join(days) + ")" if days else ""
+    if name.startswith("weather.") and isinstance(result.get("current"), dict) and "rain" in result["current"]:
+        return "\n(Tóm tắt: hiện tại " + ("CÓ mưa" if result["current"]["rain"] else "KHÔNG mưa") + ")"
     return ""
 
 
@@ -1085,8 +1152,11 @@ def ref_hint(call: dict, catalog: dict, allowed: set) -> str:
     return ", ".join(reads) or "tool tìm kiếm/liệt kê phù hợp"
 
 
-def rare_optional_params(train_items, catalog: dict, max_rate: float = 0.1, min_uses: int = 3) -> set:
-    """(tool, param) pairs that are optional in the schema and (almost) never set in the train gold calls."""
+def rare_optional_params(train_items, catalog: dict, max_rate: float = 0.1, min_uses: int = 3,
+                         read_rate: float = 0.1) -> set:
+    """(tool, param) pairs that are optional in the schema and (almost) never set in the train gold calls. Read tools
+    use their own, higher threshold: an extra filter never changes the state but makes the call unmatched
+    (Kaggle v14 train: calendar.list_events with date_from/date_to cost 7 of 40 samples)."""
     use, present = Counter(), Counter()
     for it in train_items:
         for c in (it.get("label") or {}).get("tool_calls") or []:
@@ -1098,7 +1168,8 @@ def rare_optional_params(train_items, catalog: dict, max_rate: float = 0.1, min_
         params = t.get("parameters") or {}
         req = set(params.get("required") or [])
         for k in params.get("properties") or {}:
-            if k not in req and use[n] >= min_uses and present[(n, k)] / use[n] < max_rate:
+            rate = read_rate if t.get("kind") == "read" else max_rate
+            if k not in req and use[n] >= min_uses and present[(n, k)] / use[n] < rate:
                 rare.add((n, k))
     return rare
 
@@ -1148,7 +1219,8 @@ def run_agent(item, env, llm: LLM, catalog: dict, system_prompt: str, transcript
     constrained = bool(getattr(args, "constrained", False))
     if constrained:
         tools = tools + [FINISH_TOOL]
-    messages = build_messages(item, system_prompt, transcripts, args.gold_transcript, getattr(args, "nbest_cache", None))
+    messages = build_messages(item, system_prompt, transcripts, args.gold_transcript, getattr(args, "nbest_cache", None),
+                              getattr(args, "date_table", False))
     trace = {"request": messages[-1]["content"], "steps": []}
     heard = [] if args.gold_transcript else [transcripts.get(item["audio"], "")] + list(
         (getattr(args, "nbest_cache", None) or {}).get(item["audio"]) or [])
@@ -1209,6 +1281,18 @@ def run_agent(item, env, llm: LLM, catalog: dict, system_prompt: str, transcript
                                "seconds": round(time.time() - g0, 2)})
         if not calls:
             verb = unfulfilled_claim(content, done_writes) if getattr(args, "nudge", True) else ""
+            if not verb and getattr(args, "soft_nudge", False) and nudges == 0 and soft_nudge_due(
+                    content, done_writes, trace, messages):
+                nudges += 1
+                trace["steps"][-1]["nudge"] = "soft"
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": (
+                    "[Hệ thống] Chưa có thao tác nào được thực hiện, mới chỉ đọc dữ liệu. Đọc lại yêu cầu của người dùng: "
+                    "nếu yêu cầu cần thao tác (đặt, chuyển, nhắn, dời, huỷ, bật/tắt, thanh toán...) và điều kiện (nếu có) "
+                    "thoả, hãy gọi tool đó ngay với giá trị từ kết quả ở trên; thiếu thông tin bắt buộc thì gọi "
+                    "sys.ask_missing_info. Nếu điều kiện không thoả hoặc người dùng chỉ hỏi thông tin, trả lời đúng một "
+                    "câu: 'Không cần làm thêm.'")})
+                continue
             if verb and nudges < 2:
                 nudges += 1
                 trace["steps"][-1]["nudge"] = verb
@@ -1278,6 +1362,8 @@ def run_agent(item, env, llm: LLM, catalog: dict, system_prompt: str, transcript
                         trace.setdefault("asr_hints", []).extend(h)
                 if notes:
                     tool_msg += "\n(Gợi ý nhận dạng giọng nói: " + " | ".join(notes) + ")"
+            if getattr(args, "read_notes", False) and result.get("ok") is not False:
+                tool_msg += read_note(c, result)
             messages.append({"role": "tool", "content": tool_msg})
             fail = key + dumps(result) if result.get("ok") is False else None
             fail_streak = fail_streak + 1 if fail and fail == last_fail else (1 if fail else 0)
@@ -1393,6 +1479,13 @@ def parse_args(argv=None):
     ap.add_argument("--asr-nbest", type=int, default=3, help="số giả thuyết beam cho câu cuối (<=1 = tắt)")
     ap.add_argument("--no-asr-pass2", dest="asr_pass2", action="store_false", help="không giải mã lại có prompt tên")
     ap.add_argument("--no-asr-hints", dest="asr_hints", action="store_false", help="không gợi ý tên theo phát âm")
+    ap.add_argument("--read-prune-rate", type=float, default=0.25,
+                    help="bỏ tham số tùy chọn của tool đọc nếu gold train dùng < tỉ lệ này (0.1 = như v2)")
+    ap.add_argument("--no-date-table", dest="date_table", action="store_false", help="không thêm bảng ngày vào ngữ cảnh")
+    ap.add_argument("--no-soft-nudge", dest="soft_nudge", action="store_false",
+                    help="không nhắc khi dừng sau khi đọc mà chưa thao tác")
+    ap.add_argument("--no-read-notes", dest="read_notes", action="store_false",
+                    help="không thêm ghi chú (danh bạ rỗng, mưa/không mưa) sau kết quả tool đọc")
     ap.add_argument("--llm-device", default="cuda:0")
     return ap.parse_args(argv)
 
@@ -1442,14 +1535,16 @@ def main(argv=None):
         if cand.is_file():
             train_items = [json.loads(l) for l in open(cand, encoding="utf-8") if l.strip()]
             break
-    args.rare_params = rare_optional_params(train_items, catalog) if (train_items and args.prune) else set()
+    args.rare_params = (rare_optional_params(train_items, catalog, read_rate=args.read_prune_rate)
+                        if (train_items and args.prune) else set())
     eval_ids = [it["id"] for it in items] if args.split == "train" else []
     fs_index = FewShotIndex(train_items, eval_ids) if (train_items and args.few_shot and args.fewshot_k > 0) else None
     if train_items and args.few_shot and not fs_index:
         system_prompt = system_prompt.rstrip() + "\n\n" + few_shot_block(train_items, catalog, eval_ids)
     print(f"[agent] rare optional params={len(args.rare_params)} few_shot={args.few_shot} k={args.fewshot_k} "
           f"ground={args.ground} nudge={args.nudge} fix_args={args.fix_args} nbest={args.asr_nbest} "
-          f"pass2={args.asr_live is not None} hints={args.asr_hints}", flush=True)
+          f"pass2={args.asr_live is not None} hints={args.asr_hints} read_prune={args.read_prune_rate} "
+          f"dates={args.date_table} soft_nudge={args.soft_nudge} read_notes={args.read_notes}", flush=True)
     scores = []
     t_start = time.time()
     with open(args.out, "w", encoding="utf-8") as fout, open(args.trace, "w", encoding="utf-8") as ftr:
