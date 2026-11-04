@@ -38,7 +38,9 @@ trước khi dùng; không mặc định tài liệu `main` khớp package đã 
    regex làm accuracy chuẩn. WER/CER đơn thuần không chứng minh giữ ý nghĩa.
 6. Có thể giữ E0 nếu fine-tuning không cải thiện; không chọn checkpoint vì training loss thấp.
 
-Chưa tải snapshot PhoWhisper-large hoặc chạy CUDA/bitsandbytes tại đây. Đã kiểm tra
-LoRA/PEFT bằng Whisper ngẫu nhiên tiny trên CPU; chưa chạy large resource probes,
-training/export/inference của suite này. Các số liệu
-benchmark CPU đã có thuộc hạng mục pretrained trước đó, không phải E0 của suite này.
+Ghi chú ở trên là research snapshot trước khi có transfer benchmark. Cập nhật
+04/11/2026: [TRANSFER.md](TRANSFER.md) ghi nhận E0–E4 completed và artifact-only
+comparison có 5 valid runs; workspace hiện có E4 merged FP16 export, manifest
+`files.json` khớp SHA-256 12/12 file. E4 vẫn provisional vì semantic-slot metric
+thiếu. Những test tiny CPU và các nhận định về CUDA/large compatibility trong tài
+liệu này không thay thế bằng chứng resource/acceptance của một host cụ thể.

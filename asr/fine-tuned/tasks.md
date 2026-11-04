@@ -1,8 +1,15 @@
 # Tasks: PhoWhisper-large fine-tuning
 
-**Ngày:** 29/10/2026. **Status:** source implementation và controlled/tiny CPU tests đã có; actual large/GPU experiments chưa chạy.
-Checkbox [x] cho task authoring ghi source/controlled tests đã giao, không khẳng định GPU thành công. Tasks yêu cầu actual model/data/GPU vẫn mở. Việc
-viết bộ specs không làm training, compatibility hay acceptance thành completed.
+**Cập nhật:** 04/11/2026. Transfer record báo E0–E4 completed, 5 valid runs trong
+artifact-only comparison; E4 có 2.560 updates, best step 2.048. E4 export local đã
+được hash-verify 12/12 file. Các checkbox bên dưới vẫn là checklist acceptance:
+không tự đánh dấu chỉ dựa vào summary transfer; semantic-slot, deployment và LLM
+handoff còn giới hạn như nêu trong [TRANSFER.md](TRANSFER.md).
+Checkbox [x] cho task authoring ghi source/controlled tests đã giao. Transfer có
+summary execution E0–E4, nhưng checkbox acceptance chỉ đóng sau khi artifact gốc
+được đối chiếu; sự hiện diện của export không tự chứng minh resource/deployment
+acceptance. Việc viết specs không làm training, compatibility hay acceptance thành
+completed.
 Thực hiện tuần tự; không có yêu cầu phân công nhiều agent trong checklist này.
 
 ## Phase 0 — Data và contracts

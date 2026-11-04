@@ -1,6 +1,9 @@
 # Implementation plan và contracts
 
-**Status:** shared engine/scripts đã được viết; GPU/large acceptance chưa chạy.
+**Status (04/11/2026):** shared engine/scripts đã được viết; TRANSFER ghi nhận
+E0–E4 completed và artifact-only comparison có 5 valid runs. E4 export đã được
+đối chiếu ở workspace local. Semantic-slot recommendation vẫn provisional;
+deployment/A30 acceptance và formal LLM selected-ASR handoff chưa được xác nhận.
 Tài liệu này giữ thiết kế; module map thực tế ở [review.md](review.md), commands chính
 xác ở [RUNBOOK.md](RUNBOOK.md). Những tên file thiết kế được gom/tách trong implementation
 không thay đổi contract dữ liệu, metric hoặc việc người dùng chạy riêng từng experiment.

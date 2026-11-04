@@ -1,4 +1,4 @@
-# ASR từ JarvisMate_4 sang JarvisMate_5
+# ASR từ JarvisMate_4 sang JarvisMate_5 — transfer và local verification
 
 Đích thực tế: `D:\JarvisMate_5\JarvisMate`, branch `fine-tune-llm`.
 Ngày chuyển: 2026-11-01. Không train, export lại hoặc inference model thật.
@@ -24,6 +24,33 @@ E4 export dùng local:
 .agent-work/asr-finetune/suite-01/E4/run-20261030-181019-690223-4edc064ec9/exports/best
 ```
 
+## E4 export hiện có trên workspace local (04/11/2026)
+
+Standalone export đã được tìm thấy ngoài repo tại:
+
+```text
+C:\Users\Windows\Downloads\ZaloAI\ASR_E4(Lora+Aug)\best
+```
+
+Thư mục này chứa 12 file gồm `model.safetensors` (3,086,759,768 bytes), tokenizer,
+processor và metadata. SHA-256 của cả 12 file khớp các giá trị trong `files.json`;
+SHA-256 của model weights là
+`acd40183ee145a099538eb72f841fd1795852464b1b1b4acba1c4ab7c952286e`.
+`export-metadata.json` ghi checkpoint step 2.048, source `vinai/PhoWhisper-large`,
+base revision `b9136a44b5f2ca664bd0b8f74baecf1715f6eeeb`, FP16 và
+`merged_nonquantized_base_plus_adapter`; logical parameter count là 1,543,304,960.
+
+Đây là xác nhận file-level của standalone export, không phải load/generate test.
+Export nằm ngoài Git repo và không được commit. Suite run/comparison artifacts gốc
+được trỏ ở dưới không có trong workspace repo hiện tại; các metrics được tóm tắt
+tiếp theo dựa trên transfer record, chưa được tái tính ở checkout này.
+
+Trong lần dọn local ngày 04/11/2026, đã xóa các snapshot model benchmark khác E4 khỏi
+`.agent-work/asr-benchmark/models/`: PhoWhisper-small/medium, Whisper-small,
+Whisper-small CT2 và Whisper-turbo (7,594,782,147 bytes). Các run manifests và
+transcripts lịch sử vẫn được giữ; chúng không còn đủ model files để chạy lại benchmark.
+E4 export ở đường dẫn riêng phía trên được giữ nguyên.
+
 `operational-paths.json` trong suite liệt kê đầy đủ checkpoint/evaluation/export
 E0–E4 đã quy về `_5`. `relocation.json` khai báo mapping `_2`/`_4` → project hiện
 tại, ràng buộc SHA-256 của suite gốc. ASR loader, status, compare và các boundary
@@ -37,7 +64,7 @@ Set-Location 'D:\JarvisMate_5\JarvisMate'
 & ./.venv-llm/Scripts/python.exe -m lifemate.asr_training status --suite-dir .agent-work/asr-finetune/suite-01
 ```
 
-Status đã xác nhận cả E0–E4 `completed`. Artifact-only comparison đã chạy riêng,
+Transfer record xác nhận cả E0–E4 `completed`. Artifact-only comparison đã chạy riêng,
 nhận **5 valid runs**, tại:
 `.agent-work/asr-finetune/suite-01/comparisons/20261101-155755-931467-8987e9`.
 E4 ghi 2.560 updates, best step 2.048. Recommendation E4 vẫn **provisional** vì

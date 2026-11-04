@@ -1,8 +1,11 @@
 # Fine-tuning PhoWhisper-large cho LifeMate
 
-**Ngày:** 29/10/2026. **Trạng thái:** đã có scripts, configs, shared engine và tests.
-Chưa chạy PhoWhisper-large/GPU, chưa đo VRAM 12 GiB, chưa full training E0–E4.
-Đọc [RUNBOOK.md](RUNBOOK.md) để cài và chạy thật, [review.md](review.md) cho review/evidence.
+**Ngày cập nhật:** 04/11/2026. **Trạng thái:** E0–E4 có kết quả được ghi trong
+[TRANSFER.md](TRANSFER.md); E4 là PhoWhisper-large + LoRA + Train-only augmentation.
+Export E4 đã có trong workspace local và manifest SHA-256 khớp 12/12 file.
+Recommendation vẫn provisional vì thiếu semantic-slot metric; không đồng nghĩa với
+deployment/A30 acceptance hay selected-ASR handoff đã được chứng nhận.
+Đọc [RUNBOOK.md](RUNBOOK.md) cho lệnh vận hành và [review.md](review.md) cho evidence.
 Mỗi lệnh chỉ vận hành **một experiment**, kết thúc rồi dừng; không có chế độ chạy all E0–E4.
 
 Mục tiêu là cải thiện nhận dạng tiếng Việt, nhất là số tiền, thời gian, địa chỉ,
@@ -51,17 +54,29 @@ Train 1.236 / Validation 309. Dùng user-history thuộc Train cho tối đa 4.0
 fit trước audit/dedup; đánh giá chính trên 309 lượt hiện tại, scope history riêng.
 Identity và policy đầy đủ ở [spec.md](spec.md#split-và-dữ-liệu).
 
-Benchmark CPU trước đó có PhoWhisper-small/medium, **chưa có PhoWhisper-large**;
-không lấy điểm của medium làm E0. Validation đã được xem để phân tích lỗi nên
-đây là development validation, không phải một test set chưa từng được quan sát.
+Benchmark CPU lịch sử có PhoWhisper-small/medium; không dùng các điểm đó làm E0.
+Benchmark E0–E4 của PhoWhisper-large được ghi trong transfer record; Validation
+đã được xem để phân tích lỗi nên đây là development validation, không phải một test
+set chưa từng được quan sát. Transfer record báo 5 runs hợp lệ, E4 có 2.560 updates
+và best step 2.048. Chi tiết giới hạn và đường dẫn export trong
+[TRANSFER.md](TRANSFER.md).
 
 ## Đầu ra của implementation
 
 - Script độc lập cho E0, E1, E2, E3, E4; common engine và config version hóa.
 - CSV so sánh đủ 5 experiment, predicted transcripts, lịch sử đánh giá và peak VRAM.
 - Best adapter/checkpoint, bản export offline, source/model/environment hashes.
-- README/Runbook cài dependency đã khóa, khôi phục và tái lập; GPU compatibility vẫn cần probe.
+- README/Runbook cài dependency đã khóa, khôi phục và tái lập; resource evidence phải được đọc theo đúng host/profile trong artifact run.
 
-Artifacts thực tế chỉ lưu dưới `.agent-work/asr-finetune/` ignored; không commit
-audio, transcript corpus, annotation, weights, checkpoint hay cache. Các bảng số
-liệu chỉ được tạo từ run thật; hiện chưa có điểm/checkpoint PhoWhisper-large của suite này.
+Artifacts gốc của suite chỉ lưu dưới `.agent-work/asr-finetune/` ignored; không commit
+audio, transcript corpus, annotation, weights, checkpoint hay cache. Bản export E4
+đang có tại `C:\Users\Windows\Downloads\ZaloAI\ASR_E4(Lora+Aug)\best`
+(tương đối từ repo root: `..\ASR_E4(Lora+Aug)\best`); đây là resource local ngoài
+repo, không commit. Metadata xác nhận checkpoint step 2.048, base
+`vinai/PhoWhisper-large`, revision `b9136a44b5f2ca664bd0b8f74baecf1715f6eeeb`,
+dtype FP16, representation merged non-quantized base + adapter. SHA-256 của
+`model.safetensors` là
+`acd40183ee145a099538eb72f841fd1795852464b1b1b4acba1c4ab7c952286e`; cả 12 file
+đều khớp `files.json`. Xem transfer note để biết giới hạn evidence và LLM handoff.
+Các snapshot PhoWhisper-small/medium và Whisper-small/CT2/turbo trong cache benchmark
+local đã được dọn; lịch sử run được giữ nhưng không còn đủ model files để replay.

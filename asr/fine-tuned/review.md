@@ -1,8 +1,10 @@
-# Review và implementation handoff — 29/10/2026
+# Review và implementation handoff — 29/10/2026; status update 04/11/2026
 
 Review bắt đầu từ branch `fine-tuned-asr`, commit `c2aaad7`. Đã đối chiếu toàn bộ
 specs/pretrained code, runtime ASR/contracts và benchmark rules trước implementation.
-**Code đã viết; không chạy PhoWhisper-large/GPU/full training trong phiên này.**
+**Historical review:** lúc review ban đầu code đã viết nhưng PhoWhisper-large/GPU/full
+training chưa chạy. Transfer note được bổ sung sau đó báo E0–E4 completed; xem phần
+status update cuối file và [TRANSFER.md](TRANSFER.md) để tránh đọc nhầm trạng thái cũ.
 
 ## Các thiếu hụt đã xử lý
 
@@ -62,19 +64,41 @@ không có điểm model/VRAM GPU nào được suy ra từ những tests này.
 
 ## Giới hạn và việc người dùng cần chạy
 
-- Actual RTX 5070 Ti, driver/Torch CUDA/PEFT/bitsandbytes kernels, FP16/BF16 và
-  full model VRAM/optimizer peaks phải pass preflight. Tests không chứng minh large vừa 12 GiB.
+- Export E4 có mặt local, nhưng export file-level không chứng minh GPU/profile
+  compatibility trên host nhận. Khi dùng host khác, phải đối chiếu resource evidence
+  đúng host/profile; không suy từ tên GPU hoặc standalone export.
 - NF4 chỉ được coi là supported sau real quantization + backward/update + generation
   + fresh adapter reload trên GPU đó; không suy từ việc cài được bitsandbytes.
 - CSA thật cần annotations 309 lượt và reviewed/validated extractor. Extractor
   declarative không tự hiểu mọi số tiền/thời gian/tên; chưa có gold thì unavailable.
 - CUDA device peak toàn hệ thống chưa được NVML lấy mẫu: code báo PyTorch exact
   allocated/reserved peaks và device free snapshots, nêu rõ giới hạn đo context/external allocators.
-- Chưa chạy E0 full Validation, training E1–E4, live large export, joint Qwen VRAM,
-  Tool-call F1/authoritative Final State Match hoặc A30/container 30 giây/mẫu.
+- Transfer record báo E0–E4 completed, và standalone E4 export đã được hash-verify
+  local (xem status update). Run artifacts gốc không có trong checkout này nên không
+  thể tái tính WER/CER/selection ở đây. Joint Qwen VRAM, Tool-call F1/authoritative
+  Final State Match và A30/container 30 giây/mẫu vẫn chưa được xác nhận trong evidence
+  đang xem.
 - Cả pipeline scorer và semantic correctness không được dựng từ WER/CER. Candidate
   không đủ evidence thì giữ E0/provisional, không mặc định fine-tuning thắng.
 
 Lệnh thực tế Prepare/E0 rồi từng experiment riêng, skip/resume/export/final compare:
-[RUNBOOK.md](RUNBOOK.md). Mọi hardware execution tasks trong [tasks.md](tasks.md)
-vẫn mở đến khi có logs/measurements thật.
+[RUNBOOK.md](RUNBOOK.md). Checklist acceptance trong [tasks.md](tasks.md) cần được
+đối chiếu với artifact gốc trước khi đóng.
+
+## Status update — 04/11/2026
+
+- [TRANSFER.md](TRANSFER.md) ghi E0–E4 `completed`, artifact-only comparison có
+  5 valid runs; E4 có 2.560 updates và best step 2.048.
+- Export standalone hiện có tại
+  `C:\Users\Windows\Downloads\ZaloAI\ASR_E4(Lora+Aug)\best` (tương đối từ repo
+  root: `..\ASR_E4(Lora+Aug)\best`). `export-metadata.json`
+  xác nhận PhoWhisper-large, base revision
+  `b9136a44b5f2ca664bd0b8f74baecf1715f6eeeb`, FP16 merged base+adapter, logical
+  parameters 1,543,304,960. 12/12 file khớp hash trong `files.json`; hash model
+  weights là `acd40183ee145a099538eb72f841fd1795852464b1b1b4acba1c4ab7c952286e`.
+- Suite run/comparison artifacts gốc không có trong workspace repo hiện tại, nên
+  metrics và toàn bộ provenance của các run chưa được kiểm tra lại ở checkout này.
+  Theo transfer record, E4 vẫn provisional vì thiếu semantic-slot metric.
+- Chưa có formal `llm-handoff.json`/cache certificate trong artifact standalone;
+  sự hiện diện và hash-valid của model không tự tạo selection approval, không
+  hoàn thành Fit/Validation ASR caches, và không chứng minh A30/deployment acceptance.

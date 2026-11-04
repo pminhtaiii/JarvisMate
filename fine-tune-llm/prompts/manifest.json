@@ -1,0 +1,23 @@
+{
+    "schema":  "lifemate-prompt-bundle-v1",
+    "runtime_active":  "lifemate-native-p1-vi-v1",
+    "prompts":  [
+                    {
+                        "version":  "lifemate-native-p1-vi-v1",
+                        "file":  "native-p1-vi-v1.txt",
+                        "sha256":  "b690238f162b2678973f4d5d4d7bbdefb8fe369960a81d85a019bdc0b574f10d",
+                        "status":  "active_runtime"
+                    },
+                    {
+                        "version":  "lifemate-native-p1-vi-v2",
+                        "file":  "native-p1-vi-v2.txt",
+                        "sha256":  "0ae4cc2f1a3798f1c0c2ed6e0445fa65a8652ba49adfdf58e4e046ecb2babee8",
+                        "status":  "versioned_reference"
+                    }
+                ],
+    "hash_policy":  "SHA-256 over NFC UTF-8 prompt content, without a trailing newline",
+    "sources":  {
+                    "v1":  "python/src/lifemate/prompting.py SYSTEM",
+                    "v2":  "fine-tune-llm/specs.md §4.2"
+                }
+}
