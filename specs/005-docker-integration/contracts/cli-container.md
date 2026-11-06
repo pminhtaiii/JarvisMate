@@ -96,3 +96,8 @@ accepted sample rows, partial predictions and report. Complete publication requi
 exact selected-ID coverage without failures/duplicates. Resume rejects different
 models/templates/config/data and never replays failed/uncertain samples. Submission
 rows retain the organizer schema exactly.
+
+The attempt journal includes fsynced pre-dispatch reservations. Resume requires
+exclusive run ownership, confirmed prior-worker termination and a valid journal;
+reserved-but-not-durably-accepted IDs remain uncertain and cannot be rerun. Staged
+files or missing terminal records never establish that a sample is safe to dispatch.

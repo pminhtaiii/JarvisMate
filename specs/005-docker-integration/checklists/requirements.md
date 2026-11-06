@@ -14,3 +14,6 @@
 
 This reviews document completeness only. Implementation/runtime gates remain
 unchecked in tasks.md until actual evidence is recorded.
+
+- [x] Three independent P0/P1 reviews completed; the crash-recovery P1 was fixed and
+  all reviewers verified closure. See [review record](../review.md).

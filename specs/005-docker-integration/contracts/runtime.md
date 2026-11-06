@@ -58,7 +58,12 @@ manufactures a successful empty prediction.
 
 Use spawned workers and bounded framed IPC validated on receipt. Load models once,
 then send `ready`; supervisor owns generation/attempt identities and allows one active
-attempt. Start one monotonic clock before dispatch and send the absolute deadline.
+attempt. Hold exclusive run ownership. Before dispatch, append and fsync a reservation
+binding sample ID, attempt ID, worker generation and configuration identity. Dispatch
+nothing until reservation durability is confirmed; failure stops the run nonzero.
+Reservation persistence is scheduling bookkeeping, separately measured in run wall
+time, and must perform no sample input preparation, ASR or tool work. Start one
+monotonic clock immediately before dispatch and send the absolute deadline.
 The shared budget includes preparation, ASR, environment creation, every generation/
 tool call, collection, trace closure, serialization and durable per-sample staging.
 
@@ -75,10 +80,23 @@ do not claim instantaneous GPU cancellation or rollback. Already-dispatched muta
 can have uncertain effects and must never be replayed. If termination cannot be
 established, stop the batch/container instead of dispatching another sample.
 
+All IPC operations, including dispatch writes and partial-frame reads, must remain
+interruptible by the supervisor deadline. Bound frame sizes, drain worker logs without
+blocking, and test a worker that never reads its request or emits only part of a frame.
+Journal persistence must not overlap an active sample attempt or block its watchdog.
+
 Recover at most once for subsequent distinct samples with a finite configurable
 startup/recovery timeout. Record reload cost separately. Recovery failure stops
 nonzero; prior accepted rows remain intact. Never create a new environment for the
 failed sample, including through resume. Legacy runner defaults remain unchanged.
+
+After supervisor death, reacquire exclusive run ownership and establish prior worker
+termination before any new dispatch. If that cannot be established, stop. Validate
+the durable reservation/acceptance journal: every reserved ID without durable
+acceptance is uncertain and never redispatched, regardless of whether a tool call,
+staged artifact or completion acknowledgement is visible. A corrupt/truncated journal
+blocks resume. Never treat an unknown in-flight ID as unattempted or reconstruct its
+state by opening another ToolEnv.
 
 ## Output and publication
 
@@ -87,6 +105,10 @@ the success boundary. Acceptance-ledger persistence/final JSONL assembly is sepa
 timed batch bookkeeping and performs no inference/tool work or content alteration.
 An uncertain/lost acceptance acknowledgement fails closed; staged files alone cannot
 establish success after a parent crash.
+Persist acceptance against the original durable reservation before dispatching the
+next sample. If that write fails or is lost, retain the reservation as uncertain;
+do not retry the sample or claim complete coverage. Batch finalization may retain
+already durable acceptance only; it cannot promote unaccepted staging after a crash.
 
 Publish only accepted configuration-compatible rows. Any failure, timeout or missing
 selected ID blocks complete publication and exits nonzero, retaining partial evidence.

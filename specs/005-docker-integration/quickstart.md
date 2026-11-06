@@ -31,6 +31,14 @@ native parser/EOS/no-tool/clarification, no labels, blocked ASR/planner/tool/out
 timeouts, late/stale rejection, no uncertain replay, bounded recovery for a distinct
 sample, and blocked incomplete publication. Run applicable legacy runner/ASR checks.
 
+Inject supervisor death (a) after reservation but before dispatch, (b) after a tool
+mutation but before staging and (c) after a timely result but before acceptance fsync.
+After recovery, each reserved ID without durable acceptance must remain uncertain,
+with no new ToolEnv or dispatch for it. Confirm exclusive run ownership, old-worker
+termination, journal corruption rejection and reservation/acceptance write failures.
+Verify the deadline also interrupts blocked dispatch writes and incomplete result
+frames, with worker logs drained without blocking supervisor control.
+
 ## 2. Actual configuration
 
 Copy proposed `configs/integration.example.toml` into ignored local storage. Replace

@@ -54,6 +54,9 @@ supervisor expires attempts, rejects late results, and recovers for a different 
    is not retried and receives no replacement environment.
 4. **Given** recovered models, **when** the next distinct sample begins, **then** it gets
    its own deadline; reload/recovery remains visible in total run wall time.
+5. **Given** supervisor death after reservation or tool execution, **when** recovery
+   opens that run, **then** every reserved ID without durable acceptance is uncertain
+   and ineligible for redispatch, even if no staged prediction exists.
 
 ### User Story 3 - Deploy and switch models without code edits (Priority: P1)
 
@@ -135,6 +138,10 @@ clarification-after-earlier-call cases; paired transcript/audio reports with den
 - **FR-008**: Distinguish completed, needs-info, timeout and failed attempts. Continue
   to distinct samples after isolated failures; stop if bounded recovery fails. Retain
   failures, exit nonzero for incomplete runs and block complete-submission publication.
+- **FR-008a**: Durably reserve sample/attempt/worker/configuration identity before
+  dispatch. On recovery, reserved IDs without durable acceptance are uncertain and
+  never replayed. Enforce single ownership of a run and establish prior worker
+  termination before dispatching further samples; fail closed if either is uncertain.
 - **FR-009**: Load models once per healthy worker. Report startup/recovery and final
   batch packaging separately and include them in total wall time. Confirm organizer
   timing/accounting rules before claiming submission readiness.

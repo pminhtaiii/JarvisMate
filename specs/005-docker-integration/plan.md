@@ -79,6 +79,14 @@ acceptance controls later publication. Batch ledger persistence/JSONL assembly i
 separately timed bookkeeping, with no inference or tool work deferred into packaging.
 Confirm organizer accounting before submission-readiness claims.
 
+Before dispatch, durably reserve sample/attempt/worker/configuration identity under
+exclusive run ownership. This is scheduling bookkeeping, timed separately and included
+in run wall time; no sample preparation or execution may precede the attempt clock.
+If reservation durability fails, dispatch nothing and stop nonzero. On restart, a
+reservation without durable acceptance is uncertain, never unattempted. Establish
+prior worker termination before continuing with other IDs; never infer acceptance
+from staged files alone. Add crash-window checks to the supervisor acceptance tests.
+
 ## Project Structure
 
 ### Documentation (this feature)

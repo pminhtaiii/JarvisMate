@@ -37,6 +37,12 @@ model cannot construct authoritative state, results or submission logs.
 - Per-stage time, tokens, ASR counts, stop/error code and bounded diagnostic paths.
 - Unique staged prediction/trace paths and output durability acknowledgement.
 
+Before dispatch, persist a reservation binding source ID, attempt ID, worker
+generation and configuration identity. A reservation may exist before `running`;
+after unclean supervisor exit, any reservation without durable acceptance becomes
+`failed` with reason `EXECUTION_UNCERTAIN`, including when dispatch itself is unknown.
+The reservation is append-only evidence: absence of staged output never clears it.
+
 Success requires authoritative validated output, durable sample artifacts and timely
 supervisor receipt. At/after expiry is timeout. Terminal states are immutable. One
 sample has one attempt/run; recovery/resume cannot replay failed/uncertain samples.
@@ -48,6 +54,12 @@ Manifest records code/image/dependency/model/template identity, effective settin
 GPU/CPU/RAM/CUDA, dataset hashes/selection and terminal states. Startup/recovery/final
 packaging are separately timed and included in run wall time. Denominators include
 every selected sample, including failures/timeouts.
+
+The run journal stores durable pre-dispatch reservations and accepted/failed records.
+Only one supervisor owns a run at a time. Recovery validates journal records, retains
+only durably accepted compatible rows, and treats all remaining reservations as
+uncertain. An unreadable/truncated reservation journal blocks resume rather than
+classifying affected IDs as fresh. Prior workers must be confirmed terminated first.
 
 Prediction rows retain exactly `id`, `tool_calls`, `state_hash`. No invented failure
 row or guessed hash. Incorrect completed predictions remain runtime results assessed

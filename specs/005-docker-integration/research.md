@@ -129,6 +129,24 @@ Hardware remains configurable; development measurements do not establish A30 res
 every deployment A30-only prevents local use; reconstructing state after a killed
 worker violates single-environment/no-retry policy.
 
+## 8. Crash-safe reservation before dispatch
+
+**Decision**: Fsync an immutable sample/attempt/worker/config reservation under
+exclusive run ownership before dispatch. After supervisor death, reserved IDs without
+durable acceptance are uncertain and never replayed. Confirm old-worker termination
+before continuing other IDs; invalid journals block resume. Require acceptance
+durability before the next dispatch and fail closed on bookkeeping write failure.
+
+**Rationale**: The initial design recorded terminal acceptance but omitted durable
+evidence before tool effects. A crash after mutation could otherwise make resume
+mistake that sample for unattempted. Three independent P0/P1 reviews identified this
+same P1 gap. Reservations are separately timed scheduling bookkeeping, include no
+sample processing, and count in total wall time; attempt timing starts before dispatch.
+
+**Alternatives considered**: Inferring attempts from staging loses pre-staging effects;
+creating a fresh environment to inspect state violates no-replay; accepting staged
+output after a lost acknowledgement can admit an over-deadline result.
+
 ## Branch cleanup and preservation
 
 Base `fine-tuned-asr` remains available. On this integration branch remove tracked

@@ -18,7 +18,7 @@ another unfinished task in the same phase. Story labels map to spec user stories
 - [ ] T003 Define strict config/attempt records, terminal states and deadline/identity validation in `python/src/lifemate/configuration.py` and `python/src/lifemate/contracts.py` without changing legacy defaults.
 - [ ] T004 Add TOML loading, known CLI overrides, snapshot/template/parameter/context preflight and configuration fingerprinting in `python/src/lifemate/configuration.py`.
 - [ ] T005 Verify unknown keys, invalid devices/dtypes/limits, absent snapshots, incompatible templates and pre-environment rejection in `python/tests/test_integration_config.py`.
-- [ ] T006 Define unique durable staging, accepted/failed ledger and incomplete-publication guard in `python/src/lifemate/artifacts.py`; keep submission rows authoritative and legacy artifacts compatible.
+- [ ] T006 Define unique durable staging, fsynced pre-dispatch reservations binding sample/attempt/worker/config identity, accepted/failed journal and incomplete-publication guard in `python/src/lifemate/artifacts.py`; fail closed on corrupt journal and keep legacy artifacts compatible.
 
 **Checkpoint**: Configuration and attempt/output boundaries are explicit; no model or
 ToolEnv is created for invalid settings. Foundation is required by every story.
@@ -47,10 +47,10 @@ a deadline-compliant/container-ready release.
 and cannot publish late rows; a different sample can run after worker recovery.
 
 - [ ] T014 [US2] Implement persistent spawned worker loading, bounded framed IPC, ready/result identities and per-sample durable staging in `python/src/lifemate/worker.py`.
-- [ ] T015 [US2] Implement monotonic pre-dispatch deadlines, bounded IPC waits, process-group termination/reaping, stale-message rejection and staged-output quarantine in `python/src/lifemate/supervisor.py`.
-- [ ] T016 [US2] Add one bounded recovery for subsequent distinct IDs, explicit startup/reload timing and stop-on-uncertain-termination behavior in `python/src/lifemate/supervisor.py`; never replay failed IDs, including resume.
-- [ ] T017 [US2] Connect supervisor acceptance, partial outputs, nonzero incomplete exit and complete-publication guard in `python/src/lifemate/integration.py` and `python/src/lifemate/artifacts.py`.
-- [ ] T018 [US2] Verify blocked ASR/planner/tool/output, at-deadline/late/stale messages, worker crash, uncertain mutation, failed recovery, compatible accepted-only resume and publication denial in `python/tests/test_integration_supervisor.py`.
+- [ ] T015 [US2] Implement exclusive run ownership, durable-reservation-before-dispatch ordering, monotonic dispatch deadlines, bounded IPC reads/writes/partial frames and log draining, process-group termination/reaping, stale-message rejection and output quarantine in `python/src/lifemate/supervisor.py`.
+- [ ] T016 [US2] Add bounded recovery for subsequent distinct IDs, startup/reload timing and confirmed prior-worker termination in `python/src/lifemate/supervisor.py`; classify reserved-without-durable-acceptance IDs as uncertain after parent death and never replay them, including resume.
+- [ ] T017 [US2] Connect timely supervisor acceptance and acceptance-journal durability before next dispatch, partial outputs, nonzero incomplete exit and complete-publication guard in `python/src/lifemate/integration.py` and `python/src/lifemate/artifacts.py`; write failure must preserve the uncertain reservation.
+- [ ] T018 [US2] Verify blocked stages/dispatch writes/partial IPC frames, late/stale messages, parent death before dispatch/after mutation/before acceptance fsync, reservation/acceptance write failures, corrupt journals, exclusive ownership, old-worker termination, no uncertain replay, bounded recovery and publication denial in `python/tests/test_integration_supervisor.py`.
 - [ ] T019 [US2] Add per-clip/per-decision/tool/collection/durable-output/full-attempt spans, tokens, termination overshoot and startup/recovery/packaging totals in `python/src/lifemate/worker.py` and `python/src/lifemate/artifacts.py`; verify them in `python/tests/test_integration_pipeline.py`.
 
 **Checkpoint**: Timed success is validated independently of worker cooperation.
