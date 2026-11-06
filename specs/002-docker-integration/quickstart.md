@@ -91,3 +91,43 @@ correctness and timing evidence.
   rules are confirmed before claiming submission readiness.
 
 Unrun gates stay pending. Record actual dataset/command/results in the run evidence.
+
+## Recorded evidence
+
+Entries record only checks actually run, with exact commands and outcomes. Controlled
+doubles and tokenizer-only checks never establish model accuracy, GPU memory fit,
+container behaviour or deadline compliance on competition hardware.
+
+Environment for local controlled checks: Windows 10 Pro 10.0.19045, CPython 3.11.15
+(uv), dev virtualenv `.venv` with torch 2.9.0+cpu, transformers 4.57.1, numpy 2.3.4,
+lm-format-enforcer 0.11.3. No GPU, Docker, model weights or supplied Train data are
+present on this machine; real-model, container and GPU runs belong on the GPU server.
+
+### US1 native integration (T007-T013), 2026-11-06
+
+```powershell
+$env:PYTHONPATH = 'python/src;python/tests'
+.venv/Scripts/python.exe -m unittest test_asr_once test_integration_pipeline test_qwen_native `
+  test_agent test_cli test_dataset test_audio test_inference test_artifacts test_runtime test_checkpoint test_selection
+# Ran 111 tests in 7.8s: OK (skipped=6; the actual-tokenizer class and pre-existing opt-in checks)
+$env:LIFEMATE_NATIVE_TOKENIZER = (Resolve-Path .agent-work/models/qwen3-4b-instruct-2507-tokenizer)
+.venv/Scripts/python.exe -m unittest test_qwen_native
+# Ran 12 tests in 51.6s: OK
+```
+
+- Actual tokenizer: Qwen/Qwen3-4B-Instruct-2507 tokenizer/config files only (no
+  weights), fetched with `huggingface_hub.snapshot_download(allow_patterns=*.json,*.txt,*.jinja)`
+  into ignored `.agent-work/models/`. EOS is `<|im_end|>` (151645); `<tool_call>` is one
+  regular token (151657). The real LMFE enforcer admits native calls (Unicode, zero-
+  argument, `x-one-of`, `sys.ask_missing_info`, either argument order) and then allows
+  only EOS; it rejects prose, ineligible tools, wrong types, extra/duplicate keys and a
+  second call.
+- Measured constraint overhead (same machine, pure-Python LMFE): building token data
+  took 8.4 s per planner load (startup). LMFE's base `SequenceParser` dropped the JSON
+  free-text shortcut, making each token inside a string argument take >200 s; the
+  `TailSequence` fix brings those tokens to ~0.01 s. One step remains costly: ~3.3 s
+  to compute the allowed set where a string value opens, per string argument per
+  decision. Separate per-`x-one-of` branches made that step 13 s and then stalled, so
+  decoding uses one merged schema per tool and ToolEnv validates the groups. This is
+  the main measured latency risk for the 30 s budget; re-measure on the server CPU
+  and treat any optimization as a paired T031 change.

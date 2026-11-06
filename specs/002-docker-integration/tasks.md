@@ -29,13 +29,13 @@ ToolEnv is created for invalid settings. Foundation is required by every story.
 **Independent test**: Controlled dependent calls return exact expected calls/hash;
 ASR counts equal distinct required clips and historical actions are not replayed.
 
-- [ ] T007 [P] [US1] Add content-digest keyed sample-local transcript reuse and ASR count/timing events in `python/src/lifemate/dataset.py`, preserving history and diagnostic transcript mode.
-- [ ] T008 [P] [US1] Implement eligible-tool native rendering, actual call/result messages and strict one-call/EOS/neutral-finish parsing in `python/src/lifemate/adapters/qwen_native.py`.
-- [ ] T009 [US1] Implement constrained native decoding and checkpoint-specific tokenizer/template validation in `python/src/lifemate/adapters/qwen_native.py`, reusing existing local model/session helpers without an unconstrained fallback.
-- [ ] T010 [US1] Verify native render/parse, actual tokenizer EOS, zero-argument tools, Unicode, malformed/multiple calls, extra text and output/time cuts in `python/tests/test_qwen_native.py`.
-- [ ] T011 [US1] Verify repeated-reference/identical-content reuse, distinct historical clips, supplied history text and empty/missing audio handling in `python/tests/test_asr_once.py`.
+- [x] T007 [P] [US1] Add content-digest keyed sample-local transcript reuse and ASR count/timing events in `python/src/lifemate/dataset.py`, preserving history and diagnostic transcript mode.
+- [x] T008 [P] [US1] Implement eligible-tool native rendering, actual call/result messages and strict one-call/EOS/neutral-finish parsing in `python/src/lifemate/adapters/qwen_native.py`.
+- [x] T009 [US1] Implement constrained native decoding and checkpoint-specific tokenizer/template validation in `python/src/lifemate/adapters/qwen_native.py`, reusing existing local model/session helpers without an unconstrained fallback.
+- [x] T010 [US1] Verify native render/parse, actual tokenizer EOS, zero-argument tools, Unicode, malformed/multiple calls, extra text and output/time cuts in `python/tests/test_qwen_native.py`.
+- [x] T011 [US1] Verify repeated-reference/identical-content reuse, distinct historical clips, supplied history text and empty/missing audio handling in `python/tests/test_asr_once.py`.
 - [ ] T012 [US1] Wire native adapter/prepared request into an explicit integration path in `python/src/lifemate/agent.py` and `python/src/lifemate/integration.py`; retain one environment, eligibility checks, schema-attempt logging and legacy defaults.
-- [ ] T013 [US1] Verify lookup-dependent second calls, no history replay, clarification after partial execution and exact authoritative output in `python/tests/test_integration_pipeline.py`; run applicable existing runner/ASR regressions and record commands/results in `specs/002-docker-integration/quickstart.md`.
+- [x] T013 [US1] Verify lookup-dependent second calls, no history replay, clarification after partial execution and exact authoritative output in `python/tests/test_integration_pipeline.py`; run applicable existing runner/ASR regressions and record commands/results in `specs/002-docker-integration/quickstart.md`.
 
 **Checkpoint**: Native integration works with controlled adapters. This alone is not
 a deadline-compliant/container-ready release.

@@ -130,6 +130,7 @@ class SampleOutcome:
     error: JSON | None = None
     diagnostic: JSON | None = None
     timings: dict[str, float] = field(default_factory=dict)
+    metrics: JSON = field(default_factory=dict)  # Integration spans/tokens; legacy leaves it empty.
 
 
 class Planner(Protocol):

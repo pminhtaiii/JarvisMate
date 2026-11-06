@@ -37,6 +37,15 @@ def inference_session(adapter):
     return adapter.inference_session() if hasattr(adapter, "inference_session") else nullcontext()
 
 
+def resolve_device(device: str) -> str:
+    """Validate cpu, cuda or cuda:N; N indexes devices visible inside the container."""
+    import re
+
+    if not isinstance(device, str) or not re.fullmatch(r"cpu|cuda(:[0-9]{1,2})?", device):
+        raise PipelineError("MODEL_UNAVAILABLE", "Device must be cpu, cuda or cuda:N", "model_load")
+    return device
+
+
 def model_directory(path: Path | None) -> Path:
     if path is None or not path.is_dir() or not (path / "config.json").is_file():
         raise PipelineError("MODEL_UNAVAILABLE", "A complete local model snapshot is required", "model_load")
