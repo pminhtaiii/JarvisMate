@@ -1,5 +1,14 @@
 # Runtime Contract
 
+**Implementation notes (2026-11-06)**: implemented in `dataset.py`, `adapters/qwen_native.py`,
+`agent.py`, `worker.py`, `supervisor.py`, `artifacts.py` and `integration.py`; verified by
+controlled checks only. Choices made during implementation, measured with the actual
+Qwen3 tokenizer: decoding uses one merged argument schema per tool with free field
+order, and `x-one-of` groups are validated and logged by ToolEnv (separate branches
+stalled LM Format Enforcer). `recovery_attempts` allows at most one restart per worker
+loss. Run ownership waits up to 5 s for a dead owner's kernel lock. Organizer startup
+accounting and failed-row format are still unconfirmed (T032).
+
 ## ASR preparation
 
 Prepare current/historical user text once before planning. Transcribe each distinct

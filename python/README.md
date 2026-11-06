@@ -155,6 +155,35 @@ deployed parameters <6B are enforced from loaded model counts. The actual compet
 constraints apply to the whole deployed system. Loading occurs before these measured
 counts are available; provision adequate memory for the intended small checkpoints.
 
+## Integration entry point (separate from `run`)
+
+`python -m lifemate.integration` ([spec](../specs/002-docker-integration/spec.md),
+[ADR 011](../docs/adr/011-configurable-docker-integration.md)) is configured by strict
+TOML ([example](../configs/integration.example.toml)) and runs audio -> per-clip ASR
+once -> native Qwen tool calling (`qwen-native-v1`) -> one ToolEnv per sample, inside a
+supervised persistent worker. `run` keeps its defaults for comparison.
+
+| Module | Responsibility |
+|---|---|
+| `configuration.py` | TOML v1 schema, CLI overrides, metadata-only snapshot/template/parameter/data preflight, run identity |
+| `adapters/qwen_native.py` | Native render/parse, EOS/limit classification, LMFE constraint, template check, local planner |
+| `worker.py` | Spawned worker: models loaded once, framed IPC, durable per-attempt staging |
+| `supervisor.py` | Reservation before dispatch, full-attempt deadline, termination/quarantine, bounded recovery |
+| `integration.py` | CLI, batch coordination, manifest/provenance, exact-coverage publication |
+| `diagnostics.py` | Offline Train-reference empty/clarification report and paired transcript/audio attribution |
+
+```powershell
+$env:PYTHONPATH = 'python/src;python/tests'
+python -m unittest discover -s python/tests -p 'test_integration*.py'
+python -m unittest python/tests/test_qwen_native.py python/tests/test_asr_once.py
+python -m lifemate.integration --config /abs/config/integration.toml --check-config
+```
+
+Status: controlled checks only (see the
+[recorded evidence](../specs/002-docker-integration/quickstart.md#recorded-evidence)).
+The Docker image, GPU runs, real checkpoints and latency are pending on the GPU server
+via `scripts/integration/server-acceptance.sh`.
+
 ## Outputs, errors and review
 
 ```text

@@ -35,10 +35,21 @@ Process one sample at a time per GPU worker initially; queue development request
 - The accepted whole-sample boundary avoids individual tool-call replies crossing runtimes. Decide whether recovery of a completed sample result while a worker survives is needed; worker death fails the current sample without automatic rerun. An in-memory response cache would not survive worker death or make execution and durable recording atomic.
 - Do not assume a sample can be restarted with another `ToolEnv`; the supplied rules require exactly one per sample. Any recovery policy must respect that requirement and the sample deadline.
 
-The Python source implements selected-batch fail-fast handling and partial artifacts,
-pending tests. Late-response recovery, hard process supervision, final submission
-failure policy and cross-process transport remain open; no measured execution or
-recovery guarantee is claimed.
+The legacy Python runner implements selected-batch fail-fast handling and partial
+artifacts. The integration entry point ([ADR 011](../docs/adr/011-configurable-docker-integration.md))
+adds hard process supervision: a fsynced pre-dispatch reservation journal, deadline-bounded
+IPC, process-group termination confirmed through the worker's kernel lock, uncertain
+classification of reserved-but-unaccepted IDs after any crash, and bounded recovery for
+later samples. These pass controlled Windows subprocess tests only. Final submission
+failure policy, organizer startup accounting and the TypeScript transport remain open;
+no GPU, container or competition-hardware timing is claimed.
+
+The integration image uses slim CPython 3.11 with PyTorch 2.9.0 from a selectable CUDA
+wheel index (`cu128` default) and the same inference pins; the integration code itself
+is standard library only. Measured on a development CPU with the real Qwen3 tokenizer,
+LM Format Enforcer costs ~8 s per planner load and ~3.3 s each time a string argument
+opens; this is the main known latency risk for the 30 s budget
+([evidence](../specs/002-docker-integration/quickstart.md#recorded-evidence)).
 
 ## Authored baseline dependencies
 
@@ -61,3 +72,4 @@ No new Node dependencies or training libraries are added.
 - [ADR 008: One general planner for the MVP](../docs/adr/008-single-general-planner-for-mvp.md)
 - [ADR 009: Execution traces from the first baseline](../docs/adr/009-require-execution-traces-from-first-baseline.md)
 - [ADR 010: Stop the development batch on execution failure](../docs/adr/010-stop-development-batch-on-execution-failure.md)
+- [ADR 011: Configurable offline Docker integration](../docs/adr/011-configurable-docker-integration.md) (integration entry point only)

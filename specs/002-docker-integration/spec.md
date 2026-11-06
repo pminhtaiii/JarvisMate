@@ -2,7 +2,7 @@
 
 **Feature Branch**: `codex/005-docker-integration`
 **Created**: 2026-11-06
-**Status**: Planned; implementation and GPU acceptance pending
+**Status**: Implemented with controlled checks (2026-11-06); container, GPU and real-model acceptance pending
 **Input**: Agreed grilling decisions: preserve the existing runner; integrate ASR,
 native Qwen tool calling and execution in one offline container; selectable models
 and GPU settings; transcribe each distinct clip once; enforce 30 seconds per sample;

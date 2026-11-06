@@ -206,3 +206,18 @@ clarification-after-calls groups; and computes benchmark call matching (fuzzy to
 mode attributes IDs exact in transcript but not audio to speech errors. Verified only
 with controlled journals; T029 needs the frozen Train selection and real checkpoints
 on the server.
+
+### Full controlled regression (T030), 2026-11-06
+
+```powershell
+$env:PYTHONPATH = 'python/src;python/tests'
+$env:LIFEMATE_NATIVE_TOKENIZER = (Resolve-Path .agent-work/models/qwen3-4b-instruct-2507-tokenizer)
+.venv/Scripts/python.exe -m unittest discover -s python/tests -p 'test_*.py'
+# Ran 163 tests in 215.2s: OK (skipped=3: pre-existing opt-in real-data/runtime checks)
+node scripts/ci/check-context.mjs   # Context checks passed (42 Markdown files)
+```
+
+No model/GPU acceptance is inferred from these doubles. Pending server gates: T024/T025
+(image build/offline run, second checkpoint), T029 (frozen Train selection, paired
+diagnostics), T031 (paired latency/correctness), T032 (organizer accounting and
+failed-row rules), T033 (deterministic reruns and hardware evidence limits).

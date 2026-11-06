@@ -88,11 +88,11 @@ a separate experiment, not implicitly authorized implementation here.
 
 ## Phase 7: Verification and Handoff
 
-- [ ] T030 Run focused controlled checks and applicable legacy regressions from `python/tests/`; record exact commands/results in `specs/002-docker-integration/quickstart.md` without marking model/GPU acceptance from doubles.
+- [x] T030 Run focused controlled checks and applicable legacy regressions from `python/tests/`; record exact commands/results in `specs/002-docker-integration/quickstart.md` without marking model/GPU acceptance from doubles.
 - [ ] T031 Measure paired baseline/integration latency and correctness on the fixed selection, then change one justified inference setting at a time; record GPU/settings, p50/p95/max, timeout counts, memory/tokens and regressions in `specs/002-docker-integration/quickstart.md`.
 - [ ] T032 Confirm organizer startup/recovery/packaging accounting, failed-sample representation and final entrypoint requirements; update `specs/002-docker-integration/contracts/runtime.md` and `contracts/cli-container.md` before submission-readiness claims.
 - [ ] T033 Verify deterministic reruns, model/context limits, exact selected-ID output coverage and complete-publication behavior; record development-vs-competition-hardware evidence limits in `specs/002-docker-integration/quickstart.md`.
-- [ ] T034 Update `context/architecture.md`, `context/tech_stack.md`, `context/testing.md` and `python/README.md` with implemented contracts and measured status only, retaining legacy/proposed distinctions and linking ADR 011.
+- [x] T034 Update `context/architecture.md`, `context/tech_stack.md`, `context/testing.md` and `python/README.md` with implemented contracts and measured status only, retaining legacy/proposed distinctions and linking ADR 011.
 
 ## Dependencies and Execution Order
 
