@@ -79,6 +79,18 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual([d["action"] for d in outcome.metrics["decisions"]], ["call", "call", "finish"])
         self.assertEqual(len(outcome.metrics["tools"]), 2)
 
+    def test_spans_cover_clips_decisions_tools_and_collection(self):
+        outcome = self.execute([call("contacts.search", query="Lan"), FINISH])
+        self.assertEqual(set(outcome.timings), {"request", "environment", "planner", "tools", "collection"})
+        self.assertTrue(all(value >= 0 for value in outcome.timings.values()))
+        clips = outcome.metrics["asr"]["clips"]
+        self.assertEqual([c["position"] for c in clips], ["history[0]", "current"])
+        self.assertEqual([c["reused"] for c in clips], [False, True])
+        self.assertTrue(all({"seconds", "prompt_tokens", "generated_tokens", "terminated"} <= set(d)
+                            for d in outcome.metrics["decisions"]))
+        self.assertEqual(outcome.metrics["tools"][0]["name"], "contacts.search")
+        self.assertGreaterEqual(outcome.elapsed, sum(outcome.timings.values()) - 1e-9)
+
     def test_history_calls_are_context_never_replayed(self):
         outcome = self.execute([FINISH])
         self.assertEqual(self.env.calls, [])

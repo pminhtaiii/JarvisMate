@@ -131,3 +131,28 @@ $env:LIFEMATE_NATIVE_TOKENIZER = (Resolve-Path .agent-work/models/qwen3-4b-instr
   decoding uses one merged schema per tool and ToolEnv validates the groups. This is
   the main measured latency risk for the 30 s budget; re-measure on the server CPU
   and treat any optimization as a paired T031 change.
+
+### US2 full-attempt supervision (T012, T014-T019), 2026-11-06
+
+```powershell
+$env:PYTHONPATH = 'python/src;python/tests'
+.venv/Scripts/python.exe -m unittest test_integration_supervisor   # Ran 26 tests in 142.8s: OK
+.venv/Scripts/python.exe -m unittest test_integration_pipeline     # Ran 11 tests: OK
+```
+
+Real spawned workers (`lifemate.worker` with `integration_doubles:factory`) and a rogue
+worker exercised: blocked ASR, planner, tool and durable-output stages (2 s budget)
+ending as `timeout` with confirmed process-group termination, recorded overshoot,
+quarantined staging and recovery into generation 2 for later IDs; worker crash after a
+mutation recorded `EXECUTION_UNCERTAIN` with one environment open; worker-reported
+failures kept the healthy worker; partial/stale/late/silent frames, oversized garbage
+frames, startup without `ready` and a blocked 900 KB dispatch write all bounded by the
+deadline; failed or disabled recovery stopped nonzero with accepted rows retained;
+reservation and acceptance journal write failures dispatched nothing / left the
+reservation uncertain; supervisor death after reservation, after dispatch, after a
+timely result before acceptance, and after a tool mutation (orphan worker terminated
+via its recorded pid once its kernel lock proved it alive) never redispatched the
+reserved ID; changed model identity blocked resume. On Windows the dead owner's file
+lock can be released with a short delay, so ownership acquisition waits up to 5 s.
+These are Windows results with controlled doubles; Linux process-group behaviour,
+GPU kernels and real model stalls are server gates (T024/T025).

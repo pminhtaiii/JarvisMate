@@ -523,13 +523,20 @@ class RunJournal:
             raise
         return journal
 
-    def _own(self) -> None:
-        try:
-            owned = self.lock.acquire()
-        except OSError as exc:
-            raise PipelineError("OUTPUT_IO", "Cannot open the run lock", "journal") from exc
-        if not owned:
-            raise PipelineError("RUN_OWNERSHIP", "Another supervisor owns this run", "journal")
+    def _own(self, wait: float = 5.0) -> None:
+        # Kernels may release a dead owner's lock with a short delay (notably Windows);
+        # a bounded wait never grants ownership while another live process holds it.
+        ends = time.monotonic() + wait
+        while True:
+            try:
+                owned = self.lock.acquire()
+            except OSError as exc:
+                raise PipelineError("OUTPUT_IO", "Cannot open the run lock", "journal") from exc
+            if owned:
+                return
+            if time.monotonic() >= ends:
+                raise PipelineError("RUN_OWNERSHIP", "Another supervisor owns this run", "journal")
+            time.sleep(0.05)
 
     def close(self) -> None:
         self.lock.release()

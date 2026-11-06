@@ -34,7 +34,7 @@ ASR counts equal distinct required clips and historical actions are not replayed
 - [x] T009 [US1] Implement constrained native decoding and checkpoint-specific tokenizer/template validation in `python/src/lifemate/adapters/qwen_native.py`, reusing existing local model/session helpers without an unconstrained fallback.
 - [x] T010 [US1] Verify native render/parse, actual tokenizer EOS, zero-argument tools, Unicode, malformed/multiple calls, extra text and output/time cuts in `python/tests/test_qwen_native.py`.
 - [x] T011 [US1] Verify repeated-reference/identical-content reuse, distinct historical clips, supplied history text and empty/missing audio handling in `python/tests/test_asr_once.py`.
-- [ ] T012 [US1] Wire native adapter/prepared request into an explicit integration path in `python/src/lifemate/agent.py` and `python/src/lifemate/integration.py`; retain one environment, eligibility checks, schema-attempt logging and legacy defaults.
+- [x] T012 [US1] Wire native adapter/prepared request into an explicit integration path in `python/src/lifemate/agent.py` and `python/src/lifemate/integration.py`; retain one environment, eligibility checks, schema-attempt logging and legacy defaults.
 - [x] T013 [US1] Verify lookup-dependent second calls, no history replay, clarification after partial execution and exact authoritative output in `python/tests/test_integration_pipeline.py`; run applicable existing runner/ASR regressions and record commands/results in `specs/002-docker-integration/quickstart.md`.
 
 **Checkpoint**: Native integration works with controlled adapters. This alone is not
@@ -46,12 +46,12 @@ a deadline-compliant/container-ready release.
 **Independent test**: Blocking doubles at ASR/planner/tool/output boundaries time out
 and cannot publish late rows; a different sample can run after worker recovery.
 
-- [ ] T014 [US2] Implement persistent spawned worker loading, bounded framed IPC, ready/result identities and per-sample durable staging in `python/src/lifemate/worker.py`.
-- [ ] T015 [US2] Implement exclusive run ownership, durable-reservation-before-dispatch ordering, monotonic dispatch deadlines, bounded IPC reads/writes/partial frames and log draining, process-group termination/reaping, stale-message rejection and output quarantine in `python/src/lifemate/supervisor.py`.
-- [ ] T016 [US2] Add bounded recovery for subsequent distinct IDs, startup/reload timing and confirmed prior-worker termination in `python/src/lifemate/supervisor.py`; classify reserved-without-durable-acceptance IDs as uncertain after parent death and never replay them, including resume.
-- [ ] T017 [US2] Connect timely supervisor acceptance and acceptance-journal durability before next dispatch, partial outputs, nonzero incomplete exit and complete-publication guard in `python/src/lifemate/integration.py` and `python/src/lifemate/artifacts.py`; write failure must preserve the uncertain reservation.
-- [ ] T018 [US2] Verify blocked stages/dispatch writes/partial IPC frames, late/stale messages, parent death before dispatch/after mutation/before acceptance fsync, reservation/acceptance write failures, corrupt journals, exclusive ownership, old-worker termination, no uncertain replay, bounded recovery and publication denial in `python/tests/test_integration_supervisor.py`.
-- [ ] T019 [US2] Add per-clip/per-decision/tool/collection/durable-output/full-attempt spans, tokens, termination overshoot and startup/recovery/packaging totals in `python/src/lifemate/worker.py` and `python/src/lifemate/artifacts.py`; verify them in `python/tests/test_integration_pipeline.py`.
+- [x] T014 [US2] Implement persistent spawned worker loading, bounded framed IPC, ready/result identities and per-sample durable staging in `python/src/lifemate/worker.py`.
+- [x] T015 [US2] Implement exclusive run ownership, durable-reservation-before-dispatch ordering, monotonic dispatch deadlines, bounded IPC reads/writes/partial frames and log draining, process-group termination/reaping, stale-message rejection and output quarantine in `python/src/lifemate/supervisor.py`.
+- [x] T016 [US2] Add bounded recovery for subsequent distinct IDs, startup/reload timing and confirmed prior-worker termination in `python/src/lifemate/supervisor.py`; classify reserved-without-durable-acceptance IDs as uncertain after parent death and never replay them, including resume.
+- [x] T017 [US2] Connect timely supervisor acceptance and acceptance-journal durability before next dispatch, partial outputs, nonzero incomplete exit and complete-publication guard in `python/src/lifemate/integration.py` and `python/src/lifemate/artifacts.py`; write failure must preserve the uncertain reservation.
+- [x] T018 [US2] Verify blocked stages/dispatch writes/partial IPC frames, late/stale messages, parent death before dispatch/after mutation/before acceptance fsync, reservation/acceptance write failures, corrupt journals, exclusive ownership, old-worker termination, no uncertain replay, bounded recovery and publication denial in `python/tests/test_integration_supervisor.py`.
+- [x] T019 [US2] Add per-clip/per-decision/tool/collection/durable-output/full-attempt spans, tokens, termination overshoot and startup/recovery/packaging totals in `python/src/lifemate/worker.py` and `python/src/lifemate/artifacts.py`; verify them in `python/tests/test_integration_pipeline.py`.
 
 **Checkpoint**: Timed success is validated independently of worker cooperation.
 Record OS kill limits; a timeout is never a valid empty result.
