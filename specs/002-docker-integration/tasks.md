@@ -15,10 +15,10 @@ another unfinished task in the same phase. Story labels map to spec user stories
 
 ## Phase 2: Foundation
 
-- [ ] T003 Define strict config/attempt records, terminal states and deadline/identity validation in `python/src/lifemate/configuration.py` and `python/src/lifemate/contracts.py` without changing legacy defaults.
-- [ ] T004 Add TOML loading, known CLI overrides, snapshot/template/parameter/context preflight and configuration fingerprinting in `python/src/lifemate/configuration.py`.
-- [ ] T005 Verify unknown keys, invalid devices/dtypes/limits, absent snapshots, incompatible templates and pre-environment rejection in `python/tests/test_integration_config.py`.
-- [ ] T006 Define unique durable staging, fsynced pre-dispatch reservations binding sample/attempt/worker/config identity, accepted/failed journal and incomplete-publication guard in `python/src/lifemate/artifacts.py`; fail closed on corrupt journal and keep legacy artifacts compatible.
+- [x] T003 Define strict config/attempt records, terminal states and deadline/identity validation in `python/src/lifemate/configuration.py` and `python/src/lifemate/contracts.py` without changing legacy defaults.
+- [x] T004 Add TOML loading, known CLI overrides, snapshot/template/parameter/context preflight and configuration fingerprinting in `python/src/lifemate/configuration.py`.
+- [x] T005 Verify unknown keys, invalid devices/dtypes/limits, absent snapshots, incompatible templates and pre-environment rejection in `python/tests/test_integration_config.py`.
+- [x] T006 Define unique durable staging, fsynced pre-dispatch reservations binding sample/attempt/worker/config identity, accepted/failed journal and incomplete-publication guard in `python/src/lifemate/artifacts.py`; fail closed on corrupt journal and keep legacy artifacts compatible.
 
 **Checkpoint**: Configuration and attempt/output boundaries are explicit; no model or
 ToolEnv is created for invalid settings. Foundation is required by every story.

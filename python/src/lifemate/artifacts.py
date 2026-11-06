@@ -1,6 +1,7 @@
 """Durable predictions, bounded opt-in traces, and explicit run publication."""
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import re
@@ -314,3 +315,373 @@ class RunStore:
             raise
         except (OSError, ValueError, TypeError) as exc:
             raise PipelineError("OUTPUT_IO", "Final prediction publication failed", "output") from exc
+
+
+# --- Integration run artifacts (ADR 011). RunStore above stays the legacy format. ---
+
+JOURNAL_TYPES = frozenset({"run", "resume", "worker_started", "worker_stopped",
+                           "reserve", "accept", "fail"})
+STAGED_FILE_BYTES = 4 * 1024 * 1024
+
+
+class FileLock:
+    """Non-blocking OS lock released by the kernel when its owner process dies."""
+
+    def __init__(self, path: Path):
+        self.path, self.handle = path, None
+
+    def acquire(self) -> bool:
+        if self.handle is not None:
+            return True
+        handle = open(self.path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            return False
+        self.handle = handle
+        return True
+
+    def release(self) -> None:
+        if self.handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+            self.handle = None
+
+
+def fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        return  # Windows cannot open directories for fsync; NTFS journals metadata.
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def write_durable(path: Path, content: str) -> None:
+    """Create a new file, flush, fsync and close it; never overwrite."""
+    with path.open("x", encoding="utf-8", newline="\n") as stream:
+        sync_write(stream, content)
+    fsync_directory(path.parent)
+
+
+def _check(record: JSON) -> str:
+    return hashlib.sha256(dumps(record).encode("utf-8")).hexdigest()[:32]
+
+
+class JournalState:
+    """Validated fold of journal records; pure, so appends can be checked first."""
+
+    def __init__(self):
+        self.records: list[JSON] = []
+        self.header: JSON | None = None
+        self.reservations: dict[str, JSON] = {}   # attempt_id -> reserve record
+        self.terminal: dict[str, JSON] = {}       # attempt_id -> accept/fail record
+        self.by_sample: dict[str, str] = {}       # sample_id -> attempt_id
+        self.generations: dict[int, JSON] = {}    # generation -> worker_started record
+        self.stopped: set[int] = set()
+
+    def copy(self) -> "JournalState":
+        other = JournalState()
+        other.records, other.header = list(self.records), self.header
+        other.reservations, other.terminal = dict(self.reservations), dict(self.terminal)
+        other.by_sample, other.generations = dict(self.by_sample), dict(self.generations)
+        other.stopped = set(self.stopped)
+        return other
+
+    def apply(self, record: JSON) -> None:
+        from .contracts import ACCEPTED_STATES, FAILED_STATES, AttemptIdentity
+
+        def bad(message):
+            return PipelineError("JOURNAL_INVALID", message, "journal")
+
+        kind = record.get("type")
+        if kind not in JOURNAL_TYPES or record.get("seq") != len(self.records) + 1:
+            raise bad("Unknown journal record type or broken sequence")
+        if (kind == "run") != (not self.records):
+            raise bad("Journal must start with exactly one run header")
+        if kind == "run":
+            self.header = record
+        elif kind == "worker_started":
+            if type(record.get("generation")) is not int or record["generation"] in self.generations:
+                raise bad("Invalid worker generation record")
+            self.generations[record["generation"]] = record
+        elif kind == "worker_stopped":
+            if record.get("generation") not in self.generations:
+                raise bad("Stop for an unknown worker generation")
+            self.stopped.add(record["generation"])
+        elif kind == "reserve":
+            try:
+                identity = AttemptIdentity(record.get("sample_id"), record.get("attempt_id"),
+                                           record.get("generation"), record.get("config_sha256"))
+            except PipelineError as exc:
+                raise bad("Invalid reservation identity") from exc
+            if (identity.sample_id in self.by_sample or identity.attempt_id in self.reservations
+                    or identity.generation not in self.generations
+                    or identity.generation in self.stopped or self.unresolved()):
+                raise bad("Sample/attempt reserved twice, unknown/stopped worker, or overlapping attempts")
+            self.reservations[identity.attempt_id] = record
+            self.by_sample[identity.sample_id] = identity.attempt_id
+        elif kind in {"accept", "fail"}:
+            attempt = record.get("attempt_id")
+            reserved = self.reservations.get(attempt)
+            if reserved is None or attempt in self.terminal or reserved["sample_id"] != record.get("sample_id"):
+                raise bad("Terminal record without one matching reservation")
+            if kind == "accept":
+                if record.get("status") not in ACCEPTED_STATES:
+                    raise bad("Invalid accepted status")
+                try:
+                    validate_prediction(record.get("prediction"))
+                except PipelineError as exc:
+                    raise bad("Invalid accepted prediction") from exc
+                if record["prediction"]["id"] != record["sample_id"]:
+                    raise bad("Accepted prediction identity mismatch")
+            elif record.get("status") not in FAILED_STATES or not isinstance(record.get("error"), dict):
+                raise bad("Invalid failure record")
+            self.terminal[attempt] = record
+        self.records.append(record)
+
+    def unresolved(self) -> list[JSON]:
+        return [r for a, r in self.reservations.items() if a not in self.terminal]
+
+
+class RunJournal:
+    """Append-only, checksummed, fsynced reservation/acceptance journal.
+
+    Ordering contract: reserve() must be durable before dispatch; accept()/fail()
+    must be durable before the next reservation. A reservation without a durable
+    terminal record is uncertain after any crash and is never dispatched again.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.path = root / "journal.jsonl"
+        self.staging, self.quarantine_root = root / "staging", root / "quarantine"
+        self.workers = root / "workers"
+        self.lock = FileLock(root / "run.lock")
+        self.state = JournalState()
+        self.broken = False
+
+    @property
+    def header(self) -> JSON | None:
+        return self.state.header
+
+    # Ownership -------------------------------------------------------------
+    @classmethod
+    def create(cls, root: Path, header: JSON) -> "RunJournal":
+        root = root.absolute()
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise PipelineError("OUTPUT_IO", "Output root is not writable", "output") from exc
+        journal = cls(root)
+        journal._own()
+        try:
+            if journal.path.exists():
+                raise PipelineError("INPUT_INVALID", "Output root already holds a run; pass --resume", "journal")
+            for directory in (journal.staging, journal.quarantine_root, journal.workers):
+                directory.mkdir(exist_ok=True)
+            with journal.path.open("x", encoding="utf-8"):
+                pass
+            fsync_directory(root)
+            journal.append("run", **header)
+        except BaseException:
+            journal.close()
+            raise
+        return journal
+
+    @classmethod
+    def resume(cls, root: Path, header: JSON) -> "RunJournal":
+        journal = cls(root.absolute())
+        if not journal.path.is_file():
+            raise PipelineError("INPUT_INVALID", "No journal to resume in output root", "journal")
+        journal._own()
+        try:
+            journal._load()
+            if (journal.header or {}).get("run_sha256") != header.get("run_sha256"):
+                raise PipelineError("INPUT_INVALID", "Resume rejected: model, template, configuration, data "
+                                    "or code identity differs from the original run", "journal")
+            journal.append("resume", run_sha256=header["run_sha256"])
+        except BaseException:
+            journal.close()
+            raise
+        return journal
+
+    def _own(self) -> None:
+        try:
+            owned = self.lock.acquire()
+        except OSError as exc:
+            raise PipelineError("OUTPUT_IO", "Cannot open the run lock", "journal") from exc
+        if not owned:
+            raise PipelineError("RUN_OWNERSHIP", "Another supervisor owns this run", "journal")
+
+    def close(self) -> None:
+        self.lock.release()
+
+    def _load(self) -> None:
+        try:
+            data = self.path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise PipelineError("JOURNAL_INVALID", "Journal is unreadable", "journal") from exc
+        if not data or not data.endswith("\n"):
+            raise PipelineError("JOURNAL_INVALID", "Journal is empty or ends with a truncated record", "journal")
+        for line in data.splitlines():
+            try:
+                record = loads(line)
+            except (ValueError, RecursionError) as exc:
+                raise PipelineError("JOURNAL_INVALID", "Journal record is not valid JSON", "journal") from exc
+            if not isinstance(record, dict) or record.pop("check", None) != _check(record):
+                raise PipelineError("JOURNAL_INVALID", "Journal record checksum mismatch", "journal")
+            self.state.apply(record)
+
+    # Appends ---------------------------------------------------------------
+    def append(self, kind: str, **fields) -> JSON:
+        if self.broken:
+            raise PipelineError("OUTPUT_IO", "Journal is in an unknown state after a write failure", "journal")
+        record = {"seq": len(self.state.records) + 1, "type": kind, "at": utc_now(), **fields}
+        try:
+            self.state.copy().apply(record)  # Validate before writing anything.
+        except PipelineError as exc:
+            raise PipelineError("OUTPUT_IO", "Refusing an inconsistent journal record", "journal") from exc
+        line = dumps(record | {"check": _check(record)}) + "\n"
+        try:
+            with self.path.open("a", encoding="utf-8", newline="\n") as stream:
+                sync_write(stream, line)
+        except (OSError, ValueError) as exc:
+            self.broken = True  # A partial line may exist; never write after it.
+            raise PipelineError("OUTPUT_IO", "Journal write failed; run stops", "journal") from exc
+        self.state.apply(record)
+        return record
+
+    def worker_started(self, generation: int, pid: int) -> None:
+        self.append("worker_started", generation=generation, pid=pid,
+                    lock=f"workers/gen-{generation}.lock")
+
+    def worker_stopped(self, generation: int, *, confirmed: bool, reason: str) -> None:
+        self.append("worker_stopped", generation=generation, confirmed=confirmed, reason=reason)
+
+    def reserve(self, identity) -> None:
+        self.append("reserve", **identity.record())
+
+    def accept(self, identity, status: str, prediction: JSON, metrics: JSON) -> None:
+        self.append("accept", sample_id=identity.sample_id, attempt_id=identity.attempt_id,
+                    status=status, prediction=prediction, metrics=sanitize(metrics))
+
+    def fail(self, identity_or_reservation, status: str, error: JSON, metrics: JSON | None = None) -> None:
+        value = (identity_or_reservation.record() if hasattr(identity_or_reservation, "record")
+                 else identity_or_reservation)
+        self.append("fail", sample_id=value["sample_id"], attempt_id=value["attempt_id"],
+                    status=status, error=sanitize(error), metrics=sanitize(metrics or {}))
+
+    # Recovery and queries --------------------------------------------------
+    def unresolved(self) -> list[JSON]:
+        return self.state.unresolved()
+
+    def mark_uncertain(self) -> list[str]:
+        """After an unclean stop, reserved-without-acceptance IDs become terminal failures."""
+        ids = []
+        for reservation in self.unresolved():
+            self.fail(reservation, "failed", {
+                "code": "EXECUTION_UNCERTAIN", "stage": "recovery",
+                "message": "Reserved before supervisor loss without durable acceptance; never replayed"})
+            ids.append(reservation["sample_id"])
+        return ids
+
+    def attempted(self) -> set[str]:
+        return set(self.state.by_sample)
+
+    def accepted(self) -> dict[str, JSON]:
+        return {r["sample_id"]: r for r in self.state.terminal.values() if r["type"] == "accept"}
+
+    def failed(self) -> dict[str, JSON]:
+        return {r["sample_id"]: r for r in self.state.terminal.values() if r["type"] == "fail"}
+
+    def unstopped_workers(self) -> list[JSON]:
+        return [r for g, r in self.state.generations.items() if g not in self.state.stopped]
+
+    def next_generation(self) -> int:
+        return max(self.state.generations, default=0) + 1
+
+    # Staging ---------------------------------------------------------------
+    def staging_dir(self, attempt_id: str) -> Path:
+        return self.staging / attempt_id
+
+    def read_staged(self, attempt_id: str, name: str) -> JSON:
+        """Read one bounded staged JSON file constrained to the attempt's directory."""
+        base = self.staging_dir(attempt_id).resolve()
+        if not re.fullmatch(r"[a-z_]{1,32}\.json", name):
+            raise PipelineError("WORKER_FAILED", "Staged artifact name is invalid", "acceptance")
+        path = (base / name).resolve()
+        if path.parent != base or not path.is_file() or path.stat().st_size > STAGED_FILE_BYTES:
+            raise PipelineError("WORKER_FAILED", "Staged artifact is missing or oversized", "acceptance")
+        try:
+            return loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise PipelineError("WORKER_FAILED", "Staged artifact is invalid", "acceptance") from exc
+
+    def quarantine(self, attempt_id: str) -> Path | None:
+        source = self.staging_dir(attempt_id)
+        if not source.exists():
+            return None
+        target = self.quarantine_root / attempt_id
+        os.replace(source, target)
+        return target
+
+    def quarantine_unaccepted(self) -> list[str]:
+        accepted = {r["attempt_id"] for r in self.accepted().values()}
+        moved = []
+        if self.staging.is_dir():
+            for entry in sorted(self.staging.iterdir()):
+                if entry.is_dir() and entry.name not in accepted and self.quarantine(entry.name):
+                    moved.append(entry.name)
+        return moved
+
+
+def publish_predictions(journal: RunJournal, selected_ids: list[str]) -> JSON:
+    """Write accepted rows; publish predictions.jsonl only for exact, failure-free coverage."""
+    accepted, failed = journal.accepted(), journal.failed()
+    rows = [accepted[i]["prediction"] for i in selected_ids if i in accepted]
+    for row in rows:
+        validate_prediction(row)
+    partial = journal.root / "predictions.partial.jsonl"
+    final = journal.root / "predictions.jsonl"
+    if final.exists():
+        # Publication happens once; a complete file never coexists with further work.
+        raise PipelineError("OUTPUT_IO", "Predictions were already published for this run", "packaging")
+    temporary = partial.with_name(partial.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+            sync_write(stream, "".join(dumps(row) + "\n" for row in rows))
+        os.replace(temporary, partial)
+    except OSError as exc:
+        raise PipelineError("OUTPUT_IO", "Cannot write accepted predictions", "packaging") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+    missing = [i for i in selected_ids if i not in accepted and i not in failed]
+    extra = sorted(set(accepted) - set(selected_ids))
+    complete = (not failed and not missing and not extra and not journal.unresolved()
+                and len(rows) == len(selected_ids))
+    if complete:
+        try:
+            os.replace(partial, final)
+            fsync_directory(journal.root)
+        except OSError as exc:
+            raise PipelineError("OUTPUT_IO", "Cannot publish predictions", "packaging") from exc
+    return {"complete": complete, "accepted": len(rows), "failed": sorted(failed),
+            "missing": missing, "path": str(final if complete else partial)}

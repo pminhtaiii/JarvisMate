@@ -12,6 +12,8 @@ ERROR_CODES = frozenset({
     "INPUT_INVALID", "ASSET_MISSING", "CATALOG_INVALID", "MODEL_UNAVAILABLE",
     "CONTEXT_LIMIT", "STEP_LIMIT", "TIME_LIMIT", "PLANNER_ERROR", "PLANNER_FORMAT", "OUTPUT_LIMIT",
     "EXECUTION_UNCERTAIN", "TRACE_IO", "OUTPUT_IO", "INTERRUPTED", "NO_PROGRESS",
+    # Integration entry point only (ADR 011); the legacy runner never emits these.
+    "WORKER_FAILED", "RUN_OWNERSHIP", "JOURNAL_INVALID", "RECOVERY_FAILED",
 })
 
 
@@ -169,3 +171,46 @@ class Deadline:
 
     def elapsed(self) -> float:
         return self.clock() - self.started
+
+
+# --- Integration attempt records (ADR 011). Legacy defaults above are unchanged. ---
+
+INTEGRATION_MAX_SECONDS = 30.0
+ATTEMPT_STATES = ("running", "completed", "needs_info", "timeout", "failed")
+ACCEPTED_STATES = frozenset({"completed", "needs_info"})
+FAILED_STATES = frozenset({"timeout", "failed"})
+TERMINAL_STATES = ACCEPTED_STATES | FAILED_STATES
+
+
+def integration_deadline(seconds) -> float:
+    """Validate a sample budget for the integration entry point: (0, 30] seconds."""
+    if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+            or not math.isfinite(seconds) or not 0 < seconds <= INTEGRATION_MAX_SECONDS):
+        raise PipelineError("INPUT_INVALID", "Integration sample timeout must be in (0, 30] seconds",
+                            "configuration")
+    return float(seconds)
+
+
+@dataclass(frozen=True)
+class AttemptIdentity:
+    """Binds one sample attempt to its worker generation and configuration."""
+    sample_id: str
+    attempt_id: str
+    generation: int
+    config_sha256: str
+
+    def __post_init__(self):
+        import re
+
+        if not isinstance(self.sample_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", self.sample_id):
+            raise PipelineError("INPUT_INVALID", "Invalid attempt sample ID", "journal")
+        if not isinstance(self.attempt_id, str) or not re.fullmatch(r"[0-9a-f]{32}", self.attempt_id):
+            raise PipelineError("INPUT_INVALID", "Invalid attempt ID", "journal")
+        if type(self.generation) is not int or self.generation < 1:
+            raise PipelineError("INPUT_INVALID", "Invalid worker generation", "journal")
+        if not isinstance(self.config_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", self.config_sha256):
+            raise PipelineError("INPUT_INVALID", "Invalid configuration identity", "journal")
+
+    def record(self) -> JSON:
+        return {"sample_id": self.sample_id, "attempt_id": self.attempt_id,
+                "generation": self.generation, "config_sha256": self.config_sha256}
