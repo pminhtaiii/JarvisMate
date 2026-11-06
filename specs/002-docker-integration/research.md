@@ -40,8 +40,8 @@ canonical executor actions. Reject ambiguous/truncated output before dispatch.
 **Rationale**: Official Qwen supports Hermes-style tool blocks and tool-result messages,
 including multiple calls/extra text. One-call-only is our execution policy, not a
 limitation claimed for Qwen. It preserves result-dependent planning. The existing
-untracked 003 native contract supplies the explicit neutral-finish policy; this feature
-does not require its training stages. The example 2507 checkpoint is non-thinking;
+native-protocol proposal informed the explicit neutral-finish policy recorded in this
+feature's runtime contract; no training stages are required. The example 2507 checkpoint is non-thinking;
 other checkpoints must validate thinking/template/EOS configuration independently.
 
 **Sources**:
@@ -153,5 +153,6 @@ Base `fine-tuned-asr` remains available. On this integration branch remove track
 `asr/fine-tuned/`, `python/src/lifemate/asr_training/` and training-only test/support
 files. Preserve inference, pretrained ASR evaluation and generic planner-SFT designs.
 The pre-existing untracked 004 augmentation draft was preserved under ignored
-`.agent-work/preserved-asr-planning/004-asr-acoustic-augmentation/`; unrelated untracked
-002/003 and latency drafts are not incorporated or changed by this feature.
+`.agent-work/preserved-asr-planning/004-asr-acoustic-augmentation/`. The unrelated
+untracked measurement, native/SFT and latency drafts were subsequently removed at
+the user's request; this planning package is self-contained.

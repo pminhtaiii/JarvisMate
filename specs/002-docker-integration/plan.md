@@ -51,8 +51,8 @@ constitution remain unchanged.
 
 ## Phase 0: Research
 
-Decisions/source evidence: [research.md](research.md). Existing native and measurement
-drafts provide reasoning, not delivered functionality. Checkpoint paths/GPU identities
+Decisions/source evidence: [research.md](research.md). Prior native and measurement
+proposals informed this self-contained plan, not delivered functionality. Checkpoint paths/GPU identities
 are deployment inputs; the CUDA image digest is resolved by the build acceptance task.
 
 ## Phase 1: Design
@@ -92,7 +92,7 @@ from staged files alone. Add crash-window checks to the supervisor acceptance te
 ### Documentation (this feature)
 
 ```text
-specs/005-docker-integration/
+specs/002-docker-integration/
   spec.md
   plan.md
   research.md

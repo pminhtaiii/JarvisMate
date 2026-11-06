@@ -1,6 +1,6 @@
 # Tasks: Configurable offline Docker integration
 
-**Input**: Design artifacts in `specs/005-docker-integration/`.
+**Input**: Design artifacts in `specs/002-docker-integration/`.
 **Status**: All tasks pending; planning/branch cleanup is not runtime implementation.
 **Tests**: Focused behavioral verification is required by spec FR-017. Existing local
 policy separates controlled checks from explicitly enabled actual-model/GPU acceptance.
@@ -11,7 +11,7 @@ another unfinished task in the same phase. Story labels map to spec user stories
 ## Phase 1: Setup
 
 - [ ] T001 Record the integration-only continuation/deadline policy and legacy compatibility in `docs/adr/011-configurable-docker-integration.md`, linking this spec and explicit user-authorized exceptions.
-- [ ] T002 Confirm package/organizer runtime dependency layout and CUDA build inputs in `python/pyproject.toml` and `specs/005-docker-integration/research.md`; keep training dependencies out.
+- [ ] T002 Confirm package/organizer runtime dependency layout and CUDA build inputs in `python/pyproject.toml` and `specs/002-docker-integration/research.md`; keep training dependencies out.
 
 ## Phase 2: Foundation
 
@@ -35,7 +35,7 @@ ASR counts equal distinct required clips and historical actions are not replayed
 - [ ] T010 [US1] Verify native render/parse, actual tokenizer EOS, zero-argument tools, Unicode, malformed/multiple calls, extra text and output/time cuts in `python/tests/test_qwen_native.py`.
 - [ ] T011 [US1] Verify repeated-reference/identical-content reuse, distinct historical clips, supplied history text and empty/missing audio handling in `python/tests/test_asr_once.py`.
 - [ ] T012 [US1] Wire native adapter/prepared request into an explicit integration path in `python/src/lifemate/agent.py` and `python/src/lifemate/integration.py`; retain one environment, eligibility checks, schema-attempt logging and legacy defaults.
-- [ ] T013 [US1] Verify lookup-dependent second calls, no history replay, clarification after partial execution and exact authoritative output in `python/tests/test_integration_pipeline.py`; run applicable existing runner/ASR regressions and record commands/results in `specs/005-docker-integration/quickstart.md`.
+- [ ] T013 [US1] Verify lookup-dependent second calls, no history replay, clarification after partial execution and exact authoritative output in `python/tests/test_integration_pipeline.py`; run applicable existing runner/ASR regressions and record commands/results in `specs/002-docker-integration/quickstart.md`.
 
 **Checkpoint**: Native integration works with controlled adapters. This alone is not
 a deadline-compliant/container-ready release.
@@ -66,8 +66,8 @@ startup rejects incompatible settings before ToolEnv creation.
 - [ ] T021 [P] [US3] Add minimal pinned GPU runtime/package/organizer installation and integration entrypoint in `Dockerfile`; exclude weights/data/secrets/training/git/runs via `.dockerignore`.
 - [ ] T022 [US3] Finalize separate CLI overrides/preflight and effective model/template/device/driver/config provenance in `python/src/lifemate/integration.py` and `python/src/lifemate/artifacts.py`.
 - [ ] T023 [US3] Verify compatible checkpoint switching, CLI precedence, startup readiness, provenance and model/config mismatch resume rejection in `python/tests/test_integration_config.py`.
-- [ ] T024 [US3] Build and run the image with `--network none`, selected GPU and read-only model/data/config mounts; record exact commands, digest, resolved dependencies and actual outcomes in `specs/005-docker-integration/quickstart.md`.
-- [ ] T025 [US3] Validate actual ASR/Qwen checkpoints and a second compatible configuration without source/image changes; record startup, memory and limitations in `specs/005-docker-integration/quickstart.md`.
+- [ ] T024 [US3] Build and run the image with `--network none`, selected GPU and read-only model/data/config mounts; record exact commands, digest, resolved dependencies and actual outcomes in `specs/002-docker-integration/quickstart.md`.
+- [ ] T025 [US3] Validate actual ASR/Qwen checkpoints and a second compatible configuration without source/image changes; record startup, memory and limitations in `specs/002-docker-integration/quickstart.md`.
 
 **Checkpoint**: Actual offline image evidence exists. Metadata-only checks cannot
 complete T024/T025; unavailable checkpoints/GPU leave them pending.
@@ -80,18 +80,18 @@ and retain timeout/failure denominators without giving labels to inference.
 
 - [ ] T026 [US4] Implement offline Train-reference joining and empty/clarification diagnostics in `python/src/lifemate/diagnostics.py`, including false empty/false clarification, intended-tool/params correctness and overlapping-group denominators.
 - [ ] T027 [US4] Verify valid empty vs failed/timeout, missing-info after earlier calls, unsuccessful clarification, unavailable metrics and label-isolated reports in `python/tests/test_integration_diagnostics.py`.
-- [ ] T028 [US4] Add report invocation/paired transcript-audio evidence handling to `python/src/lifemate/diagnostics.py` and `specs/005-docker-integration/quickstart.md`; preserve inference input whitelist and supplied-runtime scoring semantics.
-- [ ] T029 [US4] Freeze and record grouped Train selection/category counts and run paired transcript/audio diagnostics using actual checkpoints; record dataset, IDs, commands and per-category errors in `specs/005-docker-integration/quickstart.md`, keeping raw data/traces ignored.
+- [ ] T028 [US4] Add report invocation/paired transcript-audio evidence handling to `python/src/lifemate/diagnostics.py` and `specs/002-docker-integration/quickstart.md`; preserve inference input whitelist and supplied-runtime scoring semantics.
+- [ ] T029 [US4] Freeze and record grouped Train selection/category counts and run paired transcript/audio diagnostics using actual checkpoints; record dataset, IDs, commands and per-category errors in `specs/002-docker-integration/quickstart.md`, keeping raw data/traces ignored.
 
 **Checkpoint**: Frequency and behavior evidence is available; training/rebalancing is
 a separate experiment, not implicitly authorized implementation here.
 
 ## Phase 7: Verification and Handoff
 
-- [ ] T030 Run focused controlled checks and applicable legacy regressions from `python/tests/`; record exact commands/results in `specs/005-docker-integration/quickstart.md` without marking model/GPU acceptance from doubles.
-- [ ] T031 Measure paired baseline/integration latency and correctness on the fixed selection, then change one justified inference setting at a time; record GPU/settings, p50/p95/max, timeout counts, memory/tokens and regressions in `specs/005-docker-integration/quickstart.md`.
-- [ ] T032 Confirm organizer startup/recovery/packaging accounting, failed-sample representation and final entrypoint requirements; update `specs/005-docker-integration/contracts/runtime.md` and `contracts/cli-container.md` before submission-readiness claims.
-- [ ] T033 Verify deterministic reruns, model/context limits, exact selected-ID output coverage and complete-publication behavior; record development-vs-competition-hardware evidence limits in `specs/005-docker-integration/quickstart.md`.
+- [ ] T030 Run focused controlled checks and applicable legacy regressions from `python/tests/`; record exact commands/results in `specs/002-docker-integration/quickstart.md` without marking model/GPU acceptance from doubles.
+- [ ] T031 Measure paired baseline/integration latency and correctness on the fixed selection, then change one justified inference setting at a time; record GPU/settings, p50/p95/max, timeout counts, memory/tokens and regressions in `specs/002-docker-integration/quickstart.md`.
+- [ ] T032 Confirm organizer startup/recovery/packaging accounting, failed-sample representation and final entrypoint requirements; update `specs/002-docker-integration/contracts/runtime.md` and `contracts/cli-container.md` before submission-readiness claims.
+- [ ] T033 Verify deterministic reruns, model/context limits, exact selected-ID output coverage and complete-publication behavior; record development-vs-competition-hardware evidence limits in `specs/002-docker-integration/quickstart.md`.
 - [ ] T034 Update `context/architecture.md`, `context/tech_stack.md`, `context/testing.md` and `python/README.md` with implemented contracts and measured status only, retaining legacy/proposed distinctions and linking ADR 011.
 
 ## Dependencies and Execution Order

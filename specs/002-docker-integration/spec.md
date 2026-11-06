@@ -203,5 +203,5 @@ clarification-after-earlier-call cases; paired transcript/audio reports with den
 - Organizer startup/warm-up accounting and permitted failed-row representation need
   final confirmation. Until then, disclose overheads and block complete publication
   if any sample fails; never invent a failure row or state hash.
-- This feature owns integration. Existing 002 measurement and 003 native/SFT drafts
-  are references, not dependencies requiring training implementation.
+- This feature owns integration and is self-contained. Earlier measurement/native-SFT
+  drafts were removed; no separate training specification is an implementation dependency.
