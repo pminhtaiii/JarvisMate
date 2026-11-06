@@ -151,7 +151,8 @@ output after a lost acknowledgement can admit an over-deadline result.
 
 Base `fine-tuned-asr` remains available. On this integration branch remove tracked
 `asr/fine-tuned/`, `python/src/lifemate/asr_training/` and training-only test/support
-files. Preserve inference, pretrained ASR evaluation and generic planner-SFT designs.
+files. The root `asr/` experiment folder was subsequently removed at the user's
+request. Preserve the runtime ASR adapter and generic planner-SFT designs.
 The pre-existing untracked 004 augmentation draft was preserved under ignored
 `.agent-work/preserved-asr-planning/004-asr-acoustic-augmentation/`. The unrelated
 untracked measurement, native/SFT and latency drafts were subsequently removed at

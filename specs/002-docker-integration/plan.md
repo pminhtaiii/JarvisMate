@@ -12,7 +12,8 @@ loaded; an external supervisor bounds full attempts and quarantines late results
 Preserve `python -m lifemate run` defaults for comparison.
 
 This is a planning package, not a working container or latency claim. ASR training
-material is removed only on this branch; inference and pretrained evaluation remain.
+material and the root `asr/` experiment folder are removed on this branch; the
+runtime ASR adapter remains in the Python package.
 
 ## Technical Context
 
