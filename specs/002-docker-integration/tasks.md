@@ -78,9 +78,9 @@ complete T024/T025; unavailable checkpoints/GPU leave them pending.
 **Independent test**: Offline reports reproduce known category counts/arguments/errors
 and retain timeout/failure denominators without giving labels to inference.
 
-- [ ] T026 [US4] Implement offline Train-reference joining and empty/clarification diagnostics in `python/src/lifemate/diagnostics.py`, including false empty/false clarification, intended-tool/params correctness and overlapping-group denominators.
-- [ ] T027 [US4] Verify valid empty vs failed/timeout, missing-info after earlier calls, unsuccessful clarification, unavailable metrics and label-isolated reports in `python/tests/test_integration_diagnostics.py`.
-- [ ] T028 [US4] Add report invocation/paired transcript-audio evidence handling to `python/src/lifemate/diagnostics.py` and `specs/002-docker-integration/quickstart.md`; preserve inference input whitelist and supplied-runtime scoring semantics.
+- [x] T026 [US4] Implement offline Train-reference joining and empty/clarification diagnostics in `python/src/lifemate/diagnostics.py`, including false empty/false clarification, intended-tool/params correctness and overlapping-group denominators.
+- [x] T027 [US4] Verify valid empty vs failed/timeout, missing-info after earlier calls, unsuccessful clarification, unavailable metrics and label-isolated reports in `python/tests/test_integration_diagnostics.py`.
+- [x] T028 [US4] Add report invocation/paired transcript-audio evidence handling to `python/src/lifemate/diagnostics.py` and `specs/002-docker-integration/quickstart.md`; preserve inference input whitelist and supplied-runtime scoring semantics.
 - [ ] T029 [US4] Freeze and record grouped Train selection/category counts and run paired transcript/audio diagnostics using actual checkpoints; record dataset, IDs, commands and per-category errors in `specs/002-docker-integration/quickstart.md`, keeping raw data/traces ignored.
 
 **Checkpoint**: Frequency and behavior evidence is available; training/rebalancing is

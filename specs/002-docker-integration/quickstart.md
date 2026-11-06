@@ -178,3 +178,31 @@ pending until the server run records the image id, resolved packages and outcome
 scripts/integration/server-acceptance.sh --models /abs/models --data /abs/data \
   --config /abs/config --output /abs/output --gpu 0 --second-planner /models/planner-b
 ```
+
+### US4 diagnostics (T026-T028), 2026-11-06
+
+```powershell
+$env:PYTHONPATH = 'python/src;python/tests'
+.venv/Scripts/python.exe -m unittest test_integration_diagnostics   # Ran 7 tests: OK
+```
+
+Report invocation (offline, after inference; labels never enter the run):
+
+```bash
+python -m lifemate.diagnostics --run /abs/output/run-transcript \
+  --references /abs/data/train/train.jsonl --catalog /abs/data/train/train_tools_catalog.json \
+  --paired-audio /abs/output/run-audio --output /abs/output/diagnostics.json
+```
+
+Use two runs over the same frozen ID file with identical planner settings: one with
+`data.mode = "transcript"` and one with `"audio"`. The report keeps every selected ID
+in its denominators (timeouts, failures, uncertain and unattempted stay separate from
+valid empty predictions); reports empty-gold correctness, false empty, clarification
+presence precision/recall, intended tool, missing-parameter correctness, unnecessary and
+unsuccessful clarification, and overlapping single/multi-call, history and
+clarification-after-calls groups; and computes benchmark call matching (fuzzy token-F1
+> 0.6 after lowercasing/NFC) as `f1_without_state_gate`. Train labels have no gold
+`state_hash`, so hash match and official score are reported as unavailable. Paired
+mode attributes IDs exact in transcript but not audio to speech errors. Verified only
+with controlled journals; T029 needs the frozen Train selection and real checkpoints
+on the server.
