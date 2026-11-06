@@ -156,3 +156,25 @@ reserved ID; changed model identity blocked resume. On Windows the dead owner's 
 lock can be released with a short delay, so ownership acquisition waits up to 5 s.
 These are Windows results with controlled doubles; Linux process-group behaviour,
 GPU kernels and real model stalls are server gates (T024/T025).
+
+### US3 configurable container (T020-T023), 2026-11-06
+
+```powershell
+$env:PYTHONPATH = 'python/src;python/tests'
+.venv/Scripts/python.exe -m unittest test_integration_config   # Ran 17 tests: OK
+```
+
+Verified with controlled workers: the documented example parses under the strict
+schema; `--check-config` validates without creating a run or worker; an invalid
+`--device` override exits 2 before any run directory exists; a second compatible
+planner snapshot selected with `--planner-model` runs with no code change and a
+different run identity; manifests record host, worker hardware/model metadata,
+startup and packaging time; resuming with a switched model is rejected (exit 2).
+`Dockerfile`, `.dockerignore` and `scripts/integration/server-acceptance.sh` are
+authored but **not built or run**: this machine has no Docker or GPU. T024/T025 stay
+pending until the server run records the image id, resolved packages and outcomes:
+
+```bash
+scripts/integration/server-acceptance.sh --models /abs/models --data /abs/data \
+  --config /abs/config --output /abs/output --gpu 0 --second-planner /models/planner-b
+```

@@ -84,6 +84,16 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(PipelineError):
             apply_overrides(values, {"asr_model": "x"})
 
+    def test_documented_example_matches_the_strict_schema(self):
+        import tomllib
+        from pathlib import Path
+
+        example = Path(__file__).resolve().parents[2] / "configs" / "integration.example.toml"
+        config = parse_config(tomllib.loads(example.read_text(encoding="utf-8")), self.fx.root)
+        self.assertEqual((config.planner.protocol, config.timeout_seconds, config.recovery_attempts),
+                         ("qwen-native-v1", 30.0, 1))
+        self.assertEqual(config.planner.device, "cuda:0")
+
     def test_parameter_budget(self):
         self.assertEqual(check_parameter_budget(4_000_000_000, 1_000_000_000)["status"], "checked_from_headers")
         self.assertEqual(check_parameter_budget(4_000_000_000, None)["status"], "verified_after_load")
@@ -158,6 +168,78 @@ class PreflightTests(unittest.TestCase):
         (self.fx.planner / "model.safetensors").write_bytes(
             (self.fx.planner / "model.safetensors").read_bytes() + b"\0")
         self.assertNotEqual(first.run_sha256, self.check().run_sha256)
+
+
+
+class CommandTests(unittest.TestCase):
+    """CLI precedence, check-config, checkpoint switching and provenance (controlled worker)."""
+
+    def setUp(self):
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        self.fx = IntegrationFixture(2)
+        self.addCleanup(self.fx.close)
+        tests = Path(__file__).resolve().parent
+        markers = self.fx.root / "markers"
+        markers.mkdir()
+        self.worker = [sys.executable, "-m", "lifemate.worker", "--factory", "integration_doubles:factory"]
+        self.env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(tests.parent / "src"), str(tests)]),
+                        LIFEMATE_TEST_BEHAVIORS="{}", LIFEMATE_TEST_MARKERS=str(markers))
+        self.json = json
+
+    def run_cli(self, *extra, output=None):
+        import contextlib
+        import io
+
+        from lifemate import integration
+
+        values = self.fx.values()
+        values["execution"]["timeout_seconds"] = 5
+        if output is not None:
+            values["output"]["root"] = output
+        argv = ["--config", str(self.fx.write_config(values)), *map(str, extra)]
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+            code = integration.main(argv, worker_command=self.worker, worker_env=self.env)
+        return code, self.json.loads(stdout.getvalue().strip().splitlines()[-1])
+
+    def test_check_config_validates_without_run_artifacts_or_workers(self):
+        code, result = self.run_cli("--check-config")
+        self.assertEqual((code, result["status"]), (0, "validated"))
+        self.assertFalse(self.fx.output.exists(), "check-config creates no run, worker or ToolEnv")
+        self.assertEqual(result["effective_config"]["planner"]["protocol"], "qwen-native-v1")
+        self.assertIn("template_sha256", result["identity"]["planner"])
+
+    def test_invalid_override_fails_before_any_run_directory(self):
+        code, result = self.run_cli("--device", "gpu0")
+        self.assertEqual((code, result["error"]["code"]), (2, "INPUT_INVALID"))
+        self.assertFalse(self.fx.output.exists())
+
+    def test_compatible_checkpoint_switch_needs_no_code_change_and_changes_identity(self):
+        other = snapshot(self.fx.root / "models" / "planner-finetuned", planner=True, parameters=200)
+        first_code, first = self.run_cli(output=self.fx.root / "run-a")
+        second_code, second = self.run_cli("--planner-model", other, output=self.fx.root / "run-b")
+        self.assertEqual((first_code, second_code), (0, 0))
+        manifests = [self.json.loads((self.fx.root / name / "manifest.json").read_text(encoding="utf-8"))
+                     for name in ("run-a", "run-b")]
+        self.assertEqual(manifests[1]["effective_config"]["planner"]["model_path"], other.resolve().as_posix())
+        self.assertNotEqual(manifests[0]["run_sha256"], manifests[1]["run_sha256"])
+        for manifest in manifests:
+            self.assertIn("platform", manifest["host"])
+            startup = manifest["timings"]["startup"][0]
+            self.assertEqual(startup["status"], "ready")
+            self.assertIn("cpu_count", startup["hardware"])
+            self.assertIn("planner", startup["models"])
+            self.assertIn("packaging_seconds", manifest["timings"])
+
+    def test_resume_with_switched_model_is_rejected(self):
+        other = snapshot(self.fx.root / "models" / "planner-other", planner=True, parameters=300)
+        self.assertEqual(self.run_cli()[0], 0)
+        code, result = self.run_cli("--resume", "--planner-model", other)
+        self.assertEqual((code, result["error"]["code"]), (2, "INPUT_INVALID"))
 
 
 if __name__ == "__main__":

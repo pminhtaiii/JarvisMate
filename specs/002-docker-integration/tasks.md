@@ -62,10 +62,10 @@ Record OS kill limits; a timeout is never a valid empty result.
 **Independent test**: Same image runs compatible checkpoint configurations offline;
 startup rejects incompatible settings before ToolEnv creation.
 
-- [ ] T020 [P] [US3] Add documented model/device/dtype/offload/limits/selection example in `configs/integration.example.toml`, matching `contracts/cli-container.md`.
-- [ ] T021 [P] [US3] Add minimal pinned GPU runtime/package/organizer installation and integration entrypoint in `Dockerfile`; exclude weights/data/secrets/training/git/runs via `.dockerignore`.
-- [ ] T022 [US3] Finalize separate CLI overrides/preflight and effective model/template/device/driver/config provenance in `python/src/lifemate/integration.py` and `python/src/lifemate/artifacts.py`.
-- [ ] T023 [US3] Verify compatible checkpoint switching, CLI precedence, startup readiness, provenance and model/config mismatch resume rejection in `python/tests/test_integration_config.py`.
+- [x] T020 [P] [US3] Add documented model/device/dtype/offload/limits/selection example in `configs/integration.example.toml`, matching `contracts/cli-container.md`.
+- [x] T021 [P] [US3] Add minimal pinned GPU runtime/package/organizer installation and integration entrypoint in `Dockerfile`; exclude weights/data/secrets/training/git/runs via `.dockerignore`.
+- [x] T022 [US3] Finalize separate CLI overrides/preflight and effective model/template/device/driver/config provenance in `python/src/lifemate/integration.py` and `python/src/lifemate/artifacts.py`.
+- [x] T023 [US3] Verify compatible checkpoint switching, CLI precedence, startup readiness, provenance and model/config mismatch resume rejection in `python/tests/test_integration_config.py`.
 - [ ] T024 [US3] Build and run the image with `--network none`, selected GPU and read-only model/data/config mounts; record exact commands, digest, resolved dependencies and actual outcomes in `specs/002-docker-integration/quickstart.md`.
 - [ ] T025 [US3] Validate actual ASR/Qwen checkpoints and a second compatible configuration without source/image changes; record startup, memory and limitations in `specs/002-docker-integration/quickstart.md`.
 

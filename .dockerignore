@@ -1,0 +1,18 @@
+# Allowlist: only runtime code and split-matched organizer runtimes enter the image.
+# Models, datasets, weights, runs, training code, secrets and git stay out.
+*
+!python/pyproject.toml
+!python/src/
+!python/src/**
+!tools/train/
+!tools/train/**
+!tools/test/
+!tools/test/**
+!tools/train_tools_catalog.json
+!tools/public_test_tools_catalog.json
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.env
+**/*_environment
+**/*_enviroment

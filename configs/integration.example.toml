@@ -1,0 +1,40 @@
+# LifeMate integration configuration, schema v1 (specs/002-docker-integration).
+# Copy into ignored local storage (e.g. /absolute/config/integration.toml) and edit.
+# Unknown keys are rejected. CLI overrides: --asr-model, --planner-model, --device.
+# Values below are examples, not measured speed or memory defaults.
+schema_version = 1
+
+[asr]
+backend = "whisper"            # Whisper/PhoWhisper-compatible local snapshot
+model_path = "/models/asr"     # complete snapshot: config, processor, tokenizer, weights
+device = "cuda:0"              # container-visible index after --gpus selects one host GPU
+dtype = "float16"              # float32 | float16 | bfloat16 (float16 needs CUDA)
+offload = false                # true keeps the model in RAM between its inference phases
+
+[planner]
+backend = "qwen3"
+protocol = "qwen-native-v1"    # native tool template; one call or "Mình hiểu." per decision
+model_path = "/models/planner" # base or exported fine-tuned Qwen3 snapshot (<5B parameters)
+device = "cuda:0"
+dtype = "float16"
+offload = false
+context_tokens = 16384         # prompt + max_new_tokens must fit; never silently truncated
+max_new_tokens = 512
+
+[execution]
+timeout_seconds = 30           # full attempt incl. ASR, tools and durable output; max 30
+max_steps = 16                 # planner decisions per sample, 1..64
+startup_timeout_seconds = 300  # model load and template smoke per worker start/recovery
+recovery_attempts = 1          # restarts per worker loss: 0 or 1; failed samples never rerun
+seed = 42
+
+[data]
+root = "/data"                 # holds train/ and/or public_test/
+split = "train"                # train | public_test
+mode = "audio"                 # audio | transcript (Train-only diagnostic)
+runtime_dir = "/opt/lifemate/tools/train"   # split-matched organizer runtime (tools/test for public_test)
+sample_ids_file = "/config/selection.txt"   # one ID per line; or: select_all = true
+
+[output]
+root = "/output/run-001"       # new directory per run; --resume continues it
+debug_payloads = false         # true writes bounded, redacted dataset-debug payloads
