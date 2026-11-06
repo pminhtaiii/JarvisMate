@@ -14,6 +14,7 @@ inference = ["torch==2.9.0", "transformers==4.57.1", "numpy==2.3.4", "lm-format-
 
 [project.scripts]
 lifemate = "lifemate.cli:main"
+lifemate-integration = "lifemate.integration:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

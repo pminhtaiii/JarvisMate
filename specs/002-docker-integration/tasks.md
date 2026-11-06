@@ -1,7 +1,7 @@
 # Tasks: Configurable offline Docker integration
 
 **Input**: Design artifacts in `specs/002-docker-integration/`.
-**Status**: All tasks pending; planning/branch cleanup is not runtime implementation.
+**Status**: In progress; checked tasks record delivered source/tests/docs, and runtime gates stay unchecked until measured.
 **Tests**: Focused behavioral verification is required by spec FR-017. Existing local
 policy separates controlled checks from explicitly enabled actual-model/GPU acceptance.
 
@@ -10,8 +10,8 @@ another unfinished task in the same phase. Story labels map to spec user stories
 
 ## Phase 1: Setup
 
-- [ ] T001 Record the integration-only continuation/deadline policy and legacy compatibility in `docs/adr/011-configurable-docker-integration.md`, linking this spec and explicit user-authorized exceptions.
-- [ ] T002 Confirm package/organizer runtime dependency layout and CUDA build inputs in `python/pyproject.toml` and `specs/002-docker-integration/research.md`; keep training dependencies out.
+- [x] T001 Record the integration-only continuation/deadline policy and legacy compatibility in `docs/adr/011-configurable-docker-integration.md`, linking this spec and explicit user-authorized exceptions.
+- [x] T002 Confirm package/organizer runtime dependency layout and CUDA build inputs in `python/pyproject.toml` and `specs/002-docker-integration/research.md`; keep training dependencies out.
 
 ## Phase 2: Foundation
 

@@ -147,6 +147,28 @@ sample processing, and count in total wall time; attempt timing starts before di
 creating a fresh environment to inspect state violates no-replay; accepting staged
 output after a lost acknowledgement can admit an over-deadline result.
 
+## 9. Runtime dependency layout and CUDA build inputs (T002)
+
+**Decision**: The image installs only `jarvismate-lifemate[inference]` (PyTorch 2.9.0,
+Transformers 4.57.1, NumPy 2.3.4, LM Format Enforcer 0.11.3) plus the organizer
+runtimes copied from `tools/train` and `tools/test` with their split catalogs. No
+training, PEFT, dataset or notebook dependency is added; the integration code itself
+uses only the standard library (`tomllib`, `subprocess`, `threading`, `hashlib`).
+
+**Evidence**: Every import in `tools/train` and `tools/test` is standard library or
+`zaic_tools` itself, so organizer runtimes need no extra packages. `runtime.py` expects
+`<tools>/<split>_tools_catalog.json` beside `<tools>/train|test`, so the image keeps
+that layout under `/opt/lifemate/tools`.
+
+**CUDA inputs**: Use a slim CPython 3.11 base and PyTorch's CUDA wheel index rather
+than a CUDA base image; the wheels bundle the CUDA user-space libraries and the NVIDIA
+Container Toolkit injects the host driver. Default index `cu128` targets both Ampere
+(A30, `sm_80`) and newer consumer GPUs; it needs a host driver supporting CUDA 12.8.
+Both are build arguments. The `python:3.11-slim-bookworm` index digest
+`sha256:a83ba18aef0f865b1a4a611c2cf460fe446f2795673bbb9fe43be570439e3b39` was read from
+Docker Hub on 2026-11-06; no image has been built with it here. The resolved dependency
+set and built image digest are recorded by T024 on the GPU server.
+
 ## Branch cleanup and preservation
 
 Base `fine-tuned-asr` remains available. On this integration branch remove tracked
