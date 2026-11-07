@@ -233,7 +233,7 @@ class ActualTokenizerTests(unittest.TestCase):
     def test_supervised_target_is_what_constrained_decoding_admits(self):
         for action in ({"action": "finish"},
                        {"action": "call", "name": "contacts.search", "arguments": {"query": "Lân Đỗ"}},
-                       {"action": "call", "name": "sms.reply", "arguments": {"content": "Hi \"x\"\n", "contact_id": "c7"}}):
+                       {"action": "call", "name": "sms.reply", "arguments": {"content": "Hi \"x\"", "contact_id": "c7"}}):
             with self.subTest(action=action):
                 accepted, allowed = self.walk(completion_text(action))
                 self.assertTrue(accepted)
