@@ -577,6 +577,19 @@ def _scan_calls(text: str):
     return [c for _, c in sorted(found, key=lambda x: x[0])]
 
 
+# Qwen3.5 / Qwen3-Coder call format: <function=name>\n<parameter=key>\nvalue\n</parameter>\n</function>
+_XML_FUNC = re.compile(r"<function=([^>\s]+)>(.*?)(?:</function>|$)", re.S)
+_XML_PARAM = re.compile(r"<parameter=([^>\s]+)>\n?(.*?)\n?(?:</parameter>|(?=<parameter=)|$)", re.S)
+
+
+def _xml_func_calls(text: str) -> list[dict]:
+    out = []
+    for m in _XML_FUNC.finditer(text):
+        args = {k.strip(): _value(v.strip()) for k, v in _XML_PARAM.findall(m.group(2))}
+        out.append({"name": m.group(1).strip(), "arguments": args})
+    return out
+
+
 def parse_output(text: str):
     """-> (visible_content, [ {name, arguments} ])"""
     if "</think>" in text:
@@ -587,8 +600,12 @@ def parse_output(text: str):
         obj = _loads_loose(m.group(1))
         if isinstance(obj, dict) and isinstance(obj.get("name"), str):
             calls.append(obj)
+        elif _XML_FUNC.search(m.group(1)):
+            calls.extend(_xml_func_calls(m.group(1)))
         else:
             calls.extend(_scan_calls(m.group(1)))
+    if not calls and _XML_FUNC.search(text):
+        calls = _xml_func_calls(text)
     if not calls:
         calls = _scan_calls(text)
     out = []
@@ -806,10 +823,12 @@ class FewShotIndex:
         norm = math.sqrt(sum(x * x for x in v.values())) or 1.0
         return {t: x / norm for t, x in v.items()}
 
-    def top(self, text: str, installed: set, k: int):
+    def top_scored(self, text: str, installed: set, k: int, skip_id: str = ""):
         q = self._vec(_bag(text))
         scored = []
         for it, v in zip(self.items, self.vecs):
+            if it["id"] == skip_id:
+                continue
             apps = {c["name"].split(".")[0] for c in it["label"].get("tool_calls") or []} - {"sys"}
             if not apps <= installed:
                 continue
@@ -817,7 +836,21 @@ class FewShotIndex:
             if s > 0:
                 scored.append((s, it))
         scored.sort(key=lambda x: -x[0])
-        return [it for _, it in scored[:k]]
+        return scored[:k]
+
+    def top(self, text: str, installed: set, k: int):
+        return [it for _, it in self.top_scored(text, installed, k)]
+
+
+def plan_text(sim: float, example) -> str:
+    """Tool sequence of a near-duplicate train request as a suggested plan (public_test reuses the train templates).
+    The model still decides arguments and whether each conditional step applies."""
+    names = [c["name"] for c in example["label"].get("tool_calls") or []]
+    seq = " → ".join(names) if names else "(không gọi tool nào)"
+    return ("# Kế hoạch gợi ý (yêu cầu gần như giống một mẫu đã giải đúng, độ giống " + f"{sim:.2f}" + ")\n"
+            f"Mẫu đó gọi theo thứ tự: {seq}\n"
+            "Hãy làm theo khung này nếu yêu cầu hiện tại cùng ý: đủ các bước, không thêm bước thừa. Tham số lấy từ dữ liệu "
+            "thật của người dùng này; bước nào phụ thuộc điều kiện thì vẫn kiểm tra điều kiện trước.")
 
 
 def fewshot_text(examples) -> str:
@@ -954,17 +987,32 @@ class LLM:
         dtype = gpu_dtype()
         attention = memory_safe_attention()
         print(f"[llm] attention={attention}", flush=True)
-        self.model = AutoModelForCausalLM.from_pretrained(model_dir, torch_dtype=dtype, attn_implementation=attention).to(device).eval()
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(model_dir, torch_dtype=dtype, attn_implementation=attention)
+        except (ValueError, KeyError) as exc:
+            # Qwen3.5 checkpoints are image-text-to-text (Qwen3_5ForConditionalGeneration); text-only prompts work through it
+            print(f"[llm] AutoModelForCausalLM: {exc}; dùng AutoModelForImageTextToText", flush=True)
+            from transformers import AutoModelForImageTextToText
+            self.model = AutoModelForImageTextToText.from_pretrained(model_dir, torch_dtype=dtype, attn_implementation=attention)
+        self.model = self.model.to(device).eval()
         gc_ = self.model.generation_config
         gc_.do_sample, gc_.temperature, gc_.top_p, gc_.top_k = False, None, None, None
         self.eos = [i for i in {self.tok.convert_tokens_to_ids("<|im_end|>"), self.tok.eos_token_id,
                                 self.tok.convert_tokens_to_ids("<|endoftext|>")} if isinstance(i, int) and i >= 0]
-        self.has_think = "<think>" in (self.tok.chat_template or "") and "Instruct-2507" not in str(model_dir)
+        template = self.tok.chat_template or ""
+        # Templates with an enable_thinking switch (Qwen3.5) close the think block themselves.
+        self.think_kw = "enable_thinking" in template
+        self.has_think = "<think>" in template and "Instruct-2507" not in str(model_dir) and not self.think_kw
+        cfg = getattr(self.model.config, "text_config", None) or self.model.config
+        # Linear-attention (Gated DeltaNet) layers keep a recurrent state that cannot be cropped back to a shared prefix.
+        self.reuse_cache = "linear_attention" not in (getattr(cfg, "layer_types", None) or [])
+        print(f"[llm] think_kw={self.think_kw} has_think={self.has_think} reuse_cache={self.reuse_cache}", flush=True)
         self.params = sum(p.numel() for p in self.model.parameters())
         print(f"[llm] {model_dir} params={self.params / 1e9:.2f}B dtype={dtype}", flush=True)
 
     def render(self, messages, tools, think: bool) -> str:
-        prompt = self.tok.apply_chat_template(messages, tools=tools, tokenize=False, add_generation_prompt=True)
+        extra = {"enable_thinking": bool(think)} if getattr(self, "think_kw", False) else {}
+        prompt = self.tok.apply_chat_template(messages, tools=tools, tokenize=False, add_generation_prompt=True, **extra)
         # FunReason-MT always opens a long <think> block (Kaggle v4: 616/634 samples ran out of tokens mid-thought).
         # Without --think, prefill an empty think block (Qwen3 non-thinking convention) so it answers directly.
         return prompt + self.render_suffix(think)
@@ -1053,7 +1101,7 @@ class LLM:
         ids = self.tok(prompt, return_tensors="pt", add_special_tokens=False)["input_ids"].to(self.device)
         new = ids[0].tolist()
         kwargs = {}
-        cache = getattr(self, "cache", None)
+        cache = getattr(self, "cache", None) if getattr(self, "reuse_cache", True) else None
         if cache is not None:
             old = self.cache_ids
             n, lim = 0, min(len(old), len(new) - 1)
@@ -1479,13 +1527,15 @@ def parse_args(argv=None):
     ap.add_argument("--asr-nbest", type=int, default=3, help="số giả thuyết beam cho câu cuối (<=1 = tắt)")
     ap.add_argument("--no-asr-pass2", dest="asr_pass2", action="store_false", help="không giải mã lại có prompt tên")
     ap.add_argument("--no-asr-hints", dest="asr_hints", action="store_false", help="không gợi ý tên theo phát âm")
-    ap.add_argument("--read-prune-rate", type=float, default=0.25,
-                    help="bỏ tham số tùy chọn của tool đọc nếu gold train dùng < tỉ lệ này (0.1 = như v2)")
-    ap.add_argument("--no-date-table", dest="date_table", action="store_false", help="không thêm bảng ngày vào ngữ cảnh")
-    ap.add_argument("--no-soft-nudge", dest="soft_nudge", action="store_false",
-                    help="không nhắc khi dừng sau khi đọc mà chưa thao tác")
-    ap.add_argument("--no-read-notes", dest="read_notes", action="store_false",
-                    help="không thêm ghi chú (danh bạ rỗng, mưa/không mưa) sau kết quả tool đọc")
+    # v3 features (public 33.99 < v2 34.66): off by default, opt in per flag
+    ap.add_argument("--read-prune-rate", type=float, default=0.1,
+                    help="bỏ tham số tùy chọn của tool đọc nếu gold train dùng < tỉ lệ này (v3 dùng 0.25)")
+    ap.add_argument("--date-table", action="store_true", help="thêm bảng ngày tính sẵn vào ngữ cảnh (v3)")
+    ap.add_argument("--soft-nudge", action="store_true", help="nhắc khi dừng sau khi đọc mà chưa thao tác (v3)")
+    ap.add_argument("--read-notes", action="store_true",
+                    help="ghi chú sau tool đọc: danh bạ rỗng, mưa/không mưa (v3)")
+    ap.add_argument("--plan-sim", type=float, default=0.0,
+                    help="thêm kế hoạch gợi ý từ mẫu train giống nhất khi độ giống >= ngưỡng này (0 = tắt)")
     ap.add_argument("--llm-device", default="cuda:0")
     return ap.parse_args(argv)
 
@@ -1544,20 +1594,26 @@ def main(argv=None):
     print(f"[agent] rare optional params={len(args.rare_params)} few_shot={args.few_shot} k={args.fewshot_k} "
           f"ground={args.ground} nudge={args.nudge} fix_args={args.fix_args} nbest={args.asr_nbest} "
           f"pass2={args.asr_live is not None} hints={args.asr_hints} read_prune={args.read_prune_rate} "
-          f"dates={args.date_table} soft_nudge={args.soft_nudge} read_notes={args.read_notes}", flush=True)
+          f"dates={args.date_table} soft_nudge={args.soft_nudge} read_notes={args.read_notes} plan_sim={args.plan_sim}",
+          flush=True)
     scores = []
     t_start = time.time()
     with open(args.out, "w", encoding="utf-8") as fout, open(args.trace, "w", encoding="utf-8") as ftr:
         for n, item in enumerate(items, 1):
             env = ToolEnv(args.split, item["id"], root=root)  # exactly one environment per sample
             try:
-                sp = system_prompt
+                sp, plan_sim = system_prompt, None
                 if fs_index:
                     query = (item.get("audio_text") if args.gold_transcript and isinstance(item.get("audio_text"), str)
                              else transcripts.get(item["audio"], ""))
-                    sp = system_prompt.rstrip() + "\n\n" + fewshot_text(
-                        fs_index.top(query, set(item["context"]["installed_apps"]), args.fewshot_k))
+                    scored = fs_index.top_scored(query, set(item["context"]["installed_apps"]), max(args.fewshot_k, 1))
+                    sp = system_prompt.rstrip() + "\n\n" + fewshot_text([it for _, it in scored[: args.fewshot_k]])
+                    if args.plan_sim and scored and scored[0][0] >= args.plan_sim:
+                        plan_sim = round(scored[0][0], 3)
+                        sp += "\n\n" + plan_text(scored[0][0], scored[0][1])
                 trace = run_agent(item, env, llm, catalog, sp, transcripts, args)
+                if plan_sim is not None:
+                    trace["plan_sim"] = plan_sim
             except Exception as exc:  # keep the calls already made; never re-create the env
                 trace = {"stop": f"error: {type(exc).__name__}: {exc}"}
                 if torch.cuda.is_available():
