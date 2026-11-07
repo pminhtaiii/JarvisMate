@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -202,6 +202,23 @@ def select_for(validation_mode: str, candidates: list[JSON], plan: TrainPlan) ->
 
 
 # --- Tensors and loss ------------------------------------------------------------
+
+def require_finite_weights(torch, weights: Iterable[tuple[str, Any]], *, code: str = "SFT_TRAINING") -> None:
+    """Reject NaN/Inf tensor values, independently of loss, gradients or file digests."""
+    with torch.no_grad():
+        for name, weight in weights:
+            if not bool(torch.isfinite(weight).all()):
+                raise failure(f"Nonfinite adapter weight: {name}"[:200], code)
+
+
+def _require_finite_adapter_file(path: Path) -> None:
+    import torch
+    from safetensors import safe_open
+
+    with safe_open(path, framework="pt", device="cpu") as adapter:
+        require_finite_weights(torch, ((name, adapter.get_tensor(name)) for name in adapter.keys()),
+                               code="SFT_IDENTITY")
+
 
 def collate(torch, examples: list[JSON], pad_id: int, device) -> JSON:
     """Right-pad; loss and attention masks follow position, so a pad equal to EOS stays supervised."""
@@ -416,6 +433,7 @@ def save_checkpoint(root: Path, update: int, runtime: TrainingRuntime, optimizer
     ``nll`` is None when the run has no validation role: both NLL and finiteness stay null.
     """
     torch = runtime.torch
+    require_finite_weights(torch, ((name, p) for name, p in runtime.model.named_parameters() if p.requires_grad))
     target = checkpoint_path(root, update)
     stage = target.with_name(f".stage-{target.name}-{uuid.uuid4().hex}")
     stage.mkdir(parents=True)
@@ -467,6 +485,7 @@ def read_checkpoint(path: Path, row_sources: list[str], *, identity: JSON | None
     recorded = expected_coverage.record()
     if stream != expected_stream.state() or any(coverage[key] != recorded[key] for key in recorded):
         raise reject("sampler or coverage progress is inconsistent with the deterministic stream")
+    _require_finite_adapter_file(path / "adapter" / "adapter_model.safetensors")
     return state
 
 
@@ -653,6 +672,7 @@ def _train(config: SftConfig, runtime: TrainingRuntime, ready: ReadyExport, root
                 raise failure("Nonfinite adapter gradient")
             rate = scheduler.get_last_lr()[0]
             optimizer.step()
+            require_finite_weights(torch, ((name, p) for name, p in model.named_parameters() if p.requires_grad))
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
             coverage.add(window)

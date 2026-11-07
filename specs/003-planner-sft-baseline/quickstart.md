@@ -173,6 +173,44 @@ Controlled CPU cases exercise real LoRA, backward, 1x16/4x4 gradient equivalence
 adapter weights after resume and an offline merged reload on a random two-layer Qwen3. They do not establish NF4
 behaviour, memory fit, adapter-versus-merged drift on the real model, quality or latency.
 
+### Finite-adapter review follow-up (2026-11-08)
+
+Follow-up to `codex/007-sft-full-train-no-validation` at
+`ebde6c98f4365cfd6443523506b82d6b8168dc03`, in `D:\JASR\JarvisMate`.
+Trainable weights are checked after every optimizer update and before checkpoint
+staging. Checkpoint reads inspect saved tensors as well as digests before resume,
+selection and export. NaN, +Inf and -Inf are rejected; the existing NLL `finite`
+field remains validation-only. Recipe, data, audits, checkpoint schedule and
+selection rules are unchanged.
+
+The interpreter below already had Python 3.12.10, torch 2.9.0+cu128,
+transformers 4.57.1, tokenizers 0.22.2, peft 0.17.1, accelerate 1.10.1,
+safetensors 0.8.0, bitsandbytes 0.48.1 and numpy 2.3.4 installed. No environment
+installation or modification was needed. `PYTHONPATH` explicitly selected this
+checkout; importing `lifemate.sft.training` resolved to
+`D:\JASR\JarvisMate\python\src\lifemate\sft\training.py`.
+
+Commands executed in PowerShell (local evidence directory created beforehand):
+
+```powershell
+Set-Location 'D:\JASR\JarvisMate\python\tests'
+$env:PYTHONPATH = 'D:\JASR\JarvisMate\python\src'
+$env:HF_HUB_OFFLINE = '1'
+$env:TRANSFORMERS_OFFLINE = '1'
+& 'D:\JarvisMate_5\JarvisMate\.venv-llm\Scripts\python.exe' -m unittest -v test_sft_integrity
+
+$env:LIFEMATE_NATIVE_TOKENIZER = 'D:\JarvisMate_5\JarvisMate\resources\models\qwen3-4b-instruct-2507'
+Remove-Item Env:LIFEMATE_SFT_TRAIN -ErrorAction SilentlyContinue
+Remove-Item Env:LIFEMATE_SFT_GPU_BASE -ErrorAction SilentlyContinue
+& 'D:\JarvisMate_5\JarvisMate\.venv-llm\Scripts\python.exe' -m unittest discover -s . -p 'test_sft_*.py' -v 2>&1 | Tee-Object -FilePath 'D:\JASR\JarvisMate\.agent-work\sft-integrity-20261108\sft-full.log'
+```
+
+The focused tests cover both LoRA matrices, nonfinite values introduced by the
+optimizer after finite loss/gradient checks, rejection before checkpoint staging,
+and a fully covered final checkpoint whose nonfinite tensors have matching updated
+digests. That checkpoint cannot be read, resumed or finalized, in either validation
+mode; no selection or selected adapter is created and committed files stay unchanged.
+
 ### Pending on the GPU host
 
 T016 NF4 smoke and environment lock, T017 full run, T020 drift diagnostics, T021 validation

@@ -83,6 +83,14 @@ A run interrupted after committing step 500 but before writing `selection.json` 
 from `--resume <experiment>/checkpoints/step-0500`. No update runs, and the committed
 checkpoint is verified and selected without being rewritten.
 
+In both modes, every trainable adapter tensor must contain only finite values after
+each optimizer update and before checkpoint staging. NaN or either infinity stops
+training with `SFT_TRAINING` before recording that update's coverage or metrics.
+Checkpoint reads also inspect the saved adapter tensors, independently of matching
+digests; nonfinite weights raise `SFT_IDENTITY` before resume, selection or export.
+This integrity gate does not change checkpoint ranking, the final-update rule, the
+validation-only meaning of the existing `finite` field, or source audit decisions.
+
 Normalize training loss over all supervised tokens in the complete 16-example
 accumulation window. Changing microbatch factorization must preserve that objective;
 test 1x16 versus 4x4 gradients with unequal target lengths and dropout disabled.
