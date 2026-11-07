@@ -1,0 +1,36 @@
+# Planner SFT configuration, schema v1 (specs/003-planner-sft-baseline).
+# Copy into ignored local storage and edit. Unknown keys are rejected.
+# CLI overrides: --train-jsonl --train-catalog --validation-jsonl --validation-catalog
+#                --base-path --device --microbatch --accumulation --output
+# Values below are examples, not measured speed, memory or quality defaults.
+schema_version = 1
+
+[data]
+train_jsonl = "/data/train/train.jsonl"              # every source here is fitted; never repartitioned
+train_catalog = "/data/train/train_tools_catalog.json"
+train_role = "train"
+validation_jsonl = "/data/validation/validation.jsonl" # separate labeled set; never public or private test
+validation_catalog = "/data/train/train_tools_catalog.json"
+validation_role = "validation"
+permitted_use = "ZAC 2026 LifeMate registered-team development"
+# audit_resolutions = "/config/sft-resolutions.json"  # reviewed decisions for flagged sources:
+# {"resolutions": [{"source_id": "train_0001", "reason": "UNGROUNDED_ID",
+#                   "decision": "exclude", "note": "why this was reviewed"}]}
+
+[model]
+base_path = "/models/Qwen3-4B-Instruct-2507"           # complete local snapshot, loaded offline
+# revision = "<pinned Hugging Face commit>"            # recorded for provenance
+
+[training]
+recipe = "qlora-baseline-v1"   # fixed recipe: see specs/003-planner-sft-baseline/plan.md
+device = "cuda:0"              # exactly one selected RTX 5090 or H200
+seed = 20261027
+microbatch = 1                 # microbatch * accumulation must equal 16; 4 * 4 is equally valid
+accumulation = 16
+
+[limits]
+context_tokens = 16384         # prompt plus reserved output
+max_new_tokens = 512           # keep equal to the runtime's planner.max_new_tokens
+
+[output]
+experiment_dir = "/runs/planner-sft/baseline"  # ignored local storage, outside the inputs above
