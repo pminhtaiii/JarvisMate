@@ -104,14 +104,19 @@ def write_role(directory: Path, name: str, rows, catalog=CATALOG) -> tuple[Path,
 
 
 def make_config(root: Path, train_rows, validation_rows, *, resolutions=None, microbatch=1, accumulation=16,
-                context_tokens=16384, max_new_tokens=512, experiment="experiment"):
+                context_tokens=16384, max_new_tokens=512, experiment="experiment", validation_mode=None):
+    """``validation_rows`` None means validation_mode "none": no validation file or key exists."""
     train = write_role(root / "data/train", "train", train_rows)
-    validation = write_role(root / "data/validation", "validation", validation_rows)
     base = write_snapshot(root / "base")
-    raw = {"schema_version": 1,
-           "data": {"train_jsonl": str(train[0]), "train_catalog": str(train[1]), "train_role": "train",
-                    "validation_jsonl": str(validation[0]), "validation_catalog": str(validation[1]),
-                    "validation_role": "validation", "permitted_use": "controlled test"},
+    data = {"train_jsonl": str(train[0]), "train_catalog": str(train[1]), "train_role": "train",
+            "permitted_use": "controlled test"}
+    if validation_rows is not None:
+        validation = write_role(root / "data/validation", "validation", validation_rows)
+        data |= {"validation_jsonl": str(validation[0]), "validation_catalog": str(validation[1]),
+                 "validation_role": "validation"}
+    if validation_mode is not None:
+        data["validation_mode"] = validation_mode
+    raw = {"schema_version": 1, "data": data,
            "model": {"base_path": str(base)},
            "training": {"recipe": "qlora-baseline-v1", "device": "cuda:0", "seed": 20261027,
                         "microbatch": microbatch, "accumulation": accumulation},
@@ -122,3 +127,8 @@ def make_config(root: Path, train_rows, validation_rows, *, resolutions=None, mi
         path.write_text(json.dumps({"resolutions": resolutions}, ensure_ascii=False), encoding="utf-8")
         raw["data"]["audit_resolutions"] = str(path)
     return parse_config(raw, root)
+
+
+def train_only_config(root: Path, train_rows, **options):
+    """100% Train, explicit validation_mode "none"."""
+    return make_config(root, train_rows, None, validation_mode="none", **options)

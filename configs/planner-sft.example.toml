@@ -2,17 +2,25 @@
 # Copy into ignored local storage and edit. Unknown keys are rejected.
 # CLI overrides: --train-jsonl --train-catalog --validation-jsonl --validation-catalog
 #                --base-path --device --microbatch --accumulation --output
+# data.validation_mode is run-defining and has no CLI override.
 # Values below are examples, not measured speed, memory or quality defaults.
 schema_version = 1
 
 [data]
-train_jsonl = "/data/train/train.jsonl"              # every source here is fitted; never repartitioned
+train_jsonl = "/data/train/train.jsonl"              # every approved source here is fitted; never repartitioned
 train_catalog = "/data/train/train_tools_catalog.json"
 train_role = "train"
-validation_jsonl = "/data/validation/validation.jsonl" # separate labeled set; never public or private test
-validation_catalog = "/data/train/train_tools_catalog.json"
-validation_role = "validation"
 permitted_use = "ZAC 2026 LifeMate registered-team development"
+# "none":     100% Train, no validation set. No validation NLL is computed; the update-500
+#             checkpoint is selected once all 500 updates complete with full coverage.
+#             The three validation_* keys must then be absent.
+# "separate": a separate labeled validation set; lowest finite validation NLL among fully
+#             covered checkpoints. Omitting validation_mode means "separate". To use it, set
+#             validation_mode = "separate" and uncomment the three lines below.
+validation_mode = "none"
+# validation_jsonl = "/data/validation/validation.jsonl" # separate labeled set; never public or private test
+# validation_catalog = "/data/train/train_tools_catalog.json"
+# validation_role = "validation"
 # audit_resolutions = "/config/sft-resolutions.json"  # reviewed decisions for flagged sources:
 # {"resolutions": [{"source_id": "train_0001", "reason": "UNGROUNDED_ID",
 #                   "decision": "exclude", "note": "why this was reviewed"}]}

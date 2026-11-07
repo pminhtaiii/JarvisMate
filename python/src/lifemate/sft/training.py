@@ -18,7 +18,7 @@ import sys
 import uuid
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +26,7 @@ from ..adapters.qwen_native import validate_template
 from ..artifacts import atomic_json
 from ..contracts import JSON, PipelineError
 from ..jsonio import digest, dumps, read_json
-from . import EFFECTIVE_BATCH, RECIPE, SEED, SftConfig
+from . import EFFECTIVE_BATCH, FINAL_UPDATE_RULE, RECIPE, SEED, SELECTION_MODES, SftConfig
 from .data import ReadyExport, TokenAudit, base_identity, encode_row, load_ready_export, load_tokenizer
 
 SELECTED_RULE = RECIPE["selection"]
@@ -57,6 +57,13 @@ class TrainPlan:
 
 
 SMOKE_PLAN = TrainPlan(updates=2, evaluate_every=2, validation_limit=8, smoke=True)
+
+
+def default_plan(config: SftConfig, smoke: bool) -> TrainPlan:
+    if not smoke:
+        return TrainPlan()
+    # Without a validation role the smoke plan records no validation subset it never reads.
+    return SMOKE_PLAN if config.validated else replace(SMOKE_PLAN, validation_limit=None)
 
 
 # --- Pure: sampling, coverage, schedule, selection -------------------------------
@@ -144,23 +151,54 @@ def lr_multiplier(completed_updates: int, warmup: int = RECIPE["warmup_updates"]
     return min(1.0, (completed_updates + 1) / warmup)
 
 
+def fully_covered(coverage: JSON) -> bool:
+    return (coverage["expected_rows"] > 0 and coverage["unique_rows"] == coverage["expected_rows"]
+            and coverage["expected_sources"] > 0 and coverage["unique_sources"] == coverage["expected_sources"])
+
+
 def select_checkpoint(candidates: list[JSON]) -> JSON:
     """Lowest finite NLL among fully covered candidates; an exact tie takes the earlier update."""
     evaluated = []
     for candidate in sorted(candidates, key=lambda c: c["update"]):
         nll, coverage = candidate["validation_nll"], candidate["coverage"]
         finite = isinstance(nll, (int, float)) and math.isfinite(nll)
-        covered = (coverage["expected_rows"] > 0 and coverage["unique_rows"] == coverage["expected_rows"]
-                   and coverage["expected_sources"] > 0 and coverage["unique_sources"] == coverage["expected_sources"])
+        covered = fully_covered(coverage)
         evaluated.append({"update": candidate["update"], "validation_nll": nll, "finite": finite,
                           "unique_rows": coverage["unique_rows"], "expected_rows": coverage["expected_rows"],
                           "unique_sources": coverage["unique_sources"], "expected_sources": coverage["expected_sources"],
                           "eligible": finite and covered, "adapter_sha256": candidate.get("adapter_sha256")})
     eligible = [c for c in evaluated if c["eligible"]]
     chosen = min(eligible, key=lambda c: (c["validation_nll"], c["update"])) if eligible else None
-    return {"status": "selected" if chosen else "failed", "rule": SELECTED_RULE, "candidates": evaluated,
+    return {"status": "selected" if chosen else "failed", "mode": SELECTION_MODES["separate"], "rule": SELECTED_RULE,
+            "candidates": evaluated, "selected_update": chosen["update"] if chosen else None,
+            "adapter_sha256": chosen["adapter_sha256"] if chosen else None}
+
+
+def select_final_update(candidates: list[JSON], final_update: int) -> JSON:
+    """The last planned update once it is committed with full coverage; validation plays no part.
+
+    Earlier checkpoints are listed for provenance and are never eligible. No NLL is read or
+    recorded, so a missing metric cannot be mistaken for a measured one.
+    """
+    evaluated = []
+    for candidate in sorted(candidates, key=lambda c: c["update"]):
+        coverage = candidate["coverage"]
+        covered, final = fully_covered(coverage), candidate["update"] == final_update
+        evaluated.append({"update": candidate["update"], "final": final, "covered": covered,
+                          **{key: coverage[key] for key in ("unique_rows", "expected_rows", "unique_sources",
+                                                            "expected_sources")},
+                          "eligible": final and covered, "adapter_sha256": candidate.get("adapter_sha256")})
+    chosen = next((c for c in evaluated if c["eligible"]), None)
+    return {"status": "selected" if chosen else "failed", "mode": SELECTION_MODES["none"], "rule": FINAL_UPDATE_RULE,
+            "validation": "none", "final_update": final_update, "candidates": evaluated,
             "selected_update": chosen["update"] if chosen else None,
             "adapter_sha256": chosen["adapter_sha256"] if chosen else None}
+
+
+def select_for(validation_mode: str, candidates: list[JSON], plan: TrainPlan) -> JSON:
+    if validation_mode == "separate":
+        return select_checkpoint(candidates)
+    return select_final_update(candidates, plan.updates)
 
 
 # --- Tensors and loss ------------------------------------------------------------
@@ -372,8 +410,11 @@ def checkpoint_path(root: Path, update: int) -> Path:
 
 
 def save_checkpoint(root: Path, update: int, runtime: TrainingRuntime, optimizer, scheduler, stream: RowStream,
-                    coverage: Coverage, identity: JSON, nll: float) -> JSON:
-    """Stage everything, then rename: a checkpoint directory is complete or absent."""
+                    coverage: Coverage, identity: JSON, nll: float | None) -> JSON:
+    """Stage everything, then rename: a checkpoint directory is complete or absent.
+
+    ``nll`` is None when the run has no validation role: both NLL and finiteness stay null.
+    """
     torch = runtime.torch
     target = checkpoint_path(root, update)
     stage = target.with_name(f".stage-{target.name}-{uuid.uuid4().hex}")
@@ -386,7 +427,7 @@ def save_checkpoint(root: Path, update: int, runtime: TrainingRuntime, optimizer
         torch.save({"optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "rng": rng,
                     "python_rng_version": random.getstate()[0], "python_rng_gauss": random.getstate()[2]},
                    stage / "trainer_state.pt")
-        finite = math.isfinite(nll)
+        finite = None if nll is None else math.isfinite(nll)
         files = tree_digests(stage)
         adapter = {name: value for name, value in files.items() if name.startswith("adapter/")}
         state = {"update": update, "identity": identity, "stream": stream.state(), "coverage": coverage.record(),
@@ -446,13 +487,25 @@ def restore_checkpoint(path: Path, runtime: TrainingRuntime, optimizer, schedule
         torch.cuda.set_rng_state(trainer["rng"]["cuda"], int(runtime.device.partition(":")[2] or 0))
 
 
-def finalize_selection(config_root: Path, plan: TrainPlan, row_sources: list[str], identity: JSON) -> JSON:
+def read_candidates(root: Path, plan: TrainPlan, row_sources: list[str], identity: JSON,
+                    validation_mode: str = "separate") -> list[JSON]:
+    """Every scheduled checkpoint, verified; final-update mode first requires the final one."""
+    if validation_mode == "none" and not (checkpoint_path(root, plan.updates) / "checkpoint.json").is_file():
+        raise failure(f"No committed update-{plan.updates} checkpoint: training did not complete every update",
+                      "SFT_SELECTION")
+    return [read_checkpoint(checkpoint_path(root, update), row_sources, identity=identity)
+            for update in plan.candidates]
+
+
+def finalize_selection(config_root: Path, plan: TrainPlan, row_sources: list[str], identity: JSON, *,
+                       validation_mode: str = "separate") -> JSON:
     """Write ``selection.json`` and copy the chosen adapter; no eligible candidate fails the stage."""
-    states = [read_checkpoint(checkpoint_path(config_root, update), row_sources, identity=identity)
-              for update in plan.candidates]
-    record = select_checkpoint(states) | {"identity": identity}
+    states = read_candidates(config_root, plan, row_sources, identity, validation_mode)
+    record = select_for(validation_mode, states, plan) | {"identity": identity}
     atomic_json(config_root / "selection.json", record)
     if record["status"] != "selected":
+        if validation_mode == "none":
+            raise failure(f"The update-{plan.updates} checkpoint lacks full row/source coverage", "SFT_SELECTION")
         raise failure("No fully covered checkpoint has a finite validation NLL", "SFT_SELECTION")
     source = checkpoint_path(config_root, record["selected_update"]) / "adapter"
     stage = config_root / f".adapter-{uuid.uuid4().hex}"
@@ -528,7 +581,9 @@ def run_training(config: SftConfig, *, resume: Path | None = None, smoke: bool =
                  loader: Callable[[SftConfig], TrainingRuntime] = load_training_model,
                  plan: TrainPlan | None = None) -> JSON:
     """Train from a ready export; fails bounded on OOM or kernels without changing the recipe."""
-    plan = plan or (SMOKE_PLAN if smoke else TrainPlan())
+    plan = plan or default_plan(config, smoke)
+    if not config.validated and plan.updates not in plan.candidates:
+        raise failure("Final-update selection needs a checkpoint at the last update")
     ready = load_ready_export(config)
     root = config.experiment_dir / "smoke" if plan.smoke else config.experiment_dir
     row_sources = [row["provenance"]["source_id"] for row in ready.train]
@@ -606,22 +661,26 @@ def _train(config: SftConfig, runtime: TrainingRuntime, ready: ReadyExport, root
                                  "unique_sources": len(coverage.sources)}) + "\n")
             metrics.flush()
             if update in plan.candidates:
-                nll = evaluate(runtime, (encode(row) for row in validation_rows))
+                # No validation role: nothing is evaluated, and Train is never scored in its place.
+                nll = evaluate(runtime, (encode(row) for row in validation_rows)) if config.validated else None
                 state = save_checkpoint(root, update, runtime, optimizer, scheduler, stream, coverage, identity, nll)
-                metrics.write(dumps({"update": update, "validation_nll": state["validation_nll"], "finite": state["finite"],
-                                     "coverage_complete": coverage.complete}) + "\n")
+                checked = ({"validation_nll": state["validation_nll"], "finite": state["finite"]} if config.validated
+                           else {"validation": "none"})
+                metrics.write(dumps({"update": update, **checked, "coverage_complete": coverage.complete}) + "\n")
                 metrics.flush()
             if plan.stop_after == update:
                 raise failure("Stopped by test hook")
     if _frozen_fingerprint(runtime) != frozen:
         raise failure("A frozen base weight changed during training")
     if plan.smoke:
-        report = {"stage": "train", "mode": "smoke", "feasibility": feasibility, "updates": plan.updates,
+        report = {"stage": "train", "mode": "smoke", "validation_mode": config.validation_mode,
+                  "feasibility": feasibility, "updates": plan.updates,
                   "trainable": runtime.trainable, "frozen_unchanged": True, "checkpoint":
                   read_checkpoint(checkpoint_path(root, plan.updates), row_sources, identity=identity)["adapter_sha256"],
                   "note": "Short feasibility evidence only; not a training result"}
         atomic_json(root / "smoke_report.json", report)
         return report
-    record = finalize_selection(root, plan, row_sources, identity)
-    return {"stage": "train", "mode": "full", "selected_update": record["selected_update"],
-            "candidates": record["candidates"], "epochs": stream.consumed / len(row_sources)}
+    record = finalize_selection(root, plan, row_sources, identity, validation_mode=config.validation_mode)
+    return {"stage": "train", "mode": "full", "selection_mode": record["mode"],
+            "selected_update": record["selected_update"], "candidates": record["candidates"],
+            "epochs": stream.consumed / len(row_sources)}

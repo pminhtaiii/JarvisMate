@@ -12,14 +12,15 @@ import tempfile
 import unittest
 from importlib.util import find_spec
 from pathlib import Path
+from unittest.mock import patch
 
 from lifemate.contracts import PipelineError
-from lifemate.sft import RECIPE
-from lifemate.sft.data import prepare
+from lifemate.sft import FINAL_UPDATE_RULE, RECIPE
+from lifemate.sft.data import load_ready_export, prepare
 from lifemate.sft.training import (Coverage, RowStream, TrainingRuntime, TrainPlan, attach_lora, checkpoint_path, evaluate,
                                    finalize_selection, lr_multiplier, read_checkpoint, replay, require_coverage_budget,
-                                   run_training, select_checkpoint, validate_trainable)
-from sft_support import ASK, FOUND, SEARCH, SEND, SENT, WAITING, CharTokenizer, make_config, source
+                                   run_training, select_checkpoint, select_final_update, select_for, validate_trainable)
+from sft_support import ASK, FOUND, SEARCH, SEND, SENT, WAITING, CharTokenizer, make_config, source, train_only_config
 
 HAS_MODEL_LIBRARIES = all(find_spec(name) for name in ("torch", "transformers", "peft", "safetensors"))
 
@@ -115,6 +116,45 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(candidates=len(candidates)):
                 record = select_checkpoint(candidates)
                 self.assertEqual((record["status"], record["selected_update"]), ("failed", None))
+
+
+class FinalUpdateSelectionTests(unittest.TestCase):
+    """validation_mode "none": the final update, never a validation metric."""
+
+    def test_recipe_schedules_five_checkpoints_and_selects_the_last(self):
+        plan = TrainPlan()
+        self.assertEqual((plan.updates, plan.warmup, plan.candidates), (500, 25, [100, 200, 300, 400, 500]))
+        record = select_for("none", [candidate(u, None, 4865, 4865, 1544, 1544) for u in plan.candidates], plan)
+        self.assertEqual((record["status"], record["mode"], record["selected_update"]), ("selected", "final_update", 500))
+        self.assertEqual((record["rule"], record["validation"], record["final_update"]), (FINAL_UPDATE_RULE, "none", 500))
+        self.assertEqual([c["eligible"] for c in record["candidates"]], [False] * 4 + [True])
+        self.assertFalse(any("validation_nll" in c for c in record["candidates"]), "No metric is fabricated")
+
+    def test_final_update_wins_regardless_of_any_recorded_nll(self):
+        record = select_final_update([candidate(100, 0.01, 2120), candidate(500, 9.0, 2120)], 500)
+        self.assertEqual((record["selected_update"], record["adapter_sha256"]), (500, "digest-500"))
+
+    def test_missing_or_uncovered_final_update_fails(self):
+        for candidates in ([candidate(u, None, 2120) for u in (100, 200, 300, 400)],
+                           [candidate(400, None, 2120), candidate(500, None, 2120, sources=799)],
+                           [candidate(500, None, 2119)], []):
+            with self.subTest(updates=[c["update"] for c in candidates]):
+                record = select_final_update(candidates, 500)
+                self.assertEqual((record["status"], record["selected_update"], record["adapter_sha256"]), ("failed", None, None))
+
+    def test_validation_mode_separate_keeps_lowest_nll(self):
+        record = select_for("separate", [candidate(400, 0.2, 2120), candidate(500, 0.3, 2120)], TrainPlan())
+        self.assertEqual((record["mode"], record["selected_update"]), ("lowest_validation_nll", 400))
+
+    def test_full_train_rows_are_covered_before_update_500(self):
+        sources = [f"train_{index // 3:04d}" for index in range(4865)]
+        require_coverage_budget(len(sources), TrainPlan())
+        self.assertFalse(replay(sources, 304)[1].complete)
+        self.assertTrue(replay(sources, 305)[1].complete, "4865 rows need ceil(4865 / 16) = 305 updates")
+        stream, coverage = replay(sources, 500)
+        self.assertTrue(coverage.complete)
+        self.assertEqual((len(coverage.rows), len(coverage.sources)), (4865, len(set(sources))))
+        self.assertEqual(stream.consumed, 500 * 16)
 
 
 # --- Tiny real model ------------------------------------------------------------
@@ -449,6 +489,146 @@ class TinyModelTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "SFT_IDENTITY")
 
 
+@unittest.skipUnless(HAS_MODEL_LIBRARIES, "Needs torch, transformers, peft and safetensors")
+class TrainOnlyTinyModelTests(unittest.TestCase):
+    """validation_mode "none" through the real loop. evaluate() must never run."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        never = patch("lifemate.sft.training.evaluate", side_effect=AssertionError("No validation NLL in mode none"))
+        never.start()
+        self.addCleanup(never.stop)
+
+    def ready_config(self, name="experiment", sources=None):
+        config = train_only_config(self.root, sources or many_sources(), experiment=name)
+        prepare(config, tokenizer=CharTokenizer())
+        return config
+
+    def json(self, path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def adapter(self, config, update):
+        from safetensors.torch import load_file
+
+        return load_file(checkpoint_path(config.experiment_dir, update) / "adapter" / "adapter_model.safetensors")
+
+    def assert_same_adapter(self, one, two):
+        import torch
+
+        self.assertEqual(one.keys(), two.keys())
+        for key in one:
+            self.assertTrue(torch.equal(one[key], two[key]), key)
+
+    def test_checkpoints_follow_the_schedule_and_the_final_update_is_selected(self):
+        config = self.ready_config()
+        result = run_training(config, loader=tiny_loader(), plan=PLAN)
+        self.assertEqual((result["mode"], result["selection_mode"], result["selected_update"]), ("full", "final_update", 4))
+        self.assertEqual(sorted(p.name for p in (config.experiment_dir / "checkpoints").iterdir()), ["step-0002", "step-0004"])
+        selection = self.json(config.experiment_dir / "selection.json")
+        self.assertEqual((selection["status"], selection["mode"], selection["rule"], selection["validation"]),
+                         ("selected", "final_update", FINAL_UPDATE_RULE, "none"))
+        self.assertEqual(selection["identity"]["config_identity"], config.identity())
+        rows = len((config.sft_dir / "train.jsonl").read_text(encoding="utf-8").splitlines())
+        final = self.json(checkpoint_path(config.experiment_dir, 4) / "checkpoint.json")
+        self.assertEqual((final["validation_nll"], final["finite"]), (None, None))
+        self.assertEqual((final["coverage"]["complete"], final["coverage"]["unique_rows"]), (True, rows))
+        self.assertEqual(selection["adapter_sha256"], final["adapter_sha256"])
+        self.assertEqual(read_checkpoint(checkpoint_path(config.experiment_dir, 4),
+                                         [r["provenance"]["source_id"] for r in load_ready_export(config).train],
+                                         identity=selection["identity"])["update"], 4)
+        self.assertEqual(sorted(p.name for p in (config.experiment_dir / "adapter").iterdir()),
+                         sorted(p.name for p in (checkpoint_path(config.experiment_dir, 4) / "adapter").iterdir()))
+        metrics = [json.loads(line) for line in (config.experiment_dir / "training_metrics.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([m["update"] for m in metrics if "loss" in m], [1, 2, 3, 4])
+        self.assertEqual([m for m in metrics if "loss" not in m],
+                         [{"update": 2, "validation": "none", "coverage_complete": True},
+                          {"update": 4, "validation": "none", "coverage_complete": True}])
+        environment = self.json(config.experiment_dir / "environment.json")
+        self.assertEqual(environment["effective_settings"]["data"]["validation_mode"], "none")
+
+    def test_interrupted_run_is_not_selectable_and_resume_is_exact(self):
+        straight = self.ready_config("straight")
+        run_training(straight, loader=tiny_loader(), plan=PLAN)
+        interrupted = self.ready_config("interrupted")
+        with self.assertRaises(PipelineError):
+            run_training(interrupted, loader=tiny_loader(), plan=TrainPlan(4, 2, 2, stop_after=3))
+        self.assertFalse((interrupted.experiment_dir / "selection.json").exists())
+        sources = [r["provenance"]["source_id"] for r in load_ready_export(interrupted).train]
+        identity = self.json(checkpoint_path(interrupted.experiment_dir, 2) / "checkpoint.json")["identity"]
+        with self.assertRaises(PipelineError) as caught:
+            finalize_selection(interrupted.experiment_dir, PLAN, sources, identity, validation_mode="none")
+        self.assertEqual(caught.exception.code, "SFT_SELECTION")
+        self.assertIn("did not complete", str(caught.exception))
+        self.assertFalse((interrupted.experiment_dir / "selection.json").exists())
+        self.assertFalse((interrupted.experiment_dir / "adapter").exists())
+
+        resumed = run_training(interrupted, resume=checkpoint_path(interrupted.experiment_dir, 2), loader=tiny_loader(), plan=PLAN)
+        self.assertEqual((resumed["selection_mode"], resumed["selected_update"]), ("final_update", 4))
+        self.assert_same_adapter(self.adapter(straight, 4), self.adapter(interrupted, 4))
+
+        def progress(config):
+            state = self.json(checkpoint_path(config.experiment_dir, 4) / "checkpoint.json")
+            return state["coverage"], state["stream"], state["adapter_sha256"]
+
+        self.assertEqual(progress(straight), progress(interrupted))
+
+    def test_a_committed_final_checkpoint_resumes_into_selection_unchanged(self):
+        config = self.ready_config()
+        with self.assertRaises(PipelineError):
+            run_training(config, loader=tiny_loader(), plan=TrainPlan(4, 2, 2, stop_after=4))
+        final = checkpoint_path(config.experiment_dir, 4)
+        before = {p.relative_to(final).as_posix(): p.read_bytes() for p in final.rglob("*") if p.is_file()}
+        self.assertFalse((config.experiment_dir / "selection.json").exists())
+        result = run_training(config, resume=final, loader=tiny_loader(), plan=PLAN)
+        self.assertEqual(result["selected_update"], 4)
+        after = {p.relative_to(final).as_posix(): p.read_bytes() for p in final.rglob("*") if p.is_file()}
+        self.assertEqual(before, after, "Checkpoints are never modified in place")
+
+    def test_incompatible_identity_cannot_resume(self):
+        config = self.ready_config()
+        with self.assertRaises(PipelineError):
+            run_training(config, loader=tiny_loader(), plan=TrainPlan(4, 2, 2, stop_after=2))
+        path = checkpoint_path(config.experiment_dir, 2)
+
+        def other_packages(config):
+            runtime = tiny_loader()(config)
+            runtime.environment = {"packages": {"test": "2"}, "gpu": "none"}
+            return runtime
+
+        with self.assertRaises(PipelineError) as caught:
+            run_training(config, resume=path, loader=other_packages, plan=PLAN)
+        self.assertEqual(caught.exception.code, "SFT_IDENTITY")
+        self.assertIn("identity", str(caught.exception))
+
+    def test_smoke_needs_no_validation_and_stays_isolated(self):
+        config = self.ready_config()
+        report = run_training(config, smoke=True, loader=tiny_loader())
+        self.assertEqual((report["mode"], report["validation_mode"], report["updates"], report["frozen_unchanged"]),
+                         ("smoke", "none", 2, True))
+        self.assertGreater(report["feasibility"]["longest_row_tokens"], 0)
+        self.assertTrue(math.isfinite(report["feasibility"]["loss"]))
+        self.assertEqual(report["trainable"]["lora_weights"], 2 * 4 * 2)
+        state = self.json(checkpoint_path(config.experiment_dir / "smoke", 2) / "checkpoint.json")
+        self.assertEqual((state["validation_nll"], state["identity"]["plan"]["validation_limit"], state["identity"]["plan"]["smoke"]),
+                         (None, None, True))
+        self.assertFalse((config.experiment_dir / "checkpoints").exists())
+        self.assertFalse((config.experiment_dir / "selection.json").exists())
+        self.assertFalse((config.experiment_dir / "smoke/selection.json").exists())
+        self.assertEqual(run_training(config, loader=tiny_loader(), plan=PLAN)["selection_mode"], "final_update")
+
+    def test_plan_without_a_final_checkpoint_is_rejected_before_loading(self):
+        config = self.ready_config()
+
+        def forbidden(_):
+            raise AssertionError("Model must not load")
+
+        with self.assertRaises(PipelineError) as caught:
+            run_training(config, loader=forbidden, plan=TrainPlan(updates=5, evaluate_every=2, warmup=1))
+        self.assertIn("checkpoint at the last update", str(caught.exception))
+
+
 GPU_BASE = os.environ.get("LIFEMATE_SFT_GPU_BASE")
 
 
@@ -471,6 +651,24 @@ class RealGpuTests(unittest.TestCase):
             report = run_training(real, smoke=True)
             self.assertTrue(report["frozen_unchanged"])
             self.assertGreater(report["feasibility"]["peak_allocated_bytes"], 0)
+
+    def test_nf4_smoke_without_validation(self):
+        from lifemate.sft import parse_config
+        from lifemate.sft.data import load_tokenizer
+
+        with tempfile.TemporaryDirectory() as root:
+            raw = train_only_config(Path(root), many_sources()).record()
+            real = parse_config({"schema_version": 1, "data": {
+                **{k: raw["data"][k] for k in ("train_jsonl", "train_catalog", "permitted_use")},
+                "train_role": "train", "validation_mode": "none"},
+                "model": {"base_path": GPU_BASE},
+                "training": {"recipe": RECIPE["name"], "device": "cuda:0", "seed": RECIPE["seed"], "microbatch": 1, "accumulation": 16},
+                "limits": raw["limits"], "output": raw["output"]}, Path(root))
+            prepare(real, tokenizer=load_tokenizer(real.base_path))
+            report = run_training(real, smoke=True)
+            self.assertEqual((report["validation_mode"], report["frozen_unchanged"]), ("none", True))
+            self.assertGreater(report["feasibility"]["peak_allocated_bytes"], 0)
+            self.assertTrue(math.isfinite(report["feasibility"]["loss"]))
 
 
 if __name__ == "__main__":

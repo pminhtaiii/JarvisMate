@@ -5,8 +5,9 @@ see [recorded evidence](#recorded-evidence).
 
 ## Prerequisites
 
-Linux CUDA, Python >=3.11, one RTX 5090 or H200, permitted local train/validation
-and catalog files, pinned local base snapshot. Resolve the training extra against
+Linux CUDA, Python >=3.11, one RTX 5090 or H200, permitted local Train and catalog
+files (plus a labeled validation file only for `validation_mode = "separate"`), pinned
+local base snapshot. Resolve the training extra against
 the actual host, verify NF4 BF16 backward/memory and record a compatible environment
 lock before full training. See [training contract](contracts/training.md).
 
@@ -28,7 +29,44 @@ torch has none for the host, stop and record the incompatibility rather than edi
 
 Copy `configs/planner-sft.example.toml` to an ignored local
 file. Set paths/roles; start microbatch 1 and accumulation 16. Explicit larger
-microbatch must preserve product 16. No new holdout is created.
+microbatch must preserve product 16. No new holdout is created. Choose the
+[validation mode](contracts/training.md#validation-modes) explicitly: the example ships
+with `validation_mode = "none"`.
+
+### 100% Train, no validation (`validation_mode = "none"`)
+
+The supplied dataset v3.2.0 has no labeled validation file, so this is the mode that can
+run on it. Keep `validation_mode = "none"` and leave the three `validation_*` keys absent.
+A reviewed resolution for `train_1696` is still required; this mode does not bypass the audit.
+
+```text
+python -m lifemate.sft preflight --config <local.toml>
+python -m lifemate.sft prepare   --config <local.toml>
+python -m lifemate.sft train     --config <local.toml> --smoke   # 2 isolated NF4 updates under <experiment>/smoke
+python -m lifemate.sft train     --config <local.toml>
+python -m lifemate.sft train     --config <local.toml> --resume <experiment>/checkpoints/step-0N00   # only after an interruption
+python -m lifemate.sft export    --config <local.toml> --selection <experiment>/selection.json
+```
+
+Expected: `preflight` and `prepare` report `validation_mode: none` and overlap
+`not_applicable`; `sft/` holds `train.jsonl`, `audit.jsonl` and the manifest, with no
+validation file. Smoke writes `smoke/smoke_report.json` with `validation_mode: none` and
+`frozen_unchanged: true`. Train commits checkpoints at 100, 200, 300, 400 and 500, computes
+no NLL, and writes `selection.json` with `mode: final_update` and `selected_update: 500`.
+A run stopped before update 500 writes no selection; resume from the latest checkpoint. If
+it stopped after committing step 500, `--resume .../step-0500` runs no further update and selects it.
+Export rechecks the final checkpoint's digests, coverage and mode, and its manifest has
+no `validation_nll`. `diagnose` refuses this mode (`SFT_DIAGNOSTICS`) rather than compare
+on Train prompts.
+
+Limitation: without validation there is no checkpoint-selection signal and no held-out
+metric before the runtime assessment. Training loss on fitted rows is not a quality
+estimate. Overfitting after the first full epoch (305 updates for 4,865 rows) is not
+detected here.
+
+### Separate validation (`validation_mode = "separate"`)
+
+Set `validation_mode = "separate"` (or omit it) and set the three `validation_*` keys.
 
 ```text
 python -m lifemate.sft preflight --config <local.toml>
@@ -101,13 +139,31 @@ transformers 4.57.1 and peft from the `training` ranges. bitsandbytes was not in
 | Grammar admits gold | Scratch walk through `NativeConstraint`, one target per tool plus finish | 147 of 147 accepted, then EOS allowed |
 | CLI flow | Scratch copy holding out the last 20 Train rows as a stand-in validation | `preflight` passed, `prepare` blocked until `train_1696` was resolved, then `ready` with 4820 and 45 rows; `train` failed with `MODEL_UNAVAILABLE` for no GPU |
 
+No-validation mode (`validation_mode = "none"`), measured 2026-11-08 on the same Windows CPU-only
+machine. The repository venv had torch 2.9.0+cpu and transformers 4.57.1; peft 0.21.2 and
+accelerate 1.15.0 were installed into a scratch directory on `PYTHONPATH`. bitsandbytes was not
+installed, and no tokenizer, supplied-data or GPU variable was set.
+
+| Evidence | Command or input | Result |
+|---|---|---|
+| Standard library plus torch, no peft | `python -m unittest discover -s . -p "test_*.py"` from `python/tests` | 296 run, OK, 55 skipped |
+| SFT suite with model libraries | `python -m unittest discover -s . -p "test_sft_*.py"` | 129 run, 7 skipped; 2 failures in `TrainOnlyExportTests` (an unregistered `SFT_DIAGNOSTICS` code and a fixture without a covered non-final update), both fixed afterwards |
+| After those fixes | `python -m unittest -v test_sft_export.TrainOnlyExportTests` | 6 run, OK |
+
+The full model-library suite was not rerun after the two fixes. The controlled no-validation
+cases use the CPU tiny model and the character tokenizer. They show the mode's config,
+prepare, schedule, final selection, resume and export rules. They are no evidence of NF4
+behaviour, memory fit or model quality, and the NF4 smoke without validation has not run.
+
 The stand-in split only exercised the flow and is not a validation set. Supplied token counts
 used tokenizer files with a header-only weights file, so base-snapshot identity is unmeasured.
 
 Consequences for planning, from those counts rather than from any training run: with all
-Train rows, one epoch needs 305 updates, so only updates 400 and 500 can be selected. Updates
-100 to 300 remain diagnostics. Dataset v3.2.0 ships Train and unlabeled public test only: no
-separate validation file exists, and one must be supplied before `prepare` can be ready.
+Train rows, one epoch needs 305 updates, so in mode `separate` only updates 400 and 500 can be
+selected. Updates 100 to 300 remain diagnostics. Dataset v3.2.0 ships Train and unlabeled
+public test only: no separate validation file exists. Mode `separate` needs one supplied
+before `prepare` can be ready; mode `none` trains on all approved Train sources and selects
+update 500 (about 1.64 epochs at 4,865 rows).
 
 LMFE rejects a natural token that spans an escaped quote and an adjacent escape or string end,
 such as `\"\`. No Train gold argument contains a quote, backslash, tab or newline, so no
@@ -120,4 +176,6 @@ behaviour, memory fit, adapter-versus-merged drift on the real model, quality or
 ### Pending on the GPU host
 
 T016 NF4 smoke and environment lock, T017 full run, T020 drift diagnostics, T021 validation
-assessment and T022 Docker/A30 gates. Record commands, identities and results here.
+assessment and T022 Docker/A30 gates. Record commands, identities and results here. In mode
+`none`, T020 has no validation prompts and is not run by `diagnose`; the merged export's
+reload and protocol checks still run during `export`.

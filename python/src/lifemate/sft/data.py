@@ -361,18 +361,27 @@ def load_tokenizer(path: Path):
         raise PipelineError("MODEL_UNAVAILABLE", "Cannot load the local tokenizer", "sft_data") from exc
 
 
+def no_overlap_audit() -> JSON:
+    """Recorded in place of a cross-role audit when Train is the only role."""
+    return {"status": "not_applicable", "reason": "validation_mode none: Train is the only role"}
+
+
 def preflight(config: SftConfig) -> JSON:
     """Metadata only: configuration, roles, overlap and snapshot; loads no model library."""
     train = read_role("train", config.train_jsonl, config.train_catalog)
-    validation = read_role("validation", config.validation_jsonl, config.validation_catalog)
-    if train.identity["jsonl_sha256"] == validation.identity["jsonl_sha256"]:
-        raise blocked("Train and validation have identical content")
+    validation = None
+    if config.validated:
+        validation = read_role("validation", config.validation_jsonl, config.validation_catalog)
+        if train.identity["jsonl_sha256"] == validation.identity["jsonl_sha256"]:
+            raise blocked("Train and validation have identical content")
     read_resolutions(config.audit_resolutions)
-    overlap = audit_overlap(train, validation)
-    if overlap["status"] != "disjoint":
+    overlap = audit_overlap(train, validation) if validation is not None else no_overlap_audit()
+    if overlap["status"] not in ("disjoint", "not_applicable"):
         raise blocked(f"Train and validation overlap: {dumps(overlap)[:300]}")
-    return {"stage": "preflight", "state": "unvalidated", "train": train.identity, "validation": validation.identity,
-            "overlap": overlap, "base": base_identity(config, hash_files=False)}
+    return {"stage": "preflight", "state": "unvalidated", "validation_mode": config.validation_mode,
+            "selection_mode": config.selection_mode, "train": train.identity,
+            "validation": None if validation is None else validation.identity, "overlap": overlap,
+            "base": base_identity(config, hash_files=False)}
 
 
 def _accounting(sources: int, converted: dict[str, list[JSON]], included: set[str], entries: list[JSON]) -> JSON:
@@ -447,18 +456,23 @@ def prepare(config: SftConfig, *, tokenizer=None) -> JSON:
     if checkpoints.is_dir() and any(checkpoints.iterdir()):
         raise blocked("Experiment already has checkpoints; a changed export needs a new experiment")
     train = read_role("train", config.train_jsonl, config.train_catalog)
-    validation = read_role("validation", config.validation_jsonl, config.validation_catalog)
+    validation = (read_role("validation", config.validation_jsonl, config.validation_catalog)
+                  if config.validated else None)
     resolutions = read_resolutions(config.audit_resolutions)
     base = base_identity(config, hash_files=True)
-    overlap = audit_overlap(train, validation)
-    if train.identity["jsonl_sha256"] == validation.identity["jsonl_sha256"]:
-        overlap["status"] = "overlap"
+    if validation is None:
+        overlap = no_overlap_audit()
+    else:
+        overlap = audit_overlap(train, validation)
+        if train.identity["jsonl_sha256"] == validation.identity["jsonl_sha256"]:
+            overlap["status"] = "overlap"
     tokenizer = tokenizer if tokenizer is not None else load_tokenizer(config.base_path)
     template = validate_template(tokenizer)
     # Overlap stops before expansion: no row is derived from an invalid role assignment.
-    disjoint = overlap["status"] == "disjoint"
+    disjoint = overlap["status"] in ("disjoint", "not_applicable")
     train_rows, train_entries, train_counts = export_role(train, tokenizer, config, resolutions) if disjoint else ([], [], None)
-    valid_rows, valid_entries, valid_counts = export_role(validation, tokenizer, config, resolutions) if disjoint else ([], [], None)
+    valid_rows, valid_entries, valid_counts = (export_role(validation, tokenizer, config, resolutions)
+                                               if disjoint and validation is not None else ([], [], None))
     entries = train_entries + valid_entries
     stale = set(resolutions) - {(e["source_id"], e["reason"]) for e in entries}
     if disjoint and stale:
@@ -468,18 +482,22 @@ def prepare(config: SftConfig, *, tokenizer=None) -> JSON:
         reasons.append("cross-role overlap")
     if train_counts and train_counts["sources_unresolved"]:
         reasons.append(f"{train_counts['sources_unresolved']} unresolved training sources")
-    if disjoint and (not train_rows or not valid_rows):
+    if disjoint and (not train_rows or (validation is not None and not valid_rows)):
         reasons.append("no usable rows in a role")
     config.experiment_dir.mkdir(parents=True, exist_ok=True)
     stage = config.experiment_dir / f".sft-{uuid.uuid4().hex}"
     stage.mkdir()
     try:
-        files = {name: _write_jsonl(stage / name, rows) for name, rows in (
-            ("train.jsonl", train_rows), ("validation.next_action.jsonl", valid_rows), ("audit.jsonl", entries))}
+        # No validation file at all without a validation role, rather than an empty one.
+        outputs = [("train.jsonl", train_rows), ("audit.jsonl", entries)]
+        if validation is not None:
+            outputs.insert(1, ("validation.next_action.jsonl", valid_rows))
+        files = {name: _write_jsonl(stage / name, rows) for name, rows in outputs}
         manifest = {
             "schema": ROW_SCHEMA, "state": "blocked" if reasons else "ready", "blocked_reasons": reasons,
             "config_identity": config.identity(), "recipe": RECIPE_NAME, "permitted_use": config.permitted_use,
-            "sources": {"train": train.identity, "validation": validation.identity},
+            "validation_mode": config.validation_mode, "selection_mode": config.selection_mode,
+            "sources": {"train": train.identity, "validation": None if validation is None else validation.identity},
             "resolutions_sha256": None if config.audit_resolutions is None else digest(config.audit_resolutions),
             "overlap": overlap, "accounting": {"train": train_counts, "validation": valid_counts},
             "limits": {"context_tokens": config.context_tokens, "max_new_tokens": config.max_new_tokens},
@@ -493,7 +511,8 @@ def prepare(config: SftConfig, *, tokenizer=None) -> JSON:
     atomic_json(config.experiment_dir / "effective_config.json", config.record())
     if reasons:
         raise blocked("Export blocked: " + "; ".join(reasons))
-    return {"stage": "prepare", "state": "ready", "accounting": manifest["accounting"], "overlap": overlap}
+    return {"stage": "prepare", "state": "ready", "validation_mode": config.validation_mode,
+            "accounting": manifest["accounting"], "overlap": overlap}
 
 
 @dataclass(frozen=True)
@@ -528,10 +547,15 @@ def load_ready_export(config: SftConfig) -> ReadyExport:
     manifest = read_json(path, "SFT_IDENTITY")
     if not isinstance(manifest, dict) or manifest.get("state") != "ready":
         raise blocked("Prepared export is not ready")
+    # Exports from before validation modes existed were all "separate".
+    if manifest.get("validation_mode", "separate") != config.validation_mode:
+        raise PipelineError("SFT_IDENTITY", "Export was prepared under a different validation_mode", "sft_data")
     if manifest.get("config_identity") != config.identity():
         raise PipelineError("SFT_IDENTITY", "Export was prepared with a different recipe or limits", "sft_data")
-    for role, jsonl, catalog in (("train", config.train_jsonl, config.train_catalog),
-                                 ("validation", config.validation_jsonl, config.validation_catalog)):
+    roles = [("train", config.train_jsonl, config.train_catalog)]
+    if config.validated:
+        roles.append(("validation", config.validation_jsonl, config.validation_catalog))
+    for role, jsonl, catalog in roles:
         source = manifest["sources"][role]
         if digest(jsonl) != source["jsonl_sha256"] or digest(catalog) != source["catalog_sha256"]:
             raise PipelineError("SFT_IDENTITY", f"{role} sources changed after export", "sft_data")
@@ -539,8 +563,8 @@ def load_ready_export(config: SftConfig) -> ReadyExport:
         if not (config.sft_dir / name).is_file() or digest(config.sft_dir / name) != expected:
             raise PipelineError("SFT_IDENTITY", f"Export file {name} is missing or changed", "sft_data")
     train = _read_rows(config.sft_dir / "train.jsonl", "train")
-    validation = _read_rows(config.sft_dir / "validation.next_action.jsonl", "validation")
+    validation = _read_rows(config.sft_dir / "validation.next_action.jsonl", "validation") if config.validated else ()
     counts = manifest["accounting"]
-    if len(train) != counts["train"]["rows"] or len(validation) != counts["validation"]["rows"]:
+    if len(train) != counts["train"]["rows"] or (config.validated and len(validation) != counts["validation"]["rows"]):
         raise PipelineError("SFT_IDENTITY", "Export row counts disagree with the manifest", "sft_data")
     return ReadyExport(manifest, digest(path), train, validation)

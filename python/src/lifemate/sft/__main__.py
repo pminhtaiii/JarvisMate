@@ -35,7 +35,8 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--smoke", action="store_true", help="Isolated short feasibility run under <experiment>/smoke")
     export = stage("export", "Merge the selected adapter into a standalone FP16 snapshot")
     export.add_argument("--selection", type=Path, required=True)
-    diagnose = stage("diagnose", "Compare the selected adapter with its merged export on fixed validation prompts")
+    diagnose = stage("diagnose", "Compare the selected adapter with its merged export on fixed validation prompts "
+                               "(validation_mode separate only)")
     diagnose.add_argument("--selection", type=Path, required=True)
     return parser
 

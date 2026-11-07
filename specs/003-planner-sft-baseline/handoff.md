@@ -8,10 +8,12 @@
 
 ## Người giao việc điền trước khi gửi
 
-- [ ] Đã `git push` nhánh `codex/006-planner-sft-baseline` (từ commit `7b25503` trở đi).
-- [ ] File validation có nhãn, **không trùng với train**: `<đường dẫn>`. Gói dữ liệu v3.2.0 không có sẵn file này. Thiếu nó thì không chạy được bước `prepare`.
-- [ ] File train: `<đường dẫn>`. Nếu validation được tách từ train, đây phải là phần còn lại sau khi tách.
-- [ ] Quyết định về `train_1696`: loại (đề xuất) hoặc giữ. Xem bước 4.
+- [ ] Đã review và `git push` nhánh chứa chế độ không validation (`codex/007-sft-full-train-no-validation`), commit: `<sha>`.
+- [ ] Chế độ validation (`data.validation_mode`), mặc định cho handoff này là `"none"`:
+  - `"none"`: train trên **100% Train**, không có tập validation. Không tính validation NLL; checkpoint được chọn là update 500. Gói dữ liệu v3.2.0 chạy được bằng chế độ này.
+  - `"separate"`: cần một file validation có nhãn, **không trùng với train**: `<đường dẫn>`. Gói v3.2.0 không có sẵn file này.
+- [ ] File train: `<đường dẫn>`. Ở chế độ `"none"` đây là toàn bộ Train, không tách gì ra.
+- [ ] Quyết định về `train_1696`: loại (đề xuất) hoặc giữ. Bắt buộc ở **cả hai** chế độ. Xem bước 4.
 - [ ] Server, GPU được dùng (RTX 5090 hoặc H200), thư mục lưu kết quả: `<điền>`.
 
 ## 1. Cài môi trường
@@ -20,7 +22,7 @@ Cần Linux, Python >=3.11 và một GPU. Dùng venv riêng, **không cài extra
 
 ```bash
 git clone <repo-url> JarvisMate && cd JarvisMate
-git checkout codex/006-planner-sft-baseline
+git checkout codex/007-sft-full-train-no-validation
 python -m venv .venv-sft && . .venv-sft/bin/activate
 
 # Chọn wheel CUDA hợp với server; RTX 5090 cần CUDA 12.8 trở lên
@@ -49,16 +51,17 @@ Copy `configs/planner-sft.example.toml` ra một file ngoài repo, ví dụ `/co
 | Trường | Giá trị |
 |---|---|
 | `data.train_jsonl`, `data.train_catalog` | File train và catalog của nó |
-| `data.validation_jsonl`, `data.validation_catalog` | File validation và catalog của nó |
+| `data.validation_mode` | `"none"` (giữ như file mẫu) hoặc `"separate"` |
+| `data.validation_jsonl`, `data.validation_catalog`, `data.validation_role` | Chỉ dùng với `"separate"`. Với `"none"` phải **để trống** (giữ comment như file mẫu); có mặt là bị từ chối |
 | `model.base_path`, `model.revision` | Thư mục và sha từ bước 2 |
 | `training.device` | `cuda:0` (số thứ tự trong các GPU đang nhìn thấy) |
 | `output.experiment_dir` | Thư mục mới, **nằm ngoài** thư mục model và thư mục chứa dữ liệu |
 
-Không đổi `recipe`, `seed` và `limits`. Giữ `microbatch = 1`, `accumulation = 16`. Đường dẫn tương đối được tính từ thư mục chứa file config.
+Không đổi `recipe`, `seed` và `limits`. Giữ `microbatch = 1`, `accumulation = 16`. Đường dẫn tương đối được tính từ thư mục chứa file config. `validation_mode` không có cờ CLI để ghi đè, và `--validation-jsonl` bị từ chối ở chế độ `"none"`.
 
 ## 4. Xử lý mẫu bị gắn cờ (nếu dùng `train_1696`)
 
-Mẫu này chặn `prepare`, vì gold gọi `chat_6142`, một ID chưa từng xuất hiện, và kết quả trả về là không tìm thấy. Nếu người giao việc chọn loại, tạo `/config/sft-resolutions.json`:
+Mẫu này chặn `prepare` ở cả hai chế độ, vì gold gọi `chat_6142`, một ID chưa từng xuất hiện, và kết quả trả về là không tìm thấy. Chế độ `"none"` không tự loại hay tự giữ mẫu này. "100% Train" nghĩa là mọi mẫu hợp lệ đã được duyệt. Nếu người giao việc chọn loại, tạo `/config/sft-resolutions.json`:
 
 ```json
 {"resolutions": [{"source_id": "train_1696", "reason": "UNGROUNDED_ID",
@@ -89,8 +92,8 @@ python -m lifemate.sft train     --config "$CFG" --smoke
 
 **Kiểm tra trước khi train đầy đủ:**
 
-- `prepare` in `state: ready`, `overlap.status: disjoint`, và `sources_unresolved` của train bằng 0.
-- `$EXP/smoke/smoke_report.json` có `frozen_unchanged: true`.
+- `prepare` in `state: ready` và `sources_unresolved` của train bằng 0. Ở chế độ `"none"`: `validation_mode: none`, `overlap.status: not_applicable`, và `$EXP/sft/` không có file validation. Ở chế độ `"separate"`: `overlap.status: disjoint`.
+- `$EXP/smoke/smoke_report.json` có `frozen_unchanged: true` và đúng `validation_mode`.
 - `$EXP/smoke/environment.json` ghi đúng GPU và có `feasibility.peak_allocated_bytes`. So số này với bộ nhớ GPU.
 
 Smoke chỉ chạy 2 update, nên đây **không phải** kết quả train. Muốn chạy lại smoke, hãy chuyển thư mục `$EXP/smoke` sang chỗ khác trước.
@@ -98,15 +101,16 @@ Smoke chỉ chạy 2 update, nên đây **không phải** kết quả train. Mu�
 ```bash
 python -m lifemate.sft train    --config "$CFG"
 python -m lifemate.sft export   --config "$CFG" --selection "$EXP/selection.json"
-python -m lifemate.sft diagnose --config "$CFG" --selection "$EXP/selection.json"
+python -m lifemate.sft diagnose --config "$CFG" --selection "$EXP/selection.json"   # chỉ chế độ "separate"
 ```
 
 **Kết quả mong đợi:**
 
 - `train` chạy 500 update, lưu checkpoint tại 100, 200, 300, 400, 500 rồi ghi `selection.json`. Chưa có số đo về thời gian chạy.
-- Chỉ checkpoint đã phủ hết mọi dòng train mới được chọn. Update đủ điều kiện đầu tiên là bội số 100 nhỏ nhất đạt `rows / 16`. Với khoảng 4800–4865 dòng, đó là 300 hoặc 400. Update sớm có NLL thấp hơn mà không được chọn là **đúng thiết kế**.
-- `export` chạy trên CPU và tạo `$EXP/merged_fp16`, với `export_manifest.json` ở `state: reload_verified`. Ước tính cần khoảng 16 GB RAM trở lên khi merge; con số này chưa được đo.
-- `diagnose` dùng GPU và ghi `export_diagnostics.json`. Bản merge khác adapter vẫn có thể xảy ra, chỉ cần ghi nhận, không phải lỗi.
+- Chế độ `"none"`: không tính NLL nào. `checkpoint.json` có `validation_nll: null`. `selection.json` có `mode: final_update` và `selected_update: 500`. Chỉ chọn được khi checkpoint 500 tồn tại, khớp digest và đã phủ hết mọi dòng và mọi nguồn train (4865 dòng phủ hết ở update 305). Update 100–400 chỉ được liệt kê, không bao giờ được chọn.
+- Chế độ `"separate"`: chỉ checkpoint đã phủ hết mọi dòng train mới được chọn, theo NLL validation thấp nhất. Update đủ điều kiện đầu tiên là bội số 100 nhỏ nhất đạt `rows / 16`. Với khoảng 4800–4865 dòng, đó là 300 hoặc 400. Update sớm có NLL thấp hơn mà không được chọn là **đúng thiết kế**.
+- `export` chạy trên CPU và tạo `$EXP/merged_fp16`, với `export_manifest.json` ở `state: reload_verified` và đúng `selection_mode`. Ở chế độ `"none"` manifest không có `validation_nll`. Ước tính cần khoảng 16 GB RAM trở lên khi merge; con số này chưa được đo.
+- `diagnose` (chỉ chế độ `"separate"`) dùng GPU và ghi `export_diagnostics.json`. Bản merge khác adapter vẫn có thể xảy ra, chỉ cần ghi nhận, không phải lỗi. Ở chế độ `"none"`, lệnh này cố ý dừng với `SFT_DIAGNOSTICS`: không có prompt validation, và prompt Train không được dùng thay. Bước `export` vẫn kiểm tra reload offline và giao thức native.
 
 ## 6. Khi có sự cố
 
@@ -120,7 +124,8 @@ Mọi lỗi đều in một dòng JSON ra stderr với `code`, `stage`, `message
 | `SFT_TRAINING` do hết bộ nhớ GPU | Dừng và báo lại. Không giảm độ dài, không đổi recipe, không đổi batch |
 | `SFT_TRAINING` do loss hoặc gradient không hữu hạn | Dừng và báo lại, gửi kèm `training_metrics.jsonl` |
 | `SFT_IDENTITY` | Dữ liệu, model, gói Python hoặc checkpoint đã đổi so với lúc chạy. Không sửa tay các file manifest |
-| `SFT_SELECTION` | Không có checkpoint đủ điều kiện. Không tự chọn tay |
+| `SFT_SELECTION` | Không có checkpoint đủ điều kiện. Ở chế độ `"none"`, thường là train dừng trước update 500: resume từ checkpoint mới nhất. Không tự chọn tay, không sửa `selection.json` |
+| `SFT_DIAGNOSTICS` | `diagnose` ở chế độ `"none"`: đúng thiết kế, bỏ qua bước này |
 | `SFT_EXPORT` | Gửi lỗi. Nếu `merged_fp16` đã tồn tại, chuyển nó đi trước khi export lại |
 
 **Train bị ngắt giữa chừng:** tiếp tục từ checkpoint mới nhất, trong cùng môi trường Python:
@@ -129,7 +134,7 @@ Mọi lỗi đều in một dòng JSON ra stderr với `code`, `stage`, `message
 python -m lifemate.sft train --config "$CFG" --resume "$EXP/checkpoints/step-0300"
 ```
 
-Nếu ngắt trước update 100 thì chưa có checkpoint: chạy lại lệnh `train` không kèm `--resume`.
+Nếu ngắt trước update 100 thì chưa có checkpoint: chạy lại lệnh `train` không kèm `--resume`. Nếu đã có `step-0500` nhưng chưa có `selection.json`, resume từ `step-0500`: không chạy thêm update nào, checkpoint được kiểm tra rồi chọn mà không bị ghi đè.
 
 **Muốn đổi dữ liệu sau khi đã có checkpoint:** `prepare` sẽ từ chối. Hãy dùng `experiment_dir` mới.
 
@@ -138,7 +143,7 @@ Nếu ngắt trước update 100 thì chưa có checkpoint: chạy lại lệnh 
 Gửi qua kênh nội bộ của đội, không qua git:
 
 - [ ] Các lệnh đã chạy và exit code tương ứng; commit đã chạy (`git rev-parse HEAD`); sha của model.
-- [ ] `effective_config.json`, `environment.json`, `selection.json`, `training_metrics.jsonl`, `export_manifest.json`, `export_diagnostics.json`, `sft/export_manifest.json`, `sft/audit.jsonl`, `smoke/smoke_report.json`.
+- [ ] `effective_config.json`, `environment.json`, `selection.json`, `training_metrics.jsonl`, `export_manifest.json`, `export_diagnostics.json` (chỉ chế độ `"separate"`), `sft/export_manifest.json`, `sft/audit.jsonl`, `smoke/smoke_report.json`.
 - [ ] Thời gian thực tế của mỗi bước và lượng GPU peak.
 - [ ] Vị trí lưu `merged_fp16/` và `adapter/`.
 - [ ] Mọi lỗi đã gặp, kể cả lỗi đã vượt qua.
@@ -149,7 +154,7 @@ Gửi qua kênh nội bộ của đội, không qua git:
 
 - Không tìm hyperparameter, không đổi recipe, không chạy lần train thứ hai khi chưa trao đổi.
 - Không dùng public test hay private test để tune hoặc chọn checkpoint.
-- Validation NLL **không phải** điểm thi, nên đừng báo cáo nó như điểm thi.
+- Validation NLL **không phải** điểm thi, nên đừng báo cáo nó như điểm thi. Ở chế độ `"none"` không có validation NLL. Training loss trên dữ liệu đã fit không phải số đo chất lượng.
 - Chấm thật trên validation với audio và ToolEnv (T021) cùng kiểm tra Docker/A30 (T022) là bước sau, đi qua runtime của feature 002 với `planner.model_path` trỏ tới `merged_fp16`.
 
 ## Tham khảo

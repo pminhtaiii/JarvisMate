@@ -16,7 +16,7 @@ from lifemate.sft.data import (audit_overlap, convert_source, encode_row, load_r
                                read_role, reference_values, schema_errors)
 from lifemate.sft.__main__ import main
 from sft_support import (ASK, CATALOG, FOUND, SEARCH, SEND, SENT, SENTINEL, WAITING, CharTokenizer, make_config, source,
-                         write_role)
+                         train_only_config, write_role)
 
 LOOKUP = source("train_0001", calls=[SEARCH, SEND], results=[FOUND, SENT])
 EMPTY = source("train_0002", request="Chào bạn")
@@ -181,6 +181,113 @@ class PrepareTests(TemporaryRoot):
         self.assertEqual(caught.exception.code, "SFT_BLOCKED")
         toml = self.root / "missing.toml"
         self.assertEqual(main(["preflight", "--config", str(toml)]), 1)
+
+
+class TrainOnlyPrepareTests(TemporaryRoot):
+    """validation_mode "none": 100% of approved Train, nothing split off, audit unchanged."""
+
+    def run_prepare(self, config):
+        return prepare(config, tokenizer=CharTokenizer())
+
+    def manifest(self, config):
+        return json.loads((config.sft_dir / "export_manifest.json").read_text(encoding="utf-8"))
+
+    def test_preflight_and_prepare_need_no_validation_inputs(self):
+        config = train_only_config(self.root, [LOOKUP, EMPTY, CLARIFY])
+        self.assertFalse((self.root / "data/validation").exists())
+        report = preflight(config)
+        self.assertEqual((report["validation_mode"], report["selection_mode"], report["validation"]), ("none", "final_update", None))
+        self.assertEqual(report["overlap"]["status"], "not_applicable")
+        result = self.run_prepare(config)
+        self.assertEqual((result["state"], result["validation_mode"]), ("ready", "none"))
+        counts = result["accounting"]["train"]
+        self.assertEqual((counts["sources"], counts["sources_with_rows"], counts["rows"]), (3, 3, 6))
+        self.assertIsNone(result["accounting"]["validation"])
+        self.assertEqual(sorted(p.name for p in config.sft_dir.iterdir()), ["audit.jsonl", "export_manifest.json", "train.jsonl"])
+        manifest = self.manifest(config)
+        self.assertEqual((manifest["validation_mode"], manifest["selection_mode"], manifest["sources"]["validation"]),
+                         ("none", "final_update", None))
+        self.assertEqual(set(manifest["files_sha256"]), {"train.jsonl", "audit.jsonl"})
+        ready = load_ready_export(config)
+        self.assertEqual(ready.validation, ())
+        self.assertEqual([r["provenance"]["source_id"] for r in ready.train],
+                         ["train_0001"] * 3 + ["train_0002"] + ["train_0003"] * 2, "Source order, nothing split off")
+        self.assertTrue(all(r["provenance"]["role"] == "train" for r in ready.train))
+        effective = json.loads((config.experiment_dir / "effective_config.json").read_text(encoding="utf-8"))
+        self.assertEqual((effective["data"]["validation_mode"], effective["recipe"]["validation"]), ("none", "none"))
+
+    def test_export_is_deterministic(self):
+        config = train_only_config(self.root, [LOOKUP, EMPTY, CLARIFY])
+        self.run_prepare(config)
+        first = (config.sft_dir / "train.jsonl").read_bytes()
+        self.run_prepare(config)
+        self.assertEqual((config.sft_dir / "train.jsonl").read_bytes(), first)
+
+    def test_ungrounded_source_stays_blocked_until_an_explicit_reviewed_decision(self):
+        # Shaped like train_1696: gold names an x-ref ID that no visible text grounds.
+        flagged = source("train_1696", calls=[SEND], results=[SENT])
+        config = train_only_config(self.root, [LOOKUP, flagged])
+        with self.assertRaises(PipelineError) as caught:
+            self.run_prepare(config)
+        self.assertEqual(caught.exception.code, "SFT_BLOCKED")
+        self.assertIn("1 unresolved training sources", str(caught.exception))
+        entries = [json.loads(l) for l in (config.sft_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([(e["source_id"], e["reason"], e["status"]) for e in entries], [("train_1696", "UNGROUNDED_ID", "unresolved")])
+        self.assertEqual(self.manifest(config)["state"], "blocked")
+        with self.assertRaises(PipelineError):
+            load_ready_export(config)
+
+        for decision, status, kept in (("exclude", "excluded", False), ("keep", "kept", True)):
+            with self.subTest(decision=decision):
+                resolution = [{"source_id": "train_1696", "reason": "UNGROUNDED_ID", "decision": decision, "note": "reviewed"}]
+                config = train_only_config(self.root, [LOOKUP, flagged], resolutions=resolution)
+                counts = self.run_prepare(config)["accounting"]["train"]
+                self.assertEqual((counts["sources_with_rows"], counts["sources_excluded"], counts["sources_unresolved"]),
+                                 (2 if kept else 1, 0 if kept else 1, 0))
+                status_seen = [json.loads(l)["status"] for l in (config.sft_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+                self.assertEqual(status_seen, [status])
+                sources = {r["provenance"]["source_id"] for r in load_ready_export(config).train}
+                self.assertEqual("train_1696" in sources, kept)
+
+    def test_competition_test_rows_are_rejected(self):
+        unlabeled = {k: v for k, v in source("train_0040").items() if k not in ("label", "audio_text")}
+        for row in (source("public_test_0001"), source("private_0001"), unlabeled):
+            with self.subTest(row=row["id"]):
+                config = train_only_config(self.root, [LOOKUP, row])
+                for stage in (preflight, self.run_prepare):
+                    with self.assertRaises(PipelineError) as caught:
+                        stage(config)
+                    self.assertIn("competition test row", str(caught.exception))
+
+    def test_changed_source_or_mode_after_prepare_is_rejected(self):
+        separate = make_config(self.root, [LOOKUP], [VALIDATION])
+        self.run_prepare(separate)
+        with self.assertRaises(PipelineError) as caught:
+            load_ready_export(train_only_config(self.root, [LOOKUP]))
+        self.assertEqual(caught.exception.code, "SFT_IDENTITY")
+        self.assertIn("validation_mode", str(caught.exception))
+
+        config = train_only_config(self.root, [LOOKUP])
+        self.run_prepare(config)
+        config.train_jsonl.write_text(config.train_jsonl.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        with self.assertRaises(PipelineError) as caught:
+            load_ready_export(config)
+        self.assertIn("changed", str(caught.exception))
+
+    def test_cli_preflight_accepts_a_train_only_configuration(self):
+        config = train_only_config(self.root, [LOOKUP])
+        toml = self.root / "train-only.toml"
+        toml.write_text(
+            'schema_version = 1\n[data]\n'
+            f'train_jsonl = {json.dumps(config.train_jsonl.as_posix())}\n'
+            f'train_catalog = {json.dumps(config.train_catalog.as_posix())}\n'
+            'train_role = "train"\nvalidation_mode = "none"\npermitted_use = "controlled test"\n'
+            f'[model]\nbase_path = {json.dumps(config.base_path.as_posix())}\n'
+            '[training]\nrecipe = "qlora-baseline-v1"\ndevice = "cuda:0"\nseed = 20261027\nmicrobatch = 1\naccumulation = 16\n'
+            '[limits]\ncontext_tokens = 16384\nmax_new_tokens = 512\n'
+            f'[output]\nexperiment_dir = {json.dumps(config.experiment_dir.as_posix())}\n', encoding="utf-8")
+        self.assertEqual(main(["preflight", "--config", str(toml)]), 0)
+        self.assertEqual(main(["preflight", "--config", str(toml), "--validation-jsonl", str(self.root / "v.jsonl")]), 1)
 
 
 TOKENIZER = os.environ.get("LIFEMATE_NATIVE_TOKENIZER")

@@ -22,9 +22,9 @@ from ..artifacts import atomic_json
 from ..configuration import ModelSettings, inspect_snapshot
 from ..contracts import JSON, PipelineError
 from ..jsonio import dumps, read_json
-from . import SftConfig
+from . import SELECTION_MODES, SftConfig
 from .data import ReadyExport, base_identity, encode_row, load_ready_export
-from .training import TrainPlan, checkpoint_path, read_checkpoint, select_checkpoint
+from .training import TrainPlan, checkpoint_path, read_candidates, select_for
 
 # Copied verbatim so the export serves the exact tokenizer, template and generation settings.
 COPIED_FILES = ("tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt", "added_tokens.json",
@@ -47,6 +47,9 @@ def verify_selection(config: SftConfig, ready: ReadyExport, selection_path: Path
     identity = selection.get("identity")
     if not isinstance(identity, dict):
         raise failure("Selection has no run identity", "SFT_IDENTITY")
+    # Selections from before selection modes existed were all lowest-validation-NLL.
+    if selection.get("mode", SELECTION_MODES["separate"]) != config.selection_mode:
+        raise failure(f"Selection mode differs from this configuration's {config.selection_mode}", "SFT_SELECTION")
     # Packages and GPU may legitimately differ on the merging host; run-defining inputs may not.
     if (identity.get("config_identity") != config.identity()
             or identity.get("export_manifest_sha256") != ready.manifest_sha256
@@ -56,11 +59,11 @@ def verify_selection(config: SftConfig, ready: ReadyExport, selection_path: Path
     if identity.get("base_files_sha256") != base["files_sha256"]:
         raise failure("Base snapshot differs from the trained base", "SFT_IDENTITY")
     row_sources = [row["provenance"]["source_id"] for row in ready.train]
-    states = [read_checkpoint(checkpoint_path(config.experiment_dir, update), row_sources, identity=identity)
-              for update in plan.candidates]
-    recomputed = select_checkpoint(states)
+    states = read_candidates(config.experiment_dir, plan, row_sources, identity, config.validation_mode)
+    recomputed = select_for(config.validation_mode, states, plan)
     if recomputed["status"] != "selected":
-        raise failure("No fully covered finite-NLL checkpoint exists", "SFT_SELECTION")
+        raise failure("No fully covered finite-NLL checkpoint exists" if config.validated
+                      else f"The update-{plan.updates} checkpoint lacks full row/source coverage", "SFT_SELECTION")
     if (recomputed["selected_update"] != selection.get("selected_update")
             or recomputed["adapter_sha256"] != selection.get("adapter_sha256")):
         raise failure("Selection does not match the eligible checkpoint its evidence produces", "SFT_SELECTION")
@@ -117,12 +120,18 @@ def run_export(config: SftConfig, selection_path: Path, *, plan: TrainPlan | Non
         os.replace(stage, target)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
-    manifest = {"state": "merged", "protocol": PROTOCOL, "selected_update": state["update"],
+    manifest = {"state": "merged", "protocol": PROTOCOL, "validation_mode": config.validation_mode,
+                "selection_mode": config.selection_mode, "selected_update": state["update"],
                 "adapter_sha256": state["adapter_sha256"], "base_files_sha256": state["base"]["files_sha256"],
                 "base_revision": config.revision, "export_manifest_sha256": ready.manifest_sha256,
-                "validation_nll": state["validation_nll"], "dtype": merged["dtype"],
-                "parameter_count": merged["parameter_count"], "template_sha256": snapshot["template_sha256"],
-                "note": "Validation NLL is a teacher-forced diagnostic, not a competition score"}
+                "dtype": merged["dtype"], "parameter_count": merged["parameter_count"],
+                "template_sha256": snapshot["template_sha256"]}
+    if config.validated:
+        manifest |= {"validation_nll": state["validation_nll"],
+                     "note": "Validation NLL is a teacher-forced diagnostic, not a competition score"}
+    else:
+        manifest["note"] = ("Final update chosen without a validation set; no held-out metric exists, "
+                            "and this is not a quality or competition score")
     manifest_path = config.experiment_dir / "export_manifest.json"
     atomic_json(manifest_path, manifest)
     report = (verifier or verify_reload_subprocess)(target)
@@ -245,6 +254,10 @@ def run_diagnostics(config: SftConfig, selection_path: Path, *, count: int = 8, 
                     adapter_loader=load_adapter_for_diagnostics, merged_loader=load_merged_for_diagnostics,
                     device: str | None = None) -> JSON:
     """Record drift between the selected adapter and its export; equivalence is never assumed."""
+    if not config.validated:
+        # Train prompts are not substituted: fitted rows would make the comparison look independent.
+        raise failure("diagnose uses fixed validation prompts; validation_mode none has none, and Train prompts "
+                      "are not substituted", "SFT_DIAGNOSTICS")
     import torch
 
     from .data import load_tokenizer

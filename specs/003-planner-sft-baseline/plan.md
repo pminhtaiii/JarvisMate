@@ -54,6 +54,7 @@ combined models <6B, planner <5B, prompt plus output <=16,384 tokens.
 | Sequence / output budget | 16,384 total; reserve max_new_tokens=512 by default |
 | Save/evaluate | Updates 100, 200, 300, 400, 500; token-weighted validation completion NLL |
 | Selection | Among checkpoints with 100% unique training-row/source coverage, lowest finite NLL; exact ties choose earlier update |
+| No-validation mode | `validation_mode = "none"`: 100% of approved Train, checkpoints still at 100..500, no NLL; select update 500 only after all 500 updates with full coverage ([contract](contracts/training.md#validation-modes)) |
 | Export | Merge selected adapter into fresh original unquantized base; FP16 |
 
 Optimizer details, seed and schedule are explicit planning defaults, not previously

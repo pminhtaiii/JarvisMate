@@ -25,6 +25,13 @@ At the user's explicit request:
 - **Coverage-safe selection.** Lowest finite validation NLL among the five candidates
   that trained on every ready row and source; an exact tie takes the earlier update.
   Earlier candidates remain diagnostics. NLL is not a competition score.
+- **Train-only alternative (added 2026-11-08).** Dataset v3.2.0 ships no labeled
+  validation set, so `data.validation_mode = "none"` fits 100% of the approved Train
+  sources with no held-out set. It selects the update-500 checkpoint only after all 500
+  updates complete with full coverage; it computes no validation NLL and is recorded as its
+  own selection mode and config identity. Hyperparameters, the audit and the overlap rule
+  for `separate` are unchanged. This mode has no checkpoint-selection signal and no
+  pre-runtime quality evidence; the closed-loop runtime assessment is the first measurement.
 
 ## Consequences
 

@@ -15,7 +15,7 @@ ERROR_CODES = frozenset({
     # Integration entry point only (ADR 011); the legacy runner never emits these.
     "WORKER_FAILED", "RUN_OWNERSHIP", "JOURNAL_INVALID", "RECOVERY_FAILED",
     # Planner SFT development CLI only (ADR 012).
-    "SFT_BLOCKED", "SFT_IDENTITY", "SFT_TRAINING", "SFT_SELECTION", "SFT_EXPORT",
+    "SFT_BLOCKED", "SFT_IDENTITY", "SFT_TRAINING", "SFT_SELECTION", "SFT_EXPORT", "SFT_DIAGNOSTICS",
 })
 
 

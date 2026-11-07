@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from lifemate.contracts import PipelineError
-from lifemate.sft import RECIPE, load_config, parse_config
+from lifemate.sft import FINAL_UPDATE_RULE, RECIPE, load_config, parse_config
 from lifemate.sft.__main__ import main
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -22,6 +22,19 @@ VALID = {
     "limits": {"context_tokens": 16384, "max_new_tokens": 512},
     "output": {"experiment_dir": "runs/one"},
 }
+
+
+# Pinned from the code before validation modes existed: a "separate" run keeps its identity.
+LEGACY_IDENTITY = "048f4065ea0c5bc4edf5953f2c33f7e8da591e29949789cfc2ffd6a83b7f1685"
+VALIDATION_KEYS = ("validation_jsonl", "validation_catalog", "validation_role")
+
+
+def train_only(**data):
+    raw = copy.deepcopy(VALID)
+    for key in VALIDATION_KEYS:
+        del raw["data"][key]
+    raw["data"].update({"validation_mode": "none"} | data)
+    return raw
 
 
 def changed(section=None, **values):
@@ -45,6 +58,14 @@ class ConfigurationTests(unittest.TestCase):
     def test_shipped_example_is_valid(self):
         raw = tomllib.loads((REPOSITORY / "configs/planner-sft.example.toml").read_text(encoding="utf-8"))
         self.assertEqual(parse_config(raw, REPOSITORY).microbatch * parse_config(raw, REPOSITORY).accumulation, 16)
+        self.assertEqual(parse_config(raw, REPOSITORY).validation_mode, "none")
+
+    def test_shipped_example_switches_to_separate_as_documented(self):
+        text = (REPOSITORY / "configs/planner-sft.example.toml").read_text(encoding="utf-8")
+        text = text.replace('validation_mode = "none"', 'validation_mode = "separate"')
+        text = "\n".join(line[2:] if line.startswith("# validation_") else line for line in text.splitlines())
+        config = parse_config(tomllib.loads(text), REPOSITORY)
+        self.assertEqual((config.validation_mode, config.validation_jsonl.name), ("separate", "validation.jsonl"))
 
     def test_unknown_fields_and_wrong_types_are_rejected(self):
         self.rejected(changed(extra=1), "Unknown configuration section")
@@ -89,6 +110,58 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotEqual(one.identity(), parse_config(changed("limits", max_new_tokens=256), Path.cwd()).identity())
 
 
+class ValidationModeTests(unittest.TestCase):
+    rejected = ConfigurationTests.rejected  # Same bounded INPUT_INVALID check.
+
+    def test_absent_mode_is_separate_and_keeps_the_existing_identity(self):
+        legacy = parse_config(VALID, Path.cwd())
+        self.assertEqual((legacy.validation_mode, legacy.selection_mode), ("separate", "lowest_validation_nll"))
+        self.assertEqual(legacy.identity(), LEGACY_IDENTITY)
+        self.assertIs(legacy.recipe, RECIPE)
+        explicit = parse_config(changed("data", validation_mode="separate"), Path.cwd())
+        self.assertEqual(explicit.identity(), LEGACY_IDENTITY)
+
+    def test_train_only_mode_needs_no_validation_inputs_and_records_itself(self):
+        config = parse_config(train_only(), Path.cwd())
+        self.assertEqual((config.validation_mode, config.selection_mode), ("none", "final_update"))
+        self.assertEqual((config.validation_jsonl, config.validation_catalog), (None, None))
+        record = config.record()
+        self.assertEqual((record["data"]["validation_mode"], record["data"]["selection_mode"]), ("none", "final_update"))
+        self.assertIsNone(record["data"]["validation_jsonl"])
+        self.assertEqual((record["recipe"]["selection"], record["recipe"]["validation"]), (FINAL_UPDATE_RULE, "none"))
+        hyperparameters = {k: v for k, v in record["recipe"].items() if k not in ("selection", "validation")}
+        self.assertEqual(hyperparameters, {k: v for k, v in RECIPE.items() if k != "selection"}, "Recipe unchanged")
+        self.assertNotEqual(config.identity(), LEGACY_IDENTITY, "The modes never share an identity")
+
+    def test_train_only_mode_rejects_any_validation_input(self):
+        for key, value in (("validation_jsonl", "data/validation/v.jsonl"), ("validation_catalog", "data/train/catalog.json"),
+                           ("validation_role", "validation")):
+            with self.subTest(key=key):
+                self.rejected(train_only(**{key: value}), "remove data." + key)
+
+    def test_separate_mode_never_falls_back_to_train_only(self):
+        for mode in (None, "separate"):
+            raw = changed("data", **({} if mode is None else {"validation_mode": mode}))
+            del raw["data"]["validation_jsonl"]
+            with self.subTest(mode=mode):
+                self.rejected(raw, "Missing data.validation_jsonl")
+
+    def test_unknown_mode_is_rejected(self):
+        for value in ("auto", "", "None", "train"):
+            with self.subTest(value=value):
+                self.rejected(train_only(validation_mode=value), "validation_mode")
+        self.rejected(train_only(validation_mode=False), "Invalid type")
+
+    def test_train_only_mode_still_rejects_test_and_environment_inputs(self):
+        self.rejected(train_only(train_jsonl="data/public_test/public_test.jsonl"), "test data")
+        self.rejected(train_only(train_jsonl="data/x/private_test.jsonl"), "test data")
+        self.rejected(train_only(train_catalog="data/public_test/catalog.json"), "test data")
+        self.rejected(train_only(train_jsonl="data/train_environment/x.jsonl"), "environment")
+        raw = train_only()
+        raw["output"]["experiment_dir"] = "data/train/run"
+        self.rejected(raw, "outside")
+
+
 class CommandLineTests(unittest.TestCase):
     def test_bad_configuration_exits_nonzero_with_bounded_record(self):
         with tempfile.TemporaryDirectory() as root:
@@ -105,6 +178,18 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual((config.device, config.microbatch, config.accumulation), ("cuda:1", 4, 4))
             with self.assertRaises(PipelineError):
                 load_config(path, {"learning_rate": 1})
+
+    def test_train_only_mode_is_neither_overridden_nor_given_validation_by_override(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "config.toml"
+            path.write_text((REPOSITORY / "configs/planner-sft.example.toml").read_text(encoding="utf-8"), encoding="utf-8")
+            self.assertEqual(load_config(path).validation_mode, "none")
+            with self.assertRaises(PipelineError) as caught:
+                load_config(path, {"validation_jsonl": str(Path(root) / "v.jsonl")})
+            self.assertIn("remove data.validation_jsonl", str(caught.exception))
+            with self.assertRaises(PipelineError) as caught:
+                load_config(path, {"validation_mode": "separate"})
+            self.assertIn("Unknown override", str(caught.exception))
 
 
 if __name__ == "__main__":

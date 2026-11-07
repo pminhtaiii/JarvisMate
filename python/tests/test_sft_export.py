@@ -20,7 +20,7 @@ from lifemate.sft.__main__ import main
 from lifemate.sft.data import load_ready_export, prepare
 from lifemate.sft.export import protocol_cases, run_diagnostics, run_export, verify_reload, verify_selection
 from lifemate.sft.training import TrainPlan, checkpoint_path, run_training
-from sft_support import CharTokenizer, make_config
+from sft_support import CharTokenizer, make_config, train_only_config
 from test_sft_training import PLAN, VALIDATION, HAS_MODEL_LIBRARIES, many_sources, tiny_loader
 
 TOKENIZER = os.environ.get("LIFEMATE_NATIVE_TOKENIZER")
@@ -92,6 +92,15 @@ class SelectionEvidenceTests(unittest.TestCase):
         self.forged(status="failed", selected_update=None)
         self.assertEqual(self.code(self.verify)[0], "SFT_SELECTION")
 
+    def test_selection_mode_must_match_and_legacy_records_stay_valid(self):
+        self.assertEqual(json.loads(self.original)["mode"], "lowest_validation_nll")
+        record = json.loads(self.original)
+        del record["mode"]  # Written before selection modes existed.
+        self.selection.write_text(json.dumps(record), encoding="utf-8")
+        self.assertEqual(self.verify()[0]["update"], record["selected_update"])
+        self.forged(mode="final_update")
+        self.assertEqual(self.code(self.verify)[0], "SFT_SELECTION")
+
     def test_foreign_run_identity_is_rejected(self):
         record = json.loads(self.original)
         record["identity"]["export_manifest_sha256"] = "0" * 64
@@ -130,6 +139,104 @@ class SelectionEvidenceTests(unittest.TestCase):
     def test_existing_export_is_not_overwritten(self):
         (self.config.experiment_dir / "merged_fp16").mkdir()
         self.assertIn("already exists", self.code(lambda: run_export(self.config, self.selection, plan=self.plan, merge=fake_merge))[1])
+
+
+@unittest.skipUnless(HAS_MODEL_LIBRARIES, "Needs torch, transformers, peft and safetensors")
+class TrainOnlyExportTests(unittest.TestCase):
+    """validation_mode "none": export recomputes the final-update selection from committed evidence."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.root = Path(cls.temporary.name)
+        # 18 rows: updates 2 and 3 already cover every row but are not final.
+        cls.plan = TrainPlan(updates=4, evaluate_every=1, warmup=1)
+        cls.config = train_only_config(cls.root, many_sources(9))
+        prepare(cls.config, tokenizer=CharTokenizer())
+        run_training(cls.config, loader=tiny_loader(), plan=cls.plan)
+        cls.selection = cls.config.experiment_dir / "selection.json"
+        cls.original = cls.selection.read_text(encoding="utf-8")
+
+    def setUp(self):
+        self.selection.write_text(self.original, encoding="utf-8")
+        for name in ("merged_fp16", "export_manifest.json"):
+            target = self.config.experiment_dir / name
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+        self.addCleanup(lambda: self.selection.write_text(self.original, encoding="utf-8"))
+
+    def verify(self):
+        return verify_selection(self.config, load_ready_export(self.config), self.selection, plan=self.plan)
+
+    def forged(self, **changes):
+        self.selection.write_text(json.dumps(json.loads(self.original) | changes), encoding="utf-8")
+
+    def code(self, call):
+        with self.assertRaises(PipelineError) as caught:
+            call()
+        return caught.exception.code, str(caught.exception)
+
+    def test_final_update_selection_verifies_and_exports_with_its_mode(self):
+        record = json.loads(self.original)
+        self.assertEqual((record["mode"], record["selected_update"], record["validation"]), ("final_update", 4, "none"))
+        state, adapter = self.verify()
+        self.assertEqual((state["update"], state["validation_nll"]), (4, None))
+        self.assertEqual(adapter, checkpoint_path(self.config.experiment_dir, 4) / "adapter")
+        result = run_export(self.config, self.selection, plan=self.plan, merge=fake_merge, verifier=lambda path: {"verified": True})
+        self.assertEqual((result["state"], result["selected_update"]), ("reload_verified", 4))
+        manifest = json.loads((self.config.experiment_dir / "export_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual((manifest["validation_mode"], manifest["selection_mode"]), ("none", "final_update"))
+        self.assertEqual(manifest["adapter_sha256"], record["adapter_sha256"])
+        self.assertNotIn("validation_nll", manifest, "No metric is fabricated")
+        self.assertIn("without a validation set", manifest["note"])
+
+    def test_covered_earlier_update_cannot_be_exported(self):
+        candidates = json.loads(self.original)["candidates"]
+        self.assertEqual([(c["update"], c["covered"], c["eligible"]) for c in candidates],
+                         [(1, False, False), (2, True, False), (3, True, False), (4, True, True)])
+        earlier = candidates[2]
+        self.forged(selected_update=3, adapter_sha256=earlier["adapter_sha256"])
+        self.assertEqual(self.code(self.verify)[0], "SFT_SELECTION")
+
+    def test_mode_mismatch_or_missing_mode_is_rejected(self):
+        for mode in ("lowest_validation_nll", None):
+            with self.subTest(mode=mode):
+                record = json.loads(self.original)
+                if mode is None:
+                    del record["mode"]  # A legacy record means lowest validation NLL.
+                else:
+                    record["mode"] = mode
+                self.selection.write_text(json.dumps(record), encoding="utf-8")
+                self.assertEqual(self.code(self.verify)[0], "SFT_SELECTION")
+
+    def test_changed_final_adapter_is_rejected(self):
+        weights = checkpoint_path(self.config.experiment_dir, 4) / "adapter/adapter_model.safetensors"
+        original = weights.read_bytes()
+        self.addCleanup(weights.write_bytes, original)
+        weights.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        self.assertEqual(self.code(self.verify)[0], "SFT_IDENTITY")
+
+    def test_missing_final_checkpoint_is_rejected(self):
+        final = checkpoint_path(self.config.experiment_dir, 4)
+        aside = final.with_name("moved-step-0004")
+        final.rename(aside)
+        self.addCleanup(aside.rename, final)
+        code, message = self.code(self.verify)
+        self.assertEqual(code, "SFT_SELECTION")
+        self.assertIn("did not complete", message)
+
+    def test_diagnostics_refuse_rather_than_substitute_train_prompts(self):
+        def forbidden(*_):
+            raise AssertionError("No model may load")
+
+        code, message = self.code(lambda: run_diagnostics(self.config, self.selection, plan=self.plan,
+                                                          adapter_loader=forbidden, merged_loader=forbidden))
+        self.assertEqual(code, "SFT_DIAGNOSTICS")
+        self.assertIn("not substituted", message)
+        self.assertFalse((self.config.experiment_dir / "export_diagnostics.json").exists())
 
 
 class ReloadCaseTests(unittest.TestCase):
