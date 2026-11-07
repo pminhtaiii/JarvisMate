@@ -62,6 +62,27 @@ def render_messages(prepared: JSON, observations: list[JSON]) -> list[JSON]:
     return messages
 
 
+def render_prompt(tokenizer, prepared: JSON, observations: list[JSON]) -> str:
+    """The one prompt rendering shared by inference and supervised export."""
+    return tokenizer.apply_chat_template(
+        render_messages(prepared, observations), tools=tool_definitions(prepared["available_tools"]),
+        tokenize=False, add_generation_prompt=True, enable_thinking=False)
+
+
+def completion_text(action: JSON) -> str:
+    """Canonical completion body for one action, EOS excluded; the inverse of parse_completion.
+
+    Spacing matches both the checkpoint template's assistant turns and the decoding grammar.
+    """
+    if action == {"action": "finish"}:
+        return FINISH_TEXT
+    if (not isinstance(action, dict) or set(action) != {"action", "name", "arguments"} or action["action"] != "call"
+            or not isinstance(action["name"], str) or not isinstance(action["arguments"], dict)):
+        raise NativeFormatError("Action must be one call or finish")
+    body = json.dumps({"name": action["name"], "arguments": action["arguments"]}, ensure_ascii=False, allow_nan=False)
+    return f"{CALL_OPEN}\n{body}\n{CALL_CLOSE}"
+
+
 def parse_completion(text: str, eligible: set[str]) -> JSON:
     """Map one decoded completion (EOS already verified and removed) to a canonical action."""
     if not isinstance(text, str):
@@ -289,9 +310,7 @@ class NativePlanner(ModelResidency):
             raise PipelineError("MODEL_UNAVAILABLE", "Cannot load the local Qwen checkpoint/tokenizer", "model_load") from exc
 
     def render(self, prepared: JSON, observations: list[JSON]) -> str:
-        return self.tokenizer.apply_chat_template(
-            render_messages(prepared, observations), tools=tool_definitions(prepared["available_tools"]),
-            tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        return render_prompt(self.tokenizer, prepared, observations)
 
     def decide(self, prepared: JSON, observations: list[JSON], remaining_seconds: float) -> tuple[JSON, JSON]:
         from .common import stopping_criteria

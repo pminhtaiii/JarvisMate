@@ -12,8 +12,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lifemate.adapters.qwen_native import (CALL_CLOSE, CALL_OPEN, FINISH_TEXT, NativeFormatError,
-                                           NativePlanner, completion_tokens, parse_completion,
-                                           render_messages, tool_definitions, validate_template)
+                                           NativePlanner, completion_text, completion_tokens, parse_completion,
+                                           render_messages, render_prompt, tool_definitions, validate_template)
 from lifemate.configuration import ModelSettings
 from lifemate.contracts import Limits, PipelineError
 from support import CATALOG
@@ -167,6 +167,31 @@ class AdapterTests(unittest.TestCase):
         self.model.generate.assert_not_called()
 
 
+class SupervisedTargetTests(unittest.TestCase):
+    def test_completion_text_inverts_parsing_with_exact_arguments(self):
+        for action in ({"action": "finish"},
+                       {"action": "call", "name": "contacts.search", "arguments": {"z": "Lân Đỗ", "a": [1, 2.5, None]}}):
+            with self.subTest(action=action):
+                text = completion_text(action)
+                self.assertEqual(parse_completion(text, ELIGIBLE | {"contacts.search"}), action)
+        self.assertEqual(list(parse_completion(completion_text(
+            {"action": "call", "name": "sms.send", "arguments": {"z": 1, "a": 2}}), ELIGIBLE)["arguments"]), ["z", "a"])
+
+    def test_completion_text_rejects_anything_but_one_action(self):
+        for action in ({"action": "call", "name": "x"}, {"action": "finish", "x": 1}, None):
+            with self.subTest(action=action), self.assertRaises(NativeFormatError):
+                completion_text(action)
+
+    def test_inference_renders_through_the_shared_prompt_function(self):
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "PROMPT"
+        planner = NativePlanner.__new__(NativePlanner)
+        planner.tokenizer = tokenizer
+        self.assertEqual(planner.render(PREPARED, []), render_prompt(tokenizer, PREPARED, []))
+        first, second = tokenizer.apply_chat_template.call_args_list
+        self.assertEqual(first, second)
+
+
 TOKENIZER = os.environ.get("LIFEMATE_NATIVE_TOKENIZER")
 
 
@@ -204,6 +229,15 @@ class ActualTokenizerTests(unittest.TestCase):
                 return False, sequence
             sequence.append(token)
         return True, enforcer.get_allowed_tokens(sequence).allowed_tokens
+
+    def test_supervised_target_is_what_constrained_decoding_admits(self):
+        for action in ({"action": "finish"},
+                       {"action": "call", "name": "contacts.search", "arguments": {"query": "Lân Đỗ"}},
+                       {"action": "call", "name": "sms.reply", "arguments": {"content": "Hi \"x\"\n", "contact_id": "c7"}}):
+            with self.subTest(action=action):
+                accepted, allowed = self.walk(completion_text(action))
+                self.assertTrue(accepted)
+                self.assertEqual(list(allowed), [self.tokenizer.eos_token_id])
 
     def test_template_validation_and_eos(self):
         report = validate_template(self.tokenizer)

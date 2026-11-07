@@ -94,8 +94,16 @@ def audio_path(base: Path, value, required: bool) -> Path:
 
 
 def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> SampleInput:
-    sample_id = safe_id(row["id"])
     base = (config.data_root / config.split).resolve()
+    sample = normalize_visible(row, specs, base, config.input_mode)
+    # Resolve the path and check existence only. The original runtime owns reading it.
+    contained(base, f"{config.split}_environment/{sample.id}/state.json", allow_environment=True)
+    return sample
+
+
+def normalize_visible(row: JSON, specs: dict[str, JSON], base: Path, input_mode: str) -> SampleInput:
+    """The inference input whitelist: labels and unknown fields never enter the result."""
+    sample_id = safe_id(row["id"])
     ctx = row.get("context")
     require(isinstance(ctx, dict), "Missing context")
     for name in ("current_time", "timezone"):
@@ -125,7 +133,7 @@ def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> Sa
             names.append(name)
     if "sys.ask_missing_info" not in names:
         names.append("sys.ask_missing_info")
-    audio_mode = config.input_mode == "audio"
+    audio_mode = input_mode == "audio"
     audio = audio_path(base, row.get("audio"), audio_mode)
     history = row.get("history")
     require(isinstance(history, list), "History must be a list")
@@ -153,14 +161,12 @@ def normalize_record(row: JSON, config: RunConfig, specs: dict[str, JSON]) -> Sa
                 entry["tool_results"] = copy.deepcopy(turn["tool_results"])
         normalized.append(entry)
     require(len(history) % 2 == 0, "History must end with assistant")
-    # Resolve the path and check existence only. The original runtime owns reading it.
-    contained(base, f"{config.split}_environment/{sample_id}/state.json", allow_environment=True)
     context = {"current_time": ctx["current_time"], "timezone": ctx["timezone"],
                "location": {k: loc[k] for k in ("lat", "lng")},
                "user_profile": {k: profile[k] for k in ("name", "home_address", "work_address", "city")},
                "installed_apps": {app: {"tools": list(info["tools"])} for app, info in installed.items()}}
     return SampleInput(sample_id, context, tuple(normalized),
-                       tuple(copy.deepcopy(specs[n]) for n in names), config.input_mode,
+                       tuple(copy.deepcopy(specs[n]) for n in names), input_mode,
                        audio, None if audio_mode else text(row.get("audio_text"), "current transcript"))
 
 
