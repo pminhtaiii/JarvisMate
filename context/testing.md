@@ -52,4 +52,15 @@ Preflight input failures stop the run and are recorded in the run manifest befor
 
 A correct transcript alone does not prove a correct tool plan. A valid call list alone does not prove the requested app state. A submitted hash alone does not prove reproducibility; verify replay with the same split-matched environment. Before submission, check the offline Docker run, total model-size and context limits, the 30-second per-sample budget, deterministic reruns, and one JSONL row per sample.
 
+The integration entry point keeps the same evidence rules with a different failure
+policy ([ADR 011](../docs/adr/011-configurable-docker-integration.md)): it continues
+after isolated failures, records each as `timeout`/`failed`/`EXECUTION_UNCERTAIN` in its
+journal, never reruns them and exits nonzero for incomplete coverage. Its controlled
+checks (`test_integration_*.py`, `test_qwen_native.py`, `test_asr_once.py`) use doubles,
+real subprocesses and, with `LIFEMATE_NATIVE_TOKENIZER`, the actual Qwen3 tokenizer;
+they do not establish GPU timing, memory fit, container behaviour or model accuracy.
+`python -m lifemate.diagnostics` joins Train references after inference for empty and
+clarification analysis. Recorded commands/results live in the
+[integration quickstart](../specs/002-docker-integration/quickstart.md#recorded-evidence).
+
 For implementation changes, run the narrowest meaningful behavioral tests first and the applicable integrated check before claiming completion. Reviewers compare the changed behavior with the task's issue/PR and [code standards](code_standard.md), and report only checks actually run.

@@ -6,16 +6,23 @@ import wave
 
 from ..contracts import Limits, PipelineError
 from ..dataset import wav_info
-from .common import ModelResidency, dependencies, metadata, model_directory, parameter_count, stopping_criteria
+from .common import (ModelResidency, dependencies, metadata, model_directory, parameter_count,
+                     resolve_device, stopping_criteria)
 
 
 class LocalASR(ModelResidency):
-    def __init__(self, path, device: str, limits: Limits, seed: int = 20261027, *, cpu_offload=False):
+    def __init__(self, path, device: str, limits: Limits, seed: int = 20261027, *, cpu_offload=False,
+                 dtype: str | None = None):
+        # Legacy callers pass cpu/cuda and no dtype; the integration passes cuda:N and a dtype.
         path = model_directory(path)
-        torch, hf, np = dependencies(device, seed)
+        device = resolve_device(device)
+        torch, hf, np = dependencies(device.split(":")[0], seed)
+        if device.startswith("cuda:") and int(device.partition(":")[2]) >= torch.cuda.device_count():
+            raise PipelineError("MODEL_UNAVAILABLE", "Requested CUDA device is not visible", "model_load")
         self.torch, self.hf, self.np, self.device = torch, hf, np, device
-        self.cpu_offload = cpu_offload and device == "cuda"
-        self.dtype = torch.float32 if device == "cpu" else torch.float16
+        self.cpu_offload = cpu_offload and device.startswith("cuda")
+        self.dtype = (getattr(torch, dtype) if dtype is not None
+                      else torch.float32 if device == "cpu" else torch.float16)
         try:
             self.processor = hf.WhisperProcessor.from_pretrained(path, local_files_only=True, trust_remote_code=False)
             self.model = hf.WhisperForConditionalGeneration.from_pretrained(

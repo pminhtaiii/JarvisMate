@@ -218,3 +218,67 @@ def prepare_request(sample: SampleInput, asr: ASR | None, deadline: Deadline) ->
     deadline.remaining()
     return {"request": text(request, "prepared request"), "context": copy.deepcopy(sample.context),
             "history": history, "available_tools": copy.deepcopy(list(sample.tools))}
+
+
+def audio_digest(path: Path) -> str:
+    """SHA-256 of the permitted WAV bytes only; never environment data."""
+    import hashlib
+
+    try:
+        visible_path(path)
+        with path.open("rb") as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    except OSError as exc:
+        raise PipelineError("ASSET_MISSING", "Selected audio clip is missing or unreadable", "asr") from exc
+
+
+def prepare_request_once(sample: SampleInput, asr: ASR | None, deadline: Deadline, *,
+                         asr_identity: str = "", clock=None) -> tuple[JSON, JSON]:
+    """Integration request preparation: each distinct clip is transcribed at most once.
+
+    The transcript map is keyed by audio-content digest plus effective ASR identity and
+    lives only for this call, so it can never improve another sample's latency. History
+    order is preserved; historical calls stay context and are never executed. Transcript
+    mode uses the supplied Train text and is a diagnostic, not audio acceptance.
+    """
+    import time
+
+    clock = clock or time.monotonic
+    audio_mode = sample.mode == "audio"
+    if audio_mode:
+        require(asr is not None, "Audio mode requires an ASR adapter", "MODEL_UNAVAILABLE")
+    transcripts: dict[tuple[str, str], str] = {}
+    clips: list[JSON] = []
+
+    def user_text(path: Path, supplied: str | None, position: str) -> str:
+        if not audio_mode:
+            return text(supplied, "supplied transcript")
+        started = clock()
+        key = (audio_digest(path), asr_identity)
+        reused = key in transcripts
+        if not reused:
+            value = asr.transcribe(path, deadline.remaining())
+            if not isinstance(value, str) or not value.strip():
+                # Never a silent finish instruction: the sample fails visibly at the ASR stage.
+                raise PipelineError("INPUT_INVALID", "ASR produced an empty transcript", "asr")
+            transcripts[key] = value
+        clips.append({"position": position, "sha256": key[0], "reused": reused,
+                      "seconds": clock() - started})
+        deadline.remaining()
+        return transcripts[key]
+
+    history = []
+    for index, turn in enumerate(sample.history):
+        deadline.remaining()
+        if turn["role"] == "user":
+            history.append({"role": "user", "text": user_text(turn["audio"], turn.get("text"), f"history[{index}]")})
+        else:
+            history.append(copy.deepcopy(turn))
+    request = user_text(sample.audio, sample.text, "current")
+    deadline.remaining()
+    prepared = {"request": request, "context": copy.deepcopy(sample.context), "history": history,
+                "available_tools": copy.deepcopy(list(sample.tools))}
+    stats = {"mode": "audio" if audio_mode else "transcript_diagnostic", "references": len(clips),
+             "distinct_clips": len(transcripts), "asr_calls": len(transcripts),
+             "reused_references": sum(c["reused"] for c in clips), "clips": clips}
+    return prepared, stats

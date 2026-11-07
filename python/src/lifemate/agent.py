@@ -28,6 +28,31 @@ def parse_action(raw: str, max_bytes: int = 65_536) -> JSON:
     return value
 
 
+def execute_call(env, name: str, arguments: JSON) -> JSON:
+    """Dispatch one validated call; arguments, even schema-invalid ones, reach ToolEnv's log."""
+    try:
+        result = env.call(name, arguments)
+    except Exception as exc:
+        raise PipelineError("EXECUTION_UNCERTAIN", "Tool execution raised; do not retry", "dispatch") from exc
+    if not isinstance(result, dict):
+        raise PipelineError("EXECUTION_UNCERTAIN", "Invalid tool response; do not retry", "dispatch")
+    dumps(result)
+    return result
+
+
+def failure_key(name: str, arguments: JSON, result: JSON):
+    """Schema errors with the same cause are not progress, even if irrelevant arguments change."""
+    if result.get("ok") is False:
+        return name, dumps(result)
+    if result.get("done") is False:
+        return name, dumps(arguments), dumps(result)
+    return None
+
+
+def waiting_for_user(name: str, result: JSON) -> bool:
+    return name == "sys.ask_missing_info" and result.get("ok") is True and result.get("waiting_for_user") is True
+
+
 def authoritative(env, sample_id: str) -> JSON:
     from .artifacts import validate_prediction
 
@@ -115,30 +140,20 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
                 trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
                 deadline.remaining()
                 started = clock()
-                # Arguments, including schema-invalid ones, reach the authoritative logger.
-                try:
-                    result = env.call(action["name"], action["arguments"])
-                except Exception as exc:
-                    raise PipelineError("EXECUTION_UNCERTAIN", "Tool execution raised; do not retry", stage) from exc
+                result = execute_call(env, action["name"], action["arguments"])
                 timings["tools"] += clock() - started
-                if not isinstance(result, dict):
-                    raise PipelineError("EXECUTION_UNCERTAIN", "Invalid tool response; do not retry", stage)
-                dumps(result)
                 trace.emit("tool_call_result", step=steps, name=action["name"], payload=result)
                 deadline.remaining()
                 observations.append({"step": steps, "kind": "tool_result", "name": action["name"],
                                      "arguments": action["arguments"], "result": result})
                 # Schema errors with the same cause are not progress, even if the model
                 # changes an irrelevant optional parameter. Every dispatched call stays logged.
-                failure = ((action["name"], dumps(result)) if result.get("ok") is False else
-                           (action["name"], dumps(action["arguments"]), dumps(result))
-                           if result.get("done") is False else None)
+                failure = failure_key(action["name"], action["arguments"], result)
                 repeated_failures = repeated_failures + 1 if failure is not None and failure == last_failure else 1
                 last_failure = failure
                 if failure is not None and repeated_failures >= 3:
                     raise PipelineError("NO_PROGRESS", "Three consecutive tool failures without progress", "planner")
-                if (action["name"] == "sys.ask_missing_info" and result.get("ok") is True
-                        and result.get("waiting_for_user") is True):
+                if waiting_for_user(action["name"], result):
                     status, reason = "needs_info", "waiting_for_user"
                     break
             else:
@@ -170,3 +185,106 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
             error = PipelineError("TRACE_IO", "Failure trace could not be persisted", "trace")
         return SampleOutcome(sample.id, "failed", deadline.elapsed(), steps, error.code,
                              error=error.record(), diagnostic=diagnostic, timings=timings)
+
+
+def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
+                           environment_factory: EnvironmentFactory, trace: TraceSink,
+                           limits: Limits, deadline: Deadline, *, split: str, data_root,
+                           asr_identity: str = "", clock=time.monotonic) -> SampleOutcome:
+    """Native integration path (ADR 011): one prepared request, one ToolEnv, real feedback.
+
+    ``planner.decide(prepared, observations, remaining)`` returns one canonical action
+    plus decision metrics. Invalid model output fails the sample; there is no repair,
+    re-prompt or unconstrained fallback. Historical calls are never executed.
+    """
+    from .dataset import prepare_request_once
+
+    env, steps, stage = None, 0, "request"
+    timings = {"request": 0.0, "environment": 0.0, "planner": 0.0, "tools": 0.0, "collection": 0.0}
+    metrics: JSON = {"asr": None, "decisions": [], "tools": []}
+
+    def span(name, started):
+        timings[name] += clock() - started
+
+    try:
+        trace.emit("sample_started", input_mode=sample.mode, protocol="qwen-native-v1")
+        started = clock()
+        with inference_session(asr):
+            prepared, metrics["asr"] = prepare_request_once(sample, asr, deadline, asr_identity=asr_identity,
+                                                            clock=clock)
+        span("request", started)
+        trace.emit("request_prepared", payload={"request": prepared["request"], "history": prepared["history"]},
+                   available_tools=[t["name"] for t in sample.tools],
+                   asr={k: v for k, v in metrics["asr"].items() if k != "clips"})
+        stage = "environment"
+        deadline.remaining()
+        started = clock()
+        env = environment_factory(split, sample.id, data_root)
+        span("environment", started)
+        deadline.remaining()
+        allowed = {t["name"] for t in sample.tools}
+        observations: list[JSON] = []
+        last_failure, repeated_failures = None, 0
+        status, reason = "completed", "finish"
+        with inference_session(planner):
+            for steps in range(1, limits.max_steps + 1):
+                stage = "planner"
+                started = clock()
+                action, details = planner.decide(prepared, observations, deadline.remaining())
+                span("planner", started)
+                metrics["decisions"].append({"step": steps, "seconds": clock() - started,
+                                             "action": action["action"], **details})
+                deadline.remaining()
+                trace.emit("planner_decision", step=steps, action=action["action"],
+                           payload=action, **{k: v for k, v in details.items() if k != "seconds"})
+                if action["action"] == "finish":
+                    break
+                if action["action"] != "call" or action["name"] not in allowed:
+                    # Constrained decoding should make this unreachable; never dispatch it.
+                    raise PipelineError("PLANNER_FORMAT", "Decision names an ineligible tool", "planner")
+                stage = "dispatch"
+                trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
+                deadline.remaining()  # Immediately before dispatch.
+                started = clock()
+                result = execute_call(env, action["name"], action["arguments"])
+                span("tools", started)
+                metrics["tools"].append({"step": steps, "name": action["name"], "seconds": clock() - started})
+                trace.emit("tool_call_result", step=steps, name=action["name"], payload=result)
+                deadline.remaining()  # And on return: a late mutation cannot become success.
+                observations.append({"name": action["name"], "arguments": action["arguments"], "result": result})
+                failure = failure_key(action["name"], action["arguments"], result)
+                repeated_failures = repeated_failures + 1 if failure is not None and failure == last_failure else 1
+                last_failure = failure
+                if failure is not None and repeated_failures >= 3:
+                    raise PipelineError("NO_PROGRESS", "Three consecutive tool failures without progress", "planner")
+                if waiting_for_user(action["name"], result):
+                    status, reason = "needs_info", "waiting_for_user"
+                    break
+            else:
+                raise PipelineError("STEP_LIMIT", "Planner decision budget exhausted", "planner")
+        stage = "collection"
+        deadline.remaining()
+        started = clock()
+        result = authoritative(env, sample.id)
+        span("collection", started)
+        deadline.remaining()
+        trace.emit("sample_finished", step=steps, status=status, stop_reason=reason, payload=result,
+                   timings=timings)
+        return SampleOutcome(sample.id, status, deadline.elapsed(), steps, reason, result=result,
+                             timings=timings, metrics=metrics)
+    except Exception as exc:
+        error = exc if isinstance(exc, PipelineError) else PipelineError(
+            "EXECUTION_UNCERTAIN" if stage in {"environment", "dispatch", "collection"} else "PLANNER_ERROR",
+            "Sample failed; inspect stage and local trace", stage)
+        diagnostic = None
+        if env is not None:
+            try:
+                diagnostic = authoritative(env, sample.id)
+            except Exception:
+                pass  # Best-effort diagnostics cannot justify a second environment or call.
+        try:
+            trace.emit("sample_failed", step=steps, error=error.record(), payload=diagnostic)
+        except Exception:
+            pass  # The supervisor ledger still records this failure; never mask the original error.
+        return SampleOutcome(sample.id, "failed", deadline.elapsed(), steps, error.code,
+                             error=error.record(), diagnostic=diagnostic, timings=timings, metrics=metrics)

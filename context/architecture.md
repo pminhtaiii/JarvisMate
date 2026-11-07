@@ -56,8 +56,17 @@ dataset, runtime, prompting, agent, artifacts, CLI and separate local model adap
 They await behavioral validation. TypeScript still owns the eventual outer harness;
 its transport is deferred. Python owns each complete sample and single `ToolEnv`.
 ASR/planner instances are reused across the selected sequential batch. The CLI uses
-cooperative deadlines and stops on the first failure; hard process supervision and
-final-container failure formatting remain later work. See [technology stack](tech_stack.md)
+cooperative deadlines and stops on the first failure. See [technology stack](tech_stack.md)
 and the [handoff](../specs/001-python-sample-pipeline/validation.md).
+
+A separate integration entry point, `python -m lifemate.integration`
+([spec](../specs/002-docker-integration/spec.md), [ADR 011](../docs/adr/011-configurable-docker-integration.md)),
+reuses these boundaries with native Qwen tool messages, transcribes each distinct clip
+once per sample, and runs samples in a persistent spawned worker under an external
+supervisor. The supervisor fsyncs a reservation before dispatch, bounds the full
+attempt (at most 30 s) and never redispatches failed or uncertain samples; the batch
+continues after isolated failures but cannot publish incomplete coverage. The legacy
+runner above is unchanged. Only controlled checks have run; container, GPU and
+real-model acceptance remain open ([quickstart](../specs/002-docker-integration/quickstart.md)).
 
 The [team workflow](team.md) defines ownership and shared coordination. Track interface discussions and progress in GitHub issues or pull requests, and update concise project context when a settled choice affects other components.

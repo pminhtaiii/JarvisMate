@@ -6,7 +6,7 @@ Start here and load only the page needed for the task. These pages describe the 
 |---|---|
 | Understand the goal and MVP boundary | [Project overview](project_overview.md) |
 | Follow baseline, Train Validation, error analysis, and conditional tuning | [Development roadmap](roadmap.md) |
-| Plan configurable offline Docker integration | [Integration plan](../specs/002-docker-integration/plan.md) (planned; ASR training stays on `fine-tuned-asr`) |
+| Run or change the configurable offline Docker integration | [Integration plan](../specs/002-docker-integration/plan.md) and [quickstart evidence](../specs/002-docker-integration/quickstart.md) (implemented, controlled checks only; container/GPU runs pending; ASR training stays on `fine-tuned-asr`) |
 | Design Train gold-to-SFT conversion | [Planner SFT data design](../docs/design/train-to-sft.md) |
 | Design or change component boundaries | [Architecture](architecture.md) |
 | Choose models, languages, or runtime tooling | [Technology stack](tech_stack.md) |

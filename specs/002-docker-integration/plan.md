@@ -11,7 +11,7 @@ with configurable model mounts/GPU settings. A persistent worker keeps models
 loaded; an external supervisor bounds full attempts and quarantines late results.
 Preserve `python -m lifemate run` defaults for comparison.
 
-This is a planning package, not a working container or latency claim. ASR training
+Implementation exists with controlled checks; it is not yet a built container or a latency claim. ASR training
 material and the root `asr/` experiment folder are removed on this branch; the
 runtime ASR adapter remains in the Python package.
 
