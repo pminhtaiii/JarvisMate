@@ -252,6 +252,23 @@ class PrepareTests(TemporaryRoot):
         self.assertEqual((config.experiment_dir / "sft/audit.jsonl").read_text(encoding="utf-8"), "")
         self.assertTrue((config.experiment_dir / "effective_config.json").is_file())
 
+    def test_persisted_rows_render_exactly_as_before_writing(self):
+        # Key order shapes the prompt: sorted schemas or arguments would differ from inference.
+        arguments = {"content": "Đỗ", "contact_id": "c_07"}
+        trajectory = source("train_0030", calls=[SEARCH, {"name": "sms.send", "arguments": arguments}], results=[FOUND, SENT])
+        config = make_config(self.root, [trajectory], [VALIDATION])
+        self.run_prepare(config)
+        fresh, _ = convert_source(trajectory, read_role("train", config.train_jsonl, config.train_catalog))
+        tokenizer = CharTokenizer()
+        ready = load_ready_export(config)
+        self.assertEqual(list(ready.train[1]["target"]["arguments"]), ["content", "contact_id"])
+        for row, original in zip(ready.train, fresh):
+            with self.subTest(index=row["provenance"]["decision_index"]):
+                self.assertEqual(json.dumps(row["input"], ensure_ascii=False), json.dumps(original["input"], ensure_ascii=False))
+                encoded = encode_row(tokenizer, row, 16384, 512)
+                self.assertEqual(encoded["input_ids"], encode_row(tokenizer, original, 16384, 512)["input_ids"])
+                self.assertEqual(encoded["sha256"], row["tokens"]["sha256"])
+
     def test_no_environment_directory_is_needed_or_touched(self):
         config = make_config(self.root, [LOOKUP], [VALIDATION])
         self.assertFalse(list(self.root.rglob("*_environment")))

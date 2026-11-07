@@ -298,7 +298,8 @@ def encode_row(tokenizer, row: JSON, context_tokens: int, max_new_tokens: int) -
     if len(target_ids) > max_new_tokens:
         raise TokenAudit("OUTPUT_OVERFLOW", f"Target needs {len(target_ids)} tokens")
     return {"input_ids": prompt_ids + target_ids, "labels": [-100] * len(prompt_ids) + target_ids,
-            "prompt_tokens": len(prompt_ids), "target_tokens": len(target_ids)}
+            "prompt_tokens": len(prompt_ids), "target_tokens": len(target_ids),
+            "sha256": hashlib.sha256(dumps(prompt_ids + target_ids).encode("utf-8")).hexdigest()}
 
 
 # --- Resolutions, identities and export -----------------------------------------
@@ -407,7 +408,8 @@ def export_role(data: RoleData, tokenizer, config: SftConfig, resolutions: dict)
         entries_out += entries
         if keep and rows:
             for row, tokens in zip(rows, encoded):
-                row["tokens"] = {"prompt": tokens["prompt_tokens"], "target": tokens["target_tokens"]}
+                row["tokens"] = {"prompt": tokens["prompt_tokens"], "target": tokens["target_tokens"],
+                                 "sha256": tokens["sha256"]}
                 lengths.append((tokens["prompt_tokens"], tokens["target_tokens"]))
             rows_out += rows
             included.add(source["id"])
@@ -418,9 +420,14 @@ def export_role(data: RoleData, tokenizer, config: SftConfig, resolutions: dict)
     return rows_out, entries_out, accounting
 
 
+def row_line(row: JSON) -> str:
+    """Original key order: schema and argument order shape the rendered prompt and target."""
+    return json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
 def _write_jsonl(path: Path, rows: Iterable[JSON]) -> str:
     with path.open("x", encoding="utf-8", newline="\n") as stream:
-        sync_write(stream, "".join(dumps(row) + "\n" for row in rows))
+        sync_write(stream, "".join(row_line(row) + "\n" for row in rows))
     return digest(path)
 
 
