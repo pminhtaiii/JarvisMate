@@ -222,4 +222,12 @@ Record receiving-machine commands, outcomes, package/model identities and eviden
 [validation.md](../specs/001-python-sample-pipeline/validation.md). The
 [task ledger](../specs/001-python-sample-pipeline/tasks.md) distinguishes delivered
 implementation from unexecuted acceptance gates. Follow the [roadmap](../context/roadmap.md) for Train
-Validation/error analysis; conditional SFT remains design-only.
+Validation/error analysis.
+
+## Planner SFT baseline
+
+`python -m lifemate.sft {preflight,prepare,train,export,diagnose} --config <toml>` runs one
+fixed NF4 plus LoRA recipe on a GPU host ([ADR 012](../docs/adr/012-native-planner-sft-baseline.md)).
+Install `.[inference,training]` there, never in the Docker image. Start from
+`configs/planner-sft.example.toml`, and follow the
+[quickstart](../specs/003-planner-sft-baseline/quickstart.md), which records what has and has not been run.

@@ -40,6 +40,9 @@ pretrained baseline. Conditional [planner SFT](../docs/design/train-to-sft.md) i
 offline development path: a separate exporter may read Train gold labels to construct
 strictly previous call/result observations and next-action targets. It does not read
 environment files, change `ToolEnv`, or expose labels/future observations to inference.
+`python -m lifemate.sft` ([ADR 012](../docs/adr/012-native-planner-sft-baseline.md)) implements
+this path with the runtime's own native renderer, and merges the adapter into a standalone
+FP16 snapshot that the runtime loads like any other planner, without training libraries.
 
 A tuned checkpoint must implement the same planner interface and call/finish grammar.
 ASR remains replaceable; the Python loop still controls validation, eligibility,

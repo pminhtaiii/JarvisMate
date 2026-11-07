@@ -8,6 +8,7 @@ Start here and load only the page needed for the task. These pages describe the 
 | Follow baseline, Train Validation, error analysis, and conditional tuning | [Development roadmap](roadmap.md) |
 | Run or change the configurable offline Docker integration | [Integration plan](../specs/002-docker-integration/plan.md) and [quickstart evidence](../specs/002-docker-integration/quickstart.md) (implemented, controlled checks only; container/GPU runs pending; ASR training stays on `fine-tuned-asr`) |
 | Design Train gold-to-SFT conversion | [Planner SFT data design](../docs/design/train-to-sft.md) |
+| Prepare, train or export the planner baseline | [Planner SFT quickstart](../specs/003-planner-sft-baseline/quickstart.md) (code authored; no real training recorded) |
 | Design or change component boundaries | [Architecture](architecture.md) |
 | Choose models, languages, or runtime tooling | [Technology stack](tech_stack.md) |
 | Implement or review code quality | [Code standards](code_standard.md) |

@@ -2,7 +2,8 @@
 
 **Branch**: `codex/006-planner-sft-baseline`
 **Created**: 2026-11-06
-**Status**: Planned; implementation, training and acceptance pending.
+**Status**: Code and controlled tests authored; real training, GPU feasibility and acceptance pending.
+See [recorded evidence](quickstart.md#recorded-evidence).
 
 ## Agreed scope
 

@@ -36,7 +36,10 @@ prefixes are never fed to the evaluated inference agent. Keep baseline/tuned com
 on identical IDs, runtime, prompt, ASR and decoding configuration and report incomplete
 coverage or unavailable metrics explicitly. `label.final_state` is not the full state
 from which to construct a gold hash. The [SFT design](../docs/design/train-to-sft.md)
-defines future exporter/loss-mask/leakage checks; none has been implemented by this update.
+defines exporter/loss-mask/leakage checks. For the native baseline they live in
+`test_sft_*.py`: tiny random CPU models and real tokenizer files establish loop, mask and
+restore behaviour only, never NF4 feasibility, quality or latency. See the
+[SFT quickstart](../specs/003-planner-sft-baseline/quickstart.md#recorded-evidence).
 
 ## Evidence to record
 

@@ -1,6 +1,7 @@
 # Training CLI and artifact contract
 
-**Status**: Proposed interface; these commands are not implemented.
+**Status**: Implemented interface, exercised with controlled inputs and CPU doubles. The
+NF4/GPU path has never run; see [recorded evidence](../quickstart.md#recorded-evidence).
 
 ## Configuration
 
@@ -12,13 +13,18 @@ sets, test roles, incompatible base/template and batch product other than 16.
 Record normalized config identity. Limit CLI overrides to paths, selected device,
 microbatch/accumulation, output and explicit resume checkpoint.
 
-## Proposed commands
+Optional `data.audit_resolutions` names a reviewed JSON file. Each entry has `source_id`,
+`reason`, `decision` (`exclude` or `keep`) and a nonempty `note`. Only `UNGROUNDED_ID`
+and `SCHEMA_INVALID_TARGET` can be kept; a resolution matching no audit entry is rejected.
+
+## Commands
 
 ```text
 python -m lifemate.sft preflight --config <toml>
 python -m lifemate.sft prepare --config <toml>
-python -m lifemate.sft train --config <toml> [--resume <checkpoint>]
+python -m lifemate.sft train --config <toml> [--resume <checkpoint>] [--smoke]
 python -m lifemate.sft export --config <toml> --selection <selection.json>
+python -m lifemate.sft diagnose --config <toml> --selection <selection.json>
 ```
 
 Preflight checks configuration/data roles/snapshot/template/eligibility metadata.
@@ -27,6 +33,7 @@ environment-directory data. Train requires ready exports and a compatible record
 environment; performs actual NF4 BF16 backward/memory feasibility, then 500 updates.
 A smoke-only mode must be explicit and isolated from the full-run identity.
 Export loads the original fresh unquantized base and selected committed adapter.
+Diagnose compares greedy adapter and merged outputs on eight fixed validation prompts (T020).
 
 Train traverses all rows before repeats; reject insufficient 500*16 coverage budget.
 Each checkpoint persists unique row/source coverage and expected totals. Evaluate
@@ -57,11 +64,13 @@ checkpoint and export failure yield nonzero plus bounded stage/reason evidence.
   sft/export_manifest.json
   sft/audit.jsonl
   checkpoints/step-0100/ ... step-0500/
+  smoke/                       # isolated; only with --smoke
   training_metrics.jsonl
   selection.json
   adapter/
   merged_fp16/
   export_manifest.json
+  export_diagnostics.json
   assessment/
 ```
 

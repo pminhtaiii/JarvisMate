@@ -8,7 +8,7 @@ Add a separate data-export/training/export CLI to the existing Python package.
 Train one native next-action adapter from supplied transcripts and gold strict
 prefixes using all designated training data and the existing separate validation
 set. Share serialization with feature 002 and deliver a merged FP16 snapshot.
-This package contains plans only; no accuracy, training or latency gate is passed.
+Code and controlled tests exist; no accuracy, real training or latency gate is passed.
 
 **Branch base**: `codex/005-docker-integration` at
 `cb4c54236a588c1130086f01fc2c6f2cbe3d7756`.
@@ -137,4 +137,5 @@ Feature 002 owns its remaining runtime/Docker/supervisor implementation.
 |---|---|---|
 | Tune before old roadmap gate | Explicit user direction based on prior experiments | Repeating broad baseline/model experiments exceeds requested scope |
 
-No implementation, checkpoint, measured score or competition acceptance is claimed.
+No checkpoint, measured score or competition acceptance is claimed. [ADR 012](../../docs/adr/012-native-planner-sft-baseline.md)
+records why an explicit loop replaced the preferred Trainer.
