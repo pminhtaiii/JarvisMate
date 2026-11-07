@@ -11,6 +11,9 @@ dependencies = []
 
 [project.optional-dependencies]
 inference = ["torch==2.9.0", "transformers==4.57.1", "numpy==2.3.4", "lm-format-enforcer==0.11.3"]
+# Development GPU host only, never the Docker image. Ranges, not a tested lock: freeze the
+# resolved host environment before a full run (specs/003-planner-sft-baseline/quickstart.md).
+training = ["peft>=0.17,<1", "bitsandbytes>=0.46,<1", "accelerate>=1,<2", "safetensors>=0.5,<1"]
 
 [project.scripts]
 lifemate = "lifemate.cli:main"

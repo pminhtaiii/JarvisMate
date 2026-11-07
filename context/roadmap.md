@@ -9,6 +9,10 @@ without changing the [runtime architecture](architecture.md) or
 [competition constraints](benchmark.md). Fine-tuning is conditional, not a prerequisite
 for a working baseline or an automatic fourth-stage commitment.
 
+[ADR 012](../docs/adr/012-native-planner-sft-baseline.md) is a user-authorized exception
+for one fixed [native planner QLoRA recipe](../specs/003-planner-sft-baseline/plan.md):
+it tunes before this gate and uses an explicit separate validation set. It claims no result.
+
 ## Stage 1: Pretrained baseline
 
 Implement the [Python sample pipeline](../specs/001-python-sample-pipeline/plan.md)

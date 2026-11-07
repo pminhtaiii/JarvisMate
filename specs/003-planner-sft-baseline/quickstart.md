@@ -9,6 +9,20 @@ and catalog files, pinned local base snapshot. Resolve the training extra agains
 the actual host, verify NF4 BF16 backward/memory and record a compatible environment
 lock before full training. See [training contract](contracts/training.md).
 
+Resolve the training environment on the selected host, separately from the runtime:
+
+```text
+python -m venv .venv-sft && . .venv-sft/bin/activate
+pip install --index-url <CUDA wheel index matching the host> torch==2.9.0
+pip install "./python[inference,training]"
+pip freeze > <experiment>/requirements.lock.txt
+```
+
+The `training` extra holds compatible ranges, not a tested lock. Train records
+`pip freeze` itself and fails resume when package versions differ. Never install this
+extra into the Docker runtime image. An RTX 5090 needs a CUDA 12.8+ wheel; if the pinned
+torch has none for the host, stop and record the incompatibility rather than editing pins.
+
 ## Prepare and train
 
 After implementation, copy `configs/planner-sft.example.toml` to an ignored local

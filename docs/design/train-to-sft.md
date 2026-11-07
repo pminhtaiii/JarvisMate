@@ -1,8 +1,11 @@
 # Train gold trajectories to planner SFT
 
-**Status**: design only, 2026-10-27. No converter, SFT files, training dependency,
-training run, or tuned model is implemented by this document. Implementation is a
-later feature, conditional on the [roadmap's error-analysis gate](../../context/roadmap.md).
+**Status**: semantic design, 2026-10-27. Its conversion rules remain current, but
+[feature 003](../../specs/003-planner-sft-baseline/spec.md) and
+[ADR 012](../adr/012-native-planner-sft-baseline.md) supersede three points for the
+native baseline: tuning is authorized before the error-analysis gate, an explicit
+separate validation set replaces the fit/validation partition below, and targets use
+the native Qwen protocol rather than the JSON action grammar shown here.
 
 ## Objective and architectural boundary
 
