@@ -16,4 +16,5 @@ __pycache__/
 *.egg-info/
 .venv/
 .venv-asr-train/
+.venv-sft/
 build/
