@@ -111,10 +111,10 @@ separate validation file exists, and one must be supplied before `prepare` can b
 
 LMFE rejects a natural token that spans an escaped quote and an adjacent escape or string end,
 such as `\"\`. No Train gold argument contains a quote, backslash, tab or newline, so no
-training target is affected; constrained decoding can still reach such text with other tokens.
+training target is affected. Whether decoding reaches such text through other tokens is untested.
 
-Controlled CPU cases exercise real LoRA, backward, 1x16/4x4 gradient equivalence, byte-identical
-resume and an offline merged reload on a random two-layer Qwen3. They do not establish NF4
+Controlled CPU cases exercise real LoRA, backward, 1x16/4x4 gradient equivalence, exactly equal
+adapter weights after resume and an offline merged reload on a random two-layer Qwen3. They do not establish NF4
 behaviour, memory fit, adapter-versus-merged drift on the real model, quality or latency.
 
 ### Pending on the GPU host
