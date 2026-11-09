@@ -36,3 +36,5 @@ build/
 /kaggle/push/
 /kaggle/output_v*/
 /kaggle/submission_*.jsonl
+kaggle/push_native/
+kaggle/push_src/
