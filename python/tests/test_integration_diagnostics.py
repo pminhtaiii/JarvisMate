@@ -48,7 +48,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.catalog = self.root / "catalog.json"
         self.catalog.write_text(json.dumps(CATALOG), encoding="utf-8")
 
-    def run_root(self, name="run", cases=None):
+    def run_root(self, name="run", cases=None, stop_reasons=None):
         cases = cases or CASES
         journal = RunJournal.create(self.root / name, {"run_sha256": "r" * 64, "selected_ids": list(cases)})
         journal.worker_started(1, 1)
@@ -58,7 +58,8 @@ class DiagnosticsTests(unittest.TestCase):
             if predicted is None:
                 journal.fail(identity, status, {"code": "TIME_LIMIT" if status == "timeout" else "PLANNER_FORMAT"})
             else:
-                journal.accept(identity, status, {"id": sample_id, "tool_calls": predicted, "state_hash": "a" * 64}, {})
+                metrics = {"worker": {"stop_reason": stop_reasons[sample_id]}} if sample_id in (stop_reasons or {}) else {}
+                journal.accept(identity, status, {"id": sample_id, "tool_calls": predicted, "state_hash": "a" * 64}, metrics)
         journal.close()
         return self.root / name
 
@@ -96,11 +97,13 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_partial_is_accepted_but_counted_separately_from_completion(self):
         cases = dict(CASES, s03=([SEARCH, SEND], 2, "partial", [SEARCH]))
-        result = report(self.run_root(cases=cases), self.references, self.catalog)
+        result = report(self.run_root(cases=cases, stop_reasons={"s03": "step_limit"}), self.references, self.catalog)
         sample = next(r for r in result["samples"] if r["id"] == "s03")
         self.assertEqual((sample["status"], sample["accepted"], sample["exact_calls"]), ("partial", True, False))
         self.assertEqual(result["summary"]["accepted_statuses"], {"completed": 3, "needs_info": 2, "partial": 1})
         self.assertEqual(result["summary"]["accepted"], 6)
+        self.assertEqual(sample["stop_reason"], "step_limit")
+        self.assertEqual(result["summary"]["partial_stop_reasons"], {"step_limit": 1})
 
     def test_benchmark_call_matching(self):
         fuzzy = {"sms.send": {"content"}}

@@ -156,7 +156,10 @@ class PipelineTests(unittest.TestCase):
 
     def test_step_limit(self):
         outcome = self.execute([call("contacts.search", query=str(n)) for n in range(2)], limits=Limits(max_steps=2))
-        self.assertEqual(outcome.error["code"], "STEP_LIMIT")
+        self.assertEqual((outcome.status, outcome.stop_reason), ("partial", "step_limit"))
+        self.assertEqual(outcome.result["tool_calls"], self.env.get_tool_calls())
+        self.assertEqual(outcome.result["state_hash"], self.env.get_state_hash())
+        self.assertEqual(len(self.planner.inputs), 2)
 
 
 if __name__ == "__main__":

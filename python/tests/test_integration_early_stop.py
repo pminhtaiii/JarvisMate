@@ -55,7 +55,7 @@ class EarlyStopTests(unittest.TestCase):
         self.trace = MemoryTrace()
         self.opened = 0
 
-    def execute(self, decisions, *, asr=None, factory=None):
+    def execute(self, decisions, *, asr=None, factory=None, **settings):
         self.planner = NativeDoubles(decisions)
 
         def environment(*args):
@@ -64,10 +64,11 @@ class EarlyStopTests(unittest.TestCase):
 
         return run_integration_sample(
             self.sample, self.planner, asr, factory or environment, self.trace, Limits(), self.deadline,
-            split="train", data_root=self.fx.data, clock=self.clock)
+            split="train", data_root=self.fx.data, clock=self.clock, **settings)
 
-    def assert_partial(self, outcome, count):
-        self.assertEqual((outcome.status, outcome.stop_reason), ("partial", "soft_deadline"))
+    def assert_partial(self, outcome, count, reason="soft_deadline"):
+        self.assertEqual((outcome.status, outcome.stop_reason), ("partial", reason))
+        self.assertEqual(outcome.metrics["stop_reason"], reason)
         self.assertIsNone(outcome.error)
         self.assertEqual(outcome.result, {"id": self.sample.id, "tool_calls": self.env.get_tool_calls(),
                                           "state_hash": self.env.get_state_hash()})
@@ -77,17 +78,17 @@ class EarlyStopTests(unittest.TestCase):
 
     def test_three_successful_calls_then_soft_deadline_preserves_exact_log_and_hash(self):
         def response(name, arguments):
-            self.clock.advance(9)
+            self.clock.advance(10 if len(self.env.calls) == 3 else 9)
             return {"ok": True}
 
         self.env.response = response
         outcome = self.execute([call("contacts.search", query=str(i)) for i in range(3)] + [FINISH])
         self.assert_partial(outcome, 3)
         self.assertEqual(len(self.planner.inputs), 3)
-        self.assertEqual(outcome.metrics["deadline"]["finalization_budget_seconds"], 3)
+        self.assertEqual(outcome.metrics["deadline"]["finalization_budget_seconds"], 2)
 
     def test_valid_environment_at_soft_deadline_returns_empty_partial_without_llm(self):
-        self.clock.advance(26)
+        self.clock.advance(28)
         outcome = self.execute([AssertionError("No LLM after soft deadline")])
         self.assert_partial(outcome, 0)
         self.assertEqual(self.planner.inputs, [])
@@ -97,18 +98,96 @@ class EarlyStopTests(unittest.TestCase):
         asr = ControlledASR()
 
         def transcribe(path, remaining):
-            self.clock.advance(26)
+            self.clock.advance(28)
             return "request"
 
         asr.transcribe = transcribe
         outcome = self.execute([], asr=asr)
         self.assert_partial(outcome, 0)
-        self.assertEqual(outcome.timings["request"], 26)
+        self.assertEqual(outcome.timings["request"], 28)
 
     def test_planner_finish_before_soft_deadline_is_completed(self):
         outcome = self.execute([FINISH])
         self.assertEqual((outcome.status, outcome.stop_reason), ("completed", "finish"))
         self.assertEqual(outcome.result["state_hash"], self.env.get_state_hash())
+
+    def test_finish_after_26_but_before_default_28_is_still_completed(self):
+        self.clock.advance(27.5)
+        outcome = self.execute([FINISH])
+        self.assertEqual((outcome.status, outcome.stop_reason), ("completed", "finish"))
+        self.assertEqual(outcome.metrics["deadline"]["soft_timeout_seconds"], 28)
+
+    def test_default_continues_before_28_and_stops_at_28_on_tool_return(self):
+        self.clock.advance(27.5)
+
+        def response(*args):
+            self.clock.advance(0.5)
+            return {"ok": True}
+
+        self.env.response = response
+        outcome = self.execute([call("contacts.search", query="Lan"), FINISH])
+        self.assert_partial(outcome, 1)
+        self.assertEqual(len(self.planner.inputs), 1)
+        self.assertEqual(outcome.elapsed, 28)
+
+    def test_explicit_26_budget_stops_at_26(self):
+        self.clock.advance(26)
+        outcome = self.execute([], soft_timeout_seconds=26)
+        self.assert_partial(outcome, 0)
+        self.assertEqual(self.planner.inputs, [])
+        self.assertEqual(outcome.metrics["deadline"]["soft_timeout_seconds"], 26)
+
+    def test_16_calls_exhaust_steps_and_preserve_authoritative_partial_without_extra_turn(self):
+        decisions = [call("contacts.search", query=str(i)) for i in range(16)]
+        outcome = self.execute(decisions + [AssertionError("No seventeenth planner call")])
+        self.assert_partial(outcome, 16, "step_limit")
+        self.assertEqual(outcome.steps, 16)
+        self.assertEqual(len(self.planner.inputs), 16)
+        self.assertEqual(len(outcome.metrics["tools"]), 16)
+        finished = next(fields for kind, fields in self.trace.events if kind == "sample_finished")
+        self.assertEqual((finished["status"], finished["stop_reason"]), ("partial", "step_limit"))
+
+    def test_finish_at_step_16_remains_completed(self):
+        outcome = self.execute([call("contacts.search", query=str(i)) for i in range(15)] + [FINISH])
+        self.assertEqual((outcome.status, outcome.stop_reason, outcome.steps), ("completed", "finish", 16))
+        self.assertEqual((len(self.planner.inputs), len(outcome.result["tool_calls"])), (16, 15))
+
+    def test_valid_clarification_at_step_16_remains_needs_info(self):
+        outcome = self.execute([call("contacts.search", query=str(i)) for i in range(15)] + [
+            call("sys.ask_missing_info", tool_name="sms.send", params=["content"])])
+        self.assertEqual((outcome.status, outcome.stop_reason, outcome.steps),
+                         ("needs_info", "waiting_for_user", 16))
+        self.assertEqual(outcome.result["tool_calls"], self.env.get_tool_calls())
+        self.assertEqual(len(self.planner.inputs), 16)
+
+    def test_step_limit_with_invalid_hash_is_failed_without_prediction(self):
+        self.env.get_state_hash = lambda: "invalid"
+        outcome = self.execute([call("contacts.search", query=str(i)) for i in range(16)])
+        self.assertEqual(outcome.status, "failed")
+        self.assertIsNone(outcome.result)
+        self.assertEqual((len(self.env.calls), len(self.planner.inputs)), (16, 16))
+
+    def test_hash_exception_after_16_calls_is_failed_without_prediction(self):
+        def broken_hash():
+            raise RuntimeError("State unavailable")
+
+        self.env.get_state_hash = broken_hash
+        outcome = self.execute([call("contacts.search", query=str(i)) for i in range(16)])
+        self.assertEqual((outcome.status, outcome.error["code"]), ("failed", "EXECUTION_UNCERTAIN"))
+        self.assertIsNone(outcome.result)
+        self.assertEqual(len(self.env.calls), 16)
+
+    def test_uncertain_execution_on_step_16_cannot_be_partial(self):
+        def response(*args):
+            if len(self.env.calls) == 16:
+                raise RuntimeError("Mutation may have happened")
+            return {"ok": True}
+
+        self.env.response = response
+        outcome = self.execute([call("contacts.search", query=str(i)) for i in range(16)])
+        self.assertEqual((outcome.status, outcome.error["code"]), ("failed", "EXECUTION_UNCERTAIN"))
+        self.assertIsNone(outcome.result)
+        self.assertEqual((len(self.env.calls), self.opened), (16, 1))
 
     def test_generation_receives_remaining_soft_budget_from_original_attempt_start(self):
         self.clock.advance(10)
@@ -120,11 +199,11 @@ class EarlyStopTests(unittest.TestCase):
 
         with patch.object(NativeDoubles, "decide", decide):
             self.assertEqual(self.execute([]).status, "completed")
-        self.assertEqual(budgets, [16])
+        self.assertEqual(budgets, [18])
 
     def test_valid_clarification_returning_at_soft_deadline_keeps_needs_info(self):
         def response(name, arguments):
-            self.clock.advance(26)
+            self.clock.advance(28)
             return {"ok": True, "waiting_for_user": True}
 
         self.env.response = response
@@ -134,7 +213,7 @@ class EarlyStopTests(unittest.TestCase):
 
     def test_planner_return_at_soft_deadline_does_not_dispatch_even_ask(self):
         def decide(prepared, observations):
-            self.clock.advance(26)
+            self.clock.advance(28)
             return call("sys.ask_missing_info", tool_name="sms.send", params=["content"])
 
         self.assert_partial(self.execute([decide]), 0)
@@ -144,7 +223,7 @@ class EarlyStopTests(unittest.TestCase):
 
         def emit(kind, **fields):
             if kind == "tool_call_started":
-                self.clock.advance(26)
+                self.clock.advance(28)
             original(kind, **fields)
 
         self.trace.emit = emit
@@ -152,7 +231,7 @@ class EarlyStopTests(unittest.TestCase):
 
     def test_cooperative_planner_soft_timeout_collects_only_the_environment(self):
         def stop(prepared, observations):
-            self.clock.advance(26)
+            self.clock.advance(28)
             raise PipelineError("TIME_LIMIT", "Generation reached its supplied budget", "planner")
 
         self.assert_partial(self.execute([stop]), 0)
@@ -164,7 +243,7 @@ class EarlyStopTests(unittest.TestCase):
 
     def test_schema_rejected_call_is_preserved_in_partial(self):
         def reject(name, arguments):
-            self.clock.advance(26)
+            self.clock.advance(28)
             return {"ok": False, "error": "missing contact_id"}
 
         self.env.response = reject
@@ -195,7 +274,7 @@ class EarlyStopTests(unittest.TestCase):
         self.assertEqual(self.env.calls, [])
 
     def test_invalid_environment_hash_never_supplies_partial(self):
-        self.clock.advance(26)
+        self.clock.advance(28)
         self.env.get_state_hash = lambda: "invalid"
         outcome = self.execute([])
         self.assertEqual(outcome.status, "failed")
@@ -203,7 +282,7 @@ class EarlyStopTests(unittest.TestCase):
 
     def test_uncertain_tool_exception_at_soft_deadline_never_becomes_partial(self):
         def explode(*args):
-            self.clock.advance(26)
+            self.clock.advance(28)
             raise RuntimeError("Mutation may have happened")
 
         self.env.response = explode
@@ -214,7 +293,7 @@ class EarlyStopTests(unittest.TestCase):
 
     def test_missing_or_invalid_environment_cannot_supply_partial(self):
         def missing(*args):
-            self.clock.advance(26)
+            self.clock.advance(28)
             raise RuntimeError("Environment initialization failed")
 
         outcome = self.execute([], factory=missing)
@@ -222,11 +301,11 @@ class EarlyStopTests(unittest.TestCase):
         self.assertIsNone(outcome.result)
 
     def test_collection_crossing_hard_deadline_never_returns_prediction(self):
-        self.clock.advance(26)
+        self.clock.advance(28)
         original = self.env.get_state_hash
 
         def slow_hash():
-            self.clock.advance(4)
+            self.clock.advance(2)
             return original()
 
         self.env.get_state_hash = slow_hash
@@ -282,7 +361,7 @@ class AcceptanceTests(unittest.TestCase):
         self.worker.environments = lambda *args: self.env
         self.worker.components = {"asr": ControlledASR(), "planner": NativeDoubles([])}
         self.handle = ControlledHandle(self.worker, self.clock)
-        self.handle.dispatch_delay = 26  # Soft time consumed before worker receives dispatch.
+        self.handle.dispatch_delay = 28  # Soft time consumed before worker receives dispatch.
         self.supervisor = Supervisor(self.journal, self.config.fingerprint(), 30, 10, 1,
                                      clock=self.clock, worker=self.handle)
 
@@ -295,10 +374,10 @@ class AcceptanceTests(unittest.TestCase):
         result = self.run_sample()
         self.assertEqual(result.status, "partial")
         self.assertEqual(self.handle.message["started_monotonic"], 100)
-        self.assertEqual(self.handle.result["worker_elapsed"], 26)
+        self.assertEqual(self.handle.result["worker_elapsed"], 28)
         record = self.journal.accepted()["train_0001"]
         self.assertEqual(record["status"], "partial")
-        self.assertEqual(record["accepted_monotonic"], 126)
+        self.assertEqual(record["accepted_monotonic"], 128)
         self.assertTrue(publish_predictions(self.journal, ["train_0001"])["complete"])
         prediction = json.loads((self.fx.output / "predictions.jsonl").read_text(encoding="utf-8"))
         self.assertEqual(prediction, {"id": "train_0001", "tool_calls": [],
@@ -306,14 +385,59 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(set(prediction), {"id", "tool_calls", "state_hash"})
         report = summarize(self.journal, ["train_0001"])
         self.assertEqual((report["completed"], report["partial"], report["accepted"]), (0, 1, 1))
+        self.assertEqual(report["partial_stop_reasons"], {"soft_deadline": 1})
         self.assertIn("does not establish correctness", report["coverage_note"])
         self.journal.close()
         resumed = RunJournal.resume(self.fx.output, self.header)
         self.addCleanup(resumed.close)
         self.assertEqual(resumed.accepted()["train_0001"]["status"], "partial")
 
+    def test_step_limit_partial_is_accepted_published_and_reports_its_reason(self):
+        self.handle.dispatch_delay = 0
+        self.worker.components["planner"] = NativeDoubles(
+            [call("contacts.search", query=str(i)) for i in range(16)])
+        result = self.run_sample()
+        self.assertEqual(result.status, "partial")
+        record = self.journal.accepted()["train_0001"]
+        self.assertEqual(record["metrics"]["worker"]["stop_reason"], "step_limit")
+        self.assertEqual(record["metrics"]["worker"]["metrics"]["stop_reason"], "step_limit")
+        self.assertTrue(publish_predictions(self.journal, ["train_0001"])["complete"])
+        prediction = json.loads((self.fx.output / "predictions.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(prediction, {"id": "train_0001", "tool_calls": self.env.get_tool_calls(),
+                                      "state_hash": self.env.get_state_hash()})
+        self.assertEqual(len(prediction["tool_calls"]), 16)
+        self.assertEqual(set(prediction), {"id", "tool_calls", "state_hash"})
+        self.assertEqual(summarize(self.journal, ["train_0001"])["partial_stop_reasons"], {"step_limit": 1})
+
+    def test_hard_expiry_on_step_16_is_timeout_and_never_accepted(self):
+        self.handle.dispatch_delay = 0
+        self.worker.components["planner"] = NativeDoubles(
+            [call("contacts.search", query=str(i)) for i in range(16)])
+
+        def response(*args):
+            if len(self.env.calls) == 16:
+                self.clock.advance(30)
+            return {"ok": True}
+
+        self.env.response = response
+        result = self.run_sample()
+        self.assertEqual((result.status, result.error["code"]), ("timeout", "TIME_LIMIT"))
+        self.assertEqual(self.journal.accepted(), {})
+        self.assertEqual(len(self.env.calls), 16)
+        self.assertFalse(publish_predictions(self.journal, ["train_0001"])["complete"])
+
+    def test_step_limit_with_hash_error_is_failed_and_never_published(self):
+        self.handle.dispatch_delay = 0
+        self.worker.components["planner"] = NativeDoubles(
+            [call("contacts.search", query=str(i)) for i in range(16)])
+        self.env.get_state_hash = lambda: "invalid"
+        result = self.run_sample()
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(self.journal.accepted(), {})
+        self.assertFalse(publish_predictions(self.journal, ["train_0001"])["complete"])
+
     def test_partial_received_at_hard_deadline_is_quarantined(self):
-        self.handle.receipt_delay = 4
+        self.handle.receipt_delay = 2
         result = self.run_sample()
         self.assertEqual((result.status, result.error["code"]), ("timeout", "TIME_LIMIT"))
         self.assertEqual(self.journal.accepted(), {})
@@ -322,7 +446,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertFalse(publish_predictions(self.journal, ["train_0001"])["complete"])
 
     def test_partial_received_after_hard_deadline_is_rejected(self):
-        self.handle.receipt_delay = 4.1
+        self.handle.receipt_delay = 2.1
         result = self.run_sample()
         self.assertEqual((result.status, result.error["code"]), ("timeout", "TIME_LIMIT"))
         self.assertEqual(self.journal.accepted(), {})
@@ -334,7 +458,7 @@ class AcceptanceTests(unittest.TestCase):
         def read(attempt, name):
             value = original(attempt, name)
             if name == "prediction.json":
-                self.clock.advance(4)
+                self.clock.advance(2)
             return value
 
         with patch.object(self.journal, "read_staged", side_effect=read):
@@ -356,8 +480,8 @@ class AcceptanceTests(unittest.TestCase):
             result = self.run_sample()
         self.assertEqual(result.status, "partial")
         metrics = self.journal.accepted()["train_0001"]["metrics"]
-        self.assertEqual(metrics["receipt_seconds"], 26)
-        self.assertEqual(metrics["attempt_seconds"], 27)
+        self.assertEqual(metrics["receipt_seconds"], 28)
+        self.assertEqual(metrics["attempt_seconds"], 29)
         self.assertEqual(metrics["acceptance_decision_seconds"], 1)
 
     def test_slow_acceptance_candidate_fsync_cannot_be_accepted(self):
@@ -366,7 +490,7 @@ class AcceptanceTests(unittest.TestCase):
         def append(kind, **fields):
             value = original(kind, **fields)
             if kind == "accept_pending":
-                self.clock.advance(4)
+                self.clock.advance(2)
             return value
 
         with patch.object(self.journal, "append", side_effect=append):

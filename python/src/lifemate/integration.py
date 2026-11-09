@@ -6,6 +6,7 @@ its prompt, protocol, defaults or stop-on-first-failure policy.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 
 from .configuration import IntegrationConfig
 from .contracts import JSON
@@ -93,6 +94,8 @@ def parser():
 
 def summarize(journal, selected: list[str]) -> JSON:
     accepted, failed = journal.accepted(), journal.failed()
+    partial_reasons = Counter(r["metrics"].get("worker", {}).get("stop_reason") or "unknown"
+                              for r in accepted.values() if r["status"] == "partial")
     attempts = sorted(r["metrics"]["attempt_seconds"] for r in accepted.values()
                       if isinstance(r["metrics"].get("attempt_seconds"), (int, float)))
 
@@ -103,6 +106,7 @@ def summarize(journal, selected: list[str]) -> JSON:
             "completed": sum(r["status"] == "completed" for r in accepted.values()),
             "needs_info": sum(r["status"] == "needs_info" for r in accepted.values()),
             "partial": sum(r["status"] == "partial" for r in accepted.values()),
+            "partial_stop_reasons": dict(sorted(partial_reasons.items())),
             "accepted": len(accepted),
             "coverage_note": "Accepted coverage includes partial execution and does not establish correctness",
             "timeout": sum(r["status"] == "timeout" for r in failed.values()),

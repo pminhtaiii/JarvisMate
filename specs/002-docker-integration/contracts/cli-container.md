@@ -48,7 +48,7 @@ max_new_tokens = 512
 
 [execution]
 timeout_seconds = 30
-soft_timeout_seconds = 26                     # optional, defaults to 26
+soft_timeout_seconds = 28                     # optional, defaults to 28
 max_steps = 16
 startup_timeout_seconds = 300
 recovery_attempts = 1
@@ -122,7 +122,7 @@ rows retain the organizer schema exactly.
 
 Accepted `partial` samples count toward coverage; `manifest.report.partial` records
 their count separately from normal completion and clarification. Omitting the soft
-setting preserves the 26-second default; configurations with hard budgets <=26 must
+setting preserves the 28-second default; configurations with hard budgets <=28 must
 set a smaller soft budget explicitly. New configuration/code identities require a
 fresh output root; never resume or change artifacts belonging to a running old job.
 

@@ -66,7 +66,7 @@ Submit only `get_tool_calls()`/`get_state_hash()` results. Valid no-tool complet
 still creates the environment and obtains its empty log/actual hash. No error path
 manufactures a successful empty prediction.
 
-The optional `execution.soft_timeout_seconds` defaults to 26, with
+The optional `execution.soft_timeout_seconds` defaults to 28, with
 `0 < soft_timeout_seconds < timeout_seconds <= 30`. Both clocks start at the
 supervisor's monotonic dispatch time, which the worker receives explicitly; IPC,
 ASR and environment initialization do not reset either clock. Legacy `run` is unchanged.
@@ -78,12 +78,21 @@ clarification just to stop. A valid returned clarification retains `needs_info` 
 when soft time has expired. Exceptions or uncertain in-flight execution cannot
 produce an accepted partial result.
 
+At exhaustion of the native loop's default 16 decision steps, return `partial` with
+`stop_reason="step_limit"` through the same authoritative collection path. Do not
+call the planner again, execute another tool, synthesize finish/clarification, or
+change the call log. Finish at step 16 remains `completed`; valid clarification at
+step 16 remains `needs_info`. Hard expiry, uncertain execution and collection/hash
+errors still fail closed. Soft stops retain `stop_reason="soft_deadline"`; both
+reasons appear in metrics, traces and report `partial_stop_reasons` counts.
+
 Attempt statuses are `completed` (planner finish), `needs_info` (valid executed
-clarification), `partial` (safe soft stop with unfinished work), `timeout` (hard
+clarification), `partial` (safe soft or step stop with unfinished work), `timeout` (hard
 expiry, no accepted row), and `failed` (execution/planner/storage failure). A valid
 initialized environment may supply an empty partial log with its actual hash.
 Soft stopping reserves the hard-minus-soft interval for collection, session exit,
 trace closure, serialization, durable staging, acknowledgement and acceptance.
+The 28/30 defaults reserve two seconds; explicit valid soft budgets remain supported.
 It is not a guarantee: model transfer, native/CUDA generation, environment calls,
 hash collection or storage may block until hard expiry. The supervisor terminates
 an unacknowledged worker; OS termination and blocked supervisor storage can overshoot.

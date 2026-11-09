@@ -41,6 +41,14 @@ frames, with worker logs drained without blocking supervisor control.
 
 ## 2. Actual configuration
 
+The current native integration defaults are soft timeout 28 seconds, hard timeout
+30 seconds and 16 decision steps. Explicit valid soft settings such as 26 seconds
+remain supported. Safe step exhaustion returns `partial`/`step_limit`; soft expiry
+returns `partial`/`soft_deadline`. Both use ToolEnv's authoritative log/hash and the
+existing durable acceptance protocol. The two-second default finishing interval
+does not guarantee acceptance before hard expiry. Inspect `partial_stop_reasons`
+alongside coverage; accepted coverage does not establish prediction correctness.
+
 Copy proposed `configs/integration.example.toml` into ignored local storage. Replace
 model paths, selection/hardware settings and run proposed preflight:
 
@@ -256,3 +264,43 @@ run passed outside the sandbox, where process-tree termination was permitted. On
 local test processes were stopped. No server job, training, full Public Test, Docker
 build or UIT model/GPU smoke was run. The three-sample command in
 [python/README.md](../../python/README.md) remains a server-side verification step.
+
+### Step-limit partials and 28-second default, 2026-11-09
+
+Follow-up on `codex/008-inference-early-stop-partial` after `8cbc98b`:
+native step exhaustion returns `partial` with `stop_reason="step_limit"` through
+the existing authoritative collection and durable acceptance path. Default soft
+timeout is now 28 seconds in the config dataclass, parser, agent and examples;
+explicit 26-second settings remain supported. Reports distinguish partial reasons.
+Journal, worker/supervisor rules, hard 30-second budget, default 16 steps, model
+settings and legacy step-limit behavior were not changed.
+
+Controlled checks on the Windows authoring host with portable CPython 3.13.9:
+
+```powershell
+$env:PYTHONPATH = 'python/src'
+& ..\.python\python.exe -m unittest discover -s python/tests -p 'test_integration*.py' -v
+# Exit 0: 103 tests in 42.054s, OK, no skips.
+$env:PYTHONPATH = 'python/src;python/tests'
+& ..\.python\python.exe -m unittest test_agent test_cli test_artifacts test_inference test_qwen_native test_asr_once -v
+# Exit 0: 72 tests in 2.412s, OK (skipped=5); 67 passed.
+node scripts/ci/check-context.mjs
+# Exit 0: Context checks passed (51 Markdown files; 0 canonical facts).
+git diff --check
+# Exit 0.
+```
+
+The integration run includes 37 early-stop/acceptance tests using a shared fake
+clock: exactly 16 executed calls with the environment's log/hash; no seventeenth
+decision; finish or clarification at step 16; hard expiry on step 16; invalid or
+unavailable hash and uncertain execution; inference continuing after 26 and before
+28; safe stop at 28; explicit 26-second override; and accepted publication/reporting
+of a step-limited partial. Existing journal, process death, quarantine, late receipt,
+durability and no-replay tests also passed. Windows orphan-process tests ran outside
+the sandbox to allow termination of their own test workers. Five actual-tokenizer
+checks were skipped because no local Qwen tokenizer was configured.
+
+No GPU/model inference, fine-tuning, Slurm job or full Public Test was run. No server
+environment or `public-full-001` / `public-fallback-001` artifacts were accessed.
+The shorter default finalization reserve (two seconds) cannot rescue blocked work
+or guarantee timely durable staging/acceptance. GPU latency/quality remains unverified.

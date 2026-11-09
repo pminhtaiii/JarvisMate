@@ -184,7 +184,7 @@ Status: controlled checks only (see the
 The Docker image, GPU runs, real checkpoints and latency are pending on the GPU server
 via `scripts/integration/server-acceptance.sh`.
 
-Integration supports a soft stop (default 26 seconds) inside the supervisor's hard
+Integration supports a soft stop (default 28 seconds) inside the supervisor's hard
 budget (at most 30 seconds), starting before dispatch and including ASR. Set
 `execution.soft_timeout_seconds` with `0 < soft_timeout_seconds < timeout_seconds <= 30`.
 Only safe boundaries with an initialized ToolEnv can return `partial`; output always
@@ -193,6 +193,14 @@ comes from its official log/hash getters. `completed`, `needs_info`, `partial`,
 permit complete coverage publication; `manifest.report.partial` counts them, and
 coverage does not imply correctness. See the [runtime contract](../specs/002-docker-integration/contracts/runtime.md)
 for acceptance ordering, generation/tool blocking and crash limitations.
+
+Exhausting the native agent's 16 decision steps also returns an authoritative
+`partial`, with `stop_reason="step_limit"`; a soft stop uses `"soft_deadline"`.
+No extra planner turn or tool call is made to finish. Finish or valid clarification
+at step 16 retains `completed` or `needs_info`; hard expiry and execution/state errors
+retain timeout/failure handling. Metrics and traces carry the stop reason, and
+manifest/diagnostics reports separate counts under `partial_stop_reasons`.
+Explicit soft budgets (including 26 seconds) are respected; omitting the setting uses 28.
 
 For a three-sample UIT smoke, use a separate checkout of the new branch and the
 existing inference interpreter. Set `PY` to that interpreter and `BASE_CONFIG` to
@@ -224,7 +232,7 @@ assert len(ids) == 3, "Need exactly three selected samples"
 (root / "selection.txt").write_text("\n".join(ids) + "\n", encoding="utf-8")
 value = config.record()  # Validated absolute paths retain the original inputs.
 value.pop("schema_version")
-value["execution"].update(timeout_seconds=30, soft_timeout_seconds=26)
+value["execution"].update(timeout_seconds=30, soft_timeout_seconds=28)
 value["data"].update(select_all=False, sample_ids_file=str(root / "selection.txt"))
 value["output"]["root"] = str(root / "run")
 def toml(v):

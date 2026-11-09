@@ -28,7 +28,7 @@ class ConfigurationTests(unittest.TestCase):
         config = load_config(self.fx.write_config())
         self.assertEqual(config.planner.model_path, self.fx.planner.resolve())
         self.assertEqual(config.limits.timeout, 30)
-        self.assertEqual(config.soft_timeout_seconds, 26)
+        self.assertEqual(config.soft_timeout_seconds, 28)
         self.assertEqual(config.fingerprint(), load_config(self.fx.write_config()).fingerprint())
         self.assertEqual(parse_config(config.record(), self.fx.root).record(), config.record())
 
@@ -56,7 +56,7 @@ class ConfigurationTests(unittest.TestCase):
             ("execution", {"soft_timeout_seconds": True}), ("execution", {"soft_timeout_seconds": "26"}),
             ("execution", {"soft_timeout_seconds": float("nan")}),
             ("execution", {"soft_timeout_seconds": float("inf")}),
-            ("execution", {"timeout_seconds": 25}),  # Omitted soft budget still defaults to 26.
+            ("execution", {"timeout_seconds": 28}),  # Omitted soft budget still defaults to 28.
             ("execution", {"recovery_attempts": 2}), ("execution", {"seed": -1}),
             ("execution", {"startup_timeout_seconds": 0}), ("data", {"split": "private_test"}),
             ("data", {"mode": "video"}), ("output", {"debug_payloads": "yes"}),
@@ -100,6 +100,19 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual((config.planner.protocol, config.timeout_seconds, config.recovery_attempts),
                          ("qwen-native-v1", 30.0, 1))
         self.assertEqual(config.planner.device, "cuda:0")
+        self.assertEqual(config.soft_timeout_seconds, 28)
+
+    def test_explicit_soft_budget_overrides_default_and_round_trips(self):
+        config = load_config(self.fx.write_config(self.changed("execution", soft_timeout_seconds=26)))
+        self.assertEqual(config.soft_timeout_seconds, 26)
+        self.assertEqual(parse_config(config.record(), self.fx.root).soft_timeout_seconds, 26)
+
+    def test_integration_dataclass_default_is_28(self):
+        from lifemate.configuration import IntegrationConfig
+
+        settings = dict(vars(load_config(self.fx.write_config(self.changed("execution", soft_timeout_seconds=26)))))
+        del settings["soft_timeout_seconds"]
+        self.assertEqual(IntegrationConfig(**settings).soft_timeout_seconds, 28)
 
     def test_parameter_budget(self):
         self.assertEqual(check_parameter_budget(4_000_000_000, 1_000_000_000)["status"], "checked_from_headers")

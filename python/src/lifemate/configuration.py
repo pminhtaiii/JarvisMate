@@ -75,7 +75,7 @@ class IntegrationConfig:
     output_root: Path
     debug_payloads: bool
     source: Path | None = None
-    soft_timeout_seconds: float = 26.0
+    soft_timeout_seconds: float = 28.0
 
     @property
     def limits(self) -> Limits:
@@ -180,7 +180,7 @@ def parse_config(raw: Any, base: Path, *, source: Path | None = None) -> Integra
     _check_shape(raw)
     execution, data, output = raw["execution"], raw["data"], raw["output"]
     timeout = integration_deadline(execution["timeout_seconds"])
-    soft_timeout = integration_soft_deadline(execution.get("soft_timeout_seconds", 26.0), timeout)
+    soft_timeout = integration_soft_deadline(execution.get("soft_timeout_seconds", 28.0), timeout)
     startup = execution["startup_timeout_seconds"]
     if not math.isfinite(startup) or not 0 < startup <= 3600:
         raise invalid("execution.startup_timeout_seconds must be in (0, 3600]")

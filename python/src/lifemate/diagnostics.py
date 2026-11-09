@@ -15,6 +15,7 @@ import argparse
 import re
 import sys
 import unicodedata
+from collections import Counter
 from pathlib import Path
 
 from .artifacts import JournalState, _check
@@ -119,6 +120,7 @@ def sample_row(sample_id: str, reference: JSON, state: JournalState, fuzzy) -> J
     gold = reference["calls"]
     gold_ask = ask(gold)
     row = {"id": sample_id, "status": status,
+           "stop_reason": terminal.get("metrics", {}).get("worker", {}).get("stop_reason") if terminal else None,
            "error": terminal["error"].get("code") if terminal and terminal["type"] == "fail" else None,
            "groups": {"empty_gold": not gold, "clarification_gold": gold_ask is not None,
                       "clarification_after_calls": gold_ask is not None and gold.index(gold_ask) > 0,
@@ -162,6 +164,8 @@ def summarize(rows: list[JSON]) -> JSON:
         "samples": len(rows), "accepted": len(accepted),
         "accepted_statuses": {s: sum(r["status"] == s for r in accepted)
                               for s in ("completed", "needs_info", "partial")},
+        "partial_stop_reasons": dict(sorted(Counter(r.get("stop_reason") or "unknown"
+                                                   for r in accepted if r["status"] == "partial").items())),
         "coverage_note": "Accepted coverage includes partial execution and does not establish correctness",
         "runtime_failures": {s: sum(r["status"] == s for r in failures)
                              for s in ("timeout", "failed", "uncertain", "not_attempted")},

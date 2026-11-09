@@ -191,7 +191,7 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
                            environment_factory: EnvironmentFactory, trace: TraceSink,
                            limits: Limits, deadline: Deadline, *, split: str, data_root,
                            asr_identity: str = "", clock=time.monotonic,
-                           soft_timeout_seconds: float = 26.0) -> SampleOutcome:
+                           soft_timeout_seconds: float = 28.0) -> SampleOutcome:
     """Native integration path (ADR 011): one prepared request, one ToolEnv, real feedback.
 
     ``planner.decide(prepared, observations, remaining)`` returns one canonical action
@@ -302,13 +302,14 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
                 if failure is not None and repeated_failures >= 3:
                     raise PipelineError("NO_PROGRESS", "Three consecutive tool failures without progress", "planner")
             else:
-                raise PipelineError("STEP_LIMIT", "Planner decision budget exhausted", "planner")
+                status, reason = "partial", "step_limit"
         stage = "collection"
         deadline.remaining()
         started = clock()
         result = authoritative(env, sample.id)
         span("collection", started)
         deadline.remaining()
+        metrics["stop_reason"] = reason
         trace.emit("sample_finished", step=steps, status=status, stop_reason=reason, payload=result,
                    timings=timings)
         deadline.remaining()
@@ -318,6 +319,7 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
         error = exc if isinstance(exc, PipelineError) else PipelineError(
             "EXECUTION_UNCERTAIN" if stage in {"environment", "dispatch", "collection"} else "PLANNER_ERROR",
             "Sample failed; inspect stage and local trace", stage)
+        metrics["stop_reason"] = error.code
         diagnostic = None
         if env is not None:
             try:

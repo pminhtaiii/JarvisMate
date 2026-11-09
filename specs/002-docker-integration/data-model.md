@@ -4,7 +4,7 @@
 
 - Schema version, local ASR/planner paths and backend/protocol identifiers.
 - Per-model device, precision and explicit offload; context/output limits.
-- Hard sample deadline `(0,30]`, soft deadline `(0,hard)` (default 26 seconds), max
+- Hard sample deadline `(0,30]`, soft deadline `(0,hard)` (default 28 seconds), max
   steps and bounded startup/recovery.
 - Data root/split/catalog identity, input mode, explicit selection, seed and output policy.
 
@@ -36,6 +36,8 @@ model cannot construct authoritative state, results or submission logs.
 - Supervisor monotonic dispatch time, deadline and acceptance time.
 - State: `running -> completed | needs_info | partial | timeout | failed`.
 - Per-stage time, tokens, ASR counts, stop/error code and bounded diagnostic paths.
+- Partial stop reasons: `soft_deadline` or `step_limit` (default 16 decisions),
+  preserved in traces, metrics and report `partial_stop_reasons` counts.
 - Unique staged prediction/trace paths and output durability acknowledgement.
 
 Before dispatch, persist a reservation binding source ID, attempt ID, worker
