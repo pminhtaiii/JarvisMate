@@ -221,3 +221,38 @@ No model/GPU acceptance is inferred from these doubles. Pending server gates: T0
 (image build/offline run, second checkpoint), T029 (frozen Train selection, paired
 diagnostics), T031 (paired latency/correctness), T032 (organizer accounting and
 failed-row rules), T033 (deterministic reruns and hardware evidence limits).
+
+### Early stop and partial results, 2026-11-09
+
+Based on `codex/007-sft-full-train-no-validation` at
+`09cc73fa479b03b05052b3925ecfcf8ac93ee8f1`; implementation branch
+`codex/008-inference-early-stop-partial`. Windows authoring machine, isolated portable
+CPython 3.13.9, no model libraries/weights or organizer dataset configured:
+
+```powershell
+$env:PYTHONPATH = 'python/src'
+& ..\.python\python.exe -m unittest discover -s python/tests -v *> ..\python-tests-final.log
+# Exit 0: Ran 329 tests in 44.590s; OK (skipped=58): 271 passed, 58 skipped.
+node scripts/ci/check-context.mjs
+# Exit 0: Context checks passed (51 Markdown files; 0 canonical facts).
+git diff --check
+# Exit 0, no output.
+```
+
+Integration coverage in that full run: 25 early-stop/fake-clock tests, 18 config and
+preflight tests, 11 native sample-loop tests, 27 journal/supervisor/process tests and
+8 diagnostics tests. This includes the three-call partial log/hash, empty partial,
+normal finish, successful clarification at soft expiry, discarded late planner action,
+soft generation budget, schema-rejected calls, hard tool/planner expiry, late hash
+collection, blocked ASR/planner/tool/output and IPC, worker crashes/lost acknowledgement,
+candidate-fsync expiry, supervisor crash before durable confirmation, quarantine/no
+replay, publication/manifest counts and diagnostics. Full discovery also exercised
+legacy runner/adapter tests. Skips concern unavailable model libraries, actual tokenizer,
+GPU or opt-in real-data/runtime evidence; skipped tests are not PASS claims.
+
+The first sandboxed full run encountered a Windows permission failure stopping an
+orphan test worker after its parent died. The isolated orphan test and final full
+run passed outside the sandbox, where process-tree termination was permitted. Only
+local test processes were stopped. No server job, training, full Public Test, Docker
+build or UIT model/GPU smoke was run. The three-sample command in
+[python/README.md](../../python/README.md) remains a server-side verification step.

@@ -160,6 +160,9 @@ def summarize(rows: list[JSON]) -> JSON:
                         "failed_or_timeout": sum(not r["accepted"] for r in members)}
     return {
         "samples": len(rows), "accepted": len(accepted),
+        "accepted_statuses": {s: sum(r["status"] == s for r in accepted)
+                              for s in ("completed", "needs_info", "partial")},
+        "coverage_note": "Accepted coverage includes partial execution and does not establish correctness",
         "runtime_failures": {s: sum(r["status"] == s for r in failures)
                              for s in ("timeout", "failed", "uncertain", "not_attempted")},
         "empty": {"empty_gold_correct": ratio(sum(r.get("predicted_empty") is True for r in empty_gold), len(empty_gold)),

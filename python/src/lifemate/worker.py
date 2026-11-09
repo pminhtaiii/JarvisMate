@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import math
 import os
 import struct
 import sys
 import time
 from pathlib import Path
 
-from .contracts import JSON, PipelineError
+from .contracts import ACCEPTED_STATES, JSON, PipelineError
 
 MAX_FRAME = 1024 * 1024
 HEADER = struct.Struct(">I")
@@ -137,10 +138,18 @@ class Worker:
         """Run one dispatched sample; durable staging happens inside its budget."""
         from .agent import run_integration_sample
         from .artifacts import Trace, write_durable
-        from .contracts import Deadline
+        from .contracts import Deadline, integration_deadline
         from .jsonio import dumps
 
-        deadline = Deadline(float(message["budget_seconds"]), self.clock)
+        # Both processes use the host monotonic clock. Never restart the sample
+        # budget at receipt: dispatch/IPC and all worker preparation count too.
+        budget = integration_deadline(message.get("budget_seconds"))
+        started = message.get("started_monotonic")
+        if (budget != self.config.timeout_seconds or isinstance(started, bool)
+                or not isinstance(started, (int, float)) or not math.isfinite(started)
+                or started > self.clock()):
+            raise PipelineError("INPUT_INVALID", "Invalid supervisor attempt clock/budget", "worker")
+        deadline = Deadline(budget, self.clock, started=started)
         attempt_id, sample_id = message["attempt_id"], message["sample_id"]
         staging = self.root / "staging" / attempt_id
         staging.mkdir()  # Unique per attempt; an existing directory is never reused.
@@ -153,14 +162,15 @@ class Worker:
             outcome = run_integration_sample(
                 sample, self.components["planner"], self.components.get("asr"), self.environments, trace,
                 self.config.limits, deadline, split=self.config.split, data_root=self.config.data_root,
-                asr_identity=self.components.get("asr_identity", ""), clock=self.clock)
+                asr_identity=self.components.get("asr_identity", ""), clock=self.clock,
+                soft_timeout_seconds=self.config.soft_timeout_seconds)
         finally:
             trace.close()
         status = (outcome.status if outcome.status != "failed"
                   else "timeout" if outcome.error and outcome.error["code"] == "TIME_LIMIT" else "failed")
         files = ["outcome.json"]
         started = self.clock()
-        if outcome.result is not None and status in {"completed", "needs_info"}:
+        if outcome.result is not None and status in ACCEPTED_STATES:
             write_durable(staging / "prediction.json", dumps(outcome.result) + "\n")
             files.append("prediction.json")
         record = {"attempt_id": attempt_id, "sample_id": sample_id, "generation": self.generation,
@@ -171,6 +181,14 @@ class Worker:
         # The outcome file's own write is covered by the supervisor's full-attempt span.
         record["timings"] = dict(record["timings"], output=self.clock() - started)
         write_durable(staging / "outcome.json", dumps(record) + "\n")
+        # Late staging is diagnostic evidence only; never acknowledge it as success.
+        if status in ACCEPTED_STATES:
+            try:
+                deadline.remaining()
+            except PipelineError:
+                return {"type": "result_ready", "generation": self.generation, "attempt_id": attempt_id,
+                        "sample_id": sample_id, "status": "timeout", "files": files,
+                        "worker_elapsed": deadline.elapsed()}
         return {"type": "result_ready", "generation": self.generation, "attempt_id": attempt_id,
                 "sample_id": sample_id, "status": status, "files": files,
                 "worker_elapsed": deadline.elapsed()}

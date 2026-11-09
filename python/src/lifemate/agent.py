@@ -190,21 +190,33 @@ def run_sample(sample: SampleInput, planner: Planner, asr: ASR | None,
 def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
                            environment_factory: EnvironmentFactory, trace: TraceSink,
                            limits: Limits, deadline: Deadline, *, split: str, data_root,
-                           asr_identity: str = "", clock=time.monotonic) -> SampleOutcome:
+                           asr_identity: str = "", clock=time.monotonic,
+                           soft_timeout_seconds: float = 26.0) -> SampleOutcome:
     """Native integration path (ADR 011): one prepared request, one ToolEnv, real feedback.
 
     ``planner.decide(prepared, observations, remaining)`` returns one canonical action
     plus decision metrics. Invalid model output fails the sample; there is no repair,
     re-prompt or unconstrained fallback. Historical calls are never executed.
     """
+    from .contracts import integration_soft_deadline
     from .dataset import prepare_request_once
 
+    soft_timeout_seconds = integration_soft_deadline(soft_timeout_seconds, deadline.ends - deadline.started)
     env, steps, stage = None, 0, "request"
     timings = {"request": 0.0, "environment": 0.0, "planner": 0.0, "tools": 0.0, "collection": 0.0}
     metrics: JSON = {"asr": None, "decisions": [], "tools": []}
+    metrics["deadline"] = {"soft_timeout_seconds": soft_timeout_seconds,
+                           "soft_stop_point": None, "finalization_budget_seconds": None}
 
     def span(name, started):
         timings[name] += clock() - started
+
+    def soft_stop(point):
+        remaining = deadline.remaining()  # Hard expiry always wins, including after a tool return.
+        if deadline.elapsed() < soft_timeout_seconds:
+            return False
+        metrics["deadline"].update(soft_stop_point=point, finalization_budget_seconds=remaining)
+        return True
 
     try:
         trace.emit("sample_started", input_mode=sample.mode, protocol="qwen-native-v1")
@@ -226,12 +238,33 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
         observations: list[JSON] = []
         last_failure, repeated_failures = None, 0
         status, reason = "completed", "finish"
-        with inference_session(planner):
-            for steps in range(1, limits.max_steps + 1):
+        with ExitStack() as model_sessions:
+            # Offload/session entry may itself block; do not enter it if already soft-expired.
+            if not soft_stop("before_planner_session"):
+                model_sessions.enter_context(inference_session(planner))
+            for step in range(1, limits.max_steps + 1):
+                if soft_stop("before_planner"):
+                    status, reason = "partial", "soft_deadline"
+                    break
+                steps = step
                 stage = "planner"
                 started = clock()
-                action, details = planner.decide(prepared, observations, deadline.remaining())
+                try:
+                    action, details = planner.decide(
+                        prepared, observations,
+                        min(deadline.remaining(), soft_timeout_seconds - deadline.elapsed()))
+                except PipelineError as exc:
+                    # Native generation's cooperative stopping criterion reports TIME_LIMIT.
+                    # Only its timely return at the soft boundary is a safe partial stop.
+                    if exc.code != "TIME_LIMIT" or not soft_stop("planner_budget"):
+                        raise
+                    span("planner", started)
+                    status, reason = "partial", "soft_deadline"
+                    break
                 span("planner", started)
+                if soft_stop("after_planner"):
+                    status, reason = "partial", "soft_deadline"
+                    break
                 metrics["decisions"].append({"step": steps, "seconds": clock() - started,
                                              "action": action["action"], **details})
                 deadline.remaining()
@@ -244,22 +277,30 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
                     raise PipelineError("PLANNER_FORMAT", "Decision names an ineligible tool", "planner")
                 stage = "dispatch"
                 trace.emit("tool_call_started", step=steps, name=action["name"], payload=action["arguments"])
-                deadline.remaining()  # Immediately before dispatch.
+                if soft_stop("before_dispatch"):
+                    status, reason = "partial", "soft_deadline"
+                    break
                 started = clock()
                 result = execute_call(env, action["name"], action["arguments"])
+                deadline.remaining()
+                needs_info = waiting_for_user(action["name"], result)
+                stopped = soft_stop("after_tool")
                 span("tools", started)
                 metrics["tools"].append({"step": steps, "name": action["name"], "seconds": clock() - started})
                 trace.emit("tool_call_result", step=steps, name=action["name"], payload=result)
                 deadline.remaining()  # And on return: a late mutation cannot become success.
+                if needs_info:
+                    status, reason = "needs_info", "waiting_for_user"
+                    break
+                if stopped or soft_stop("after_tool_trace"):
+                    status, reason = "partial", "soft_deadline"
+                    break
                 observations.append({"name": action["name"], "arguments": action["arguments"], "result": result})
                 failure = failure_key(action["name"], action["arguments"], result)
                 repeated_failures = repeated_failures + 1 if failure is not None and failure == last_failure else 1
                 last_failure = failure
                 if failure is not None and repeated_failures >= 3:
                     raise PipelineError("NO_PROGRESS", "Three consecutive tool failures without progress", "planner")
-                if waiting_for_user(action["name"], result):
-                    status, reason = "needs_info", "waiting_for_user"
-                    break
             else:
                 raise PipelineError("STEP_LIMIT", "Planner decision budget exhausted", "planner")
         stage = "collection"
@@ -270,6 +311,7 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
         deadline.remaining()
         trace.emit("sample_finished", step=steps, status=status, stop_reason=reason, payload=result,
                    timings=timings)
+        deadline.remaining()
         return SampleOutcome(sample.id, status, deadline.elapsed(), steps, reason, result=result,
                              timings=timings, metrics=metrics)
     except Exception as exc:

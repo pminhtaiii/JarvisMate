@@ -124,7 +124,7 @@ class PreparedDataset:
 @dataclass
 class SampleOutcome:
     id: str
-    status: Literal["completed", "needs_info", "failed"]
+    status: Literal["completed", "needs_info", "partial", "failed"]
     elapsed: float
     steps: int
     stop_reason: str
@@ -162,8 +162,9 @@ EnvironmentFactory = Callable[[str, str, Path], Environment]
 
 
 class Deadline:
-    def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic):
-        self.clock, self.started = clock, clock()
+    def __init__(self, seconds: float, clock: Callable[[], float] = time.monotonic,
+                 *, started: float | None = None):
+        self.clock, self.started = clock, clock() if started is None else started
         self.ends = self.started + seconds
 
     def remaining(self) -> float:
@@ -179,8 +180,8 @@ class Deadline:
 # --- Integration attempt records (ADR 011). Legacy defaults above are unchanged. ---
 
 INTEGRATION_MAX_SECONDS = 30.0
-ATTEMPT_STATES = ("running", "completed", "needs_info", "timeout", "failed")
-ACCEPTED_STATES = frozenset({"completed", "needs_info"})
+ATTEMPT_STATES = ("running", "completed", "needs_info", "partial", "timeout", "failed")
+ACCEPTED_STATES = frozenset({"completed", "needs_info", "partial"})
 FAILED_STATES = frozenset({"timeout", "failed"})
 TERMINAL_STATES = ACCEPTED_STATES | FAILED_STATES
 
@@ -190,6 +191,16 @@ def integration_deadline(seconds) -> float:
     if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
             or not math.isfinite(seconds) or not 0 < seconds <= INTEGRATION_MAX_SECONDS):
         raise PipelineError("INPUT_INVALID", "Integration sample timeout must be in (0, 30] seconds",
+                            "configuration")
+    return float(seconds)
+
+
+def integration_soft_deadline(seconds, timeout: float) -> float:
+    """The integration soft budget reserves time inside the unchanged hard budget."""
+    integration_deadline(timeout)
+    if (isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+            or not math.isfinite(seconds) or not 0 < seconds < timeout):
+        raise PipelineError("INPUT_INVALID", "Require 0 < soft_timeout_seconds < timeout_seconds <= 30",
                             "configuration")
     return float(seconds)
 

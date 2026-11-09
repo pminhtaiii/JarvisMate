@@ -4,7 +4,8 @@
 
 - Schema version, local ASR/planner paths and backend/protocol identifiers.
 - Per-model device, precision and explicit offload; context/output limits.
-- Sample deadline `(0,30]` seconds, max steps and bounded startup/recovery.
+- Hard sample deadline `(0,30]`, soft deadline `(0,hard)` (default 26 seconds), max
+  steps and bounded startup/recovery.
 - Data root/split/catalog identity, input mode, explicit selection, seed and output policy.
 
 Reject unknown keys, invalid limits, missing snapshots and incompatible devices,
@@ -33,7 +34,7 @@ model cannot construct authoritative state, results or submission logs.
 
 - Attempt/source IDs, worker generation, configuration identity.
 - Supervisor monotonic dispatch time, deadline and acceptance time.
-- State: `running -> completed | needs_info | timeout | failed`.
+- State: `running -> completed | needs_info | partial | timeout | failed`.
 - Per-stage time, tokens, ASR counts, stop/error code and bounded diagnostic paths.
 - Unique staged prediction/trace paths and output durability acknowledgement.
 
@@ -44,7 +45,9 @@ after unclean supervisor exit, any reservation without durable acceptance become
 The reservation is append-only evidence: absence of staged output never clears it.
 
 Success requires authoritative validated output, durable sample artifacts and timely
-supervisor receipt. At/after expiry is timeout. Terminal states are immutable. One
+supervisor receipt and acceptance decision after a durable `accept_pending` candidate.
+Only the final `accept` confirms it; a candidate alone remains unresolved. At/after
+expiry is timeout. Terminal states are immutable. One
 sample has one attempt/run; recovery/resume cannot replay failed/uncertain samples.
 Only configuration-compatible previously accepted rows may be retained by resume.
 

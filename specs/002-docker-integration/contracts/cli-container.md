@@ -48,6 +48,7 @@ max_new_tokens = 512
 
 [execution]
 timeout_seconds = 30
+soft_timeout_seconds = 26                     # optional, defaults to 26
 max_steps = 16
 startup_timeout_seconds = 300
 recovery_attempts = 1
@@ -67,7 +68,7 @@ debug_payloads = false
 
 Accepted values: devices `cpu`, `cuda`, `cuda:N`; dtypes `float32`, `float16` (CUDA
 only), `bfloat16`; offload requires CUDA; `0 < max_new_tokens < context_tokens <= 16384`;
-`timeout_seconds` in `(0, 30]`; `max_steps` 1..64; `startup_timeout_seconds` in
+`0 < soft_timeout_seconds < timeout_seconds <= 30`; `max_steps` 1..64; `startup_timeout_seconds` in
 `(0, 3600]`; `recovery_attempts` 0 or 1 restart per worker loss; 32-bit `seed`.
 Relative paths resolve against the TOML file's directory. The documented example is
 `configs/integration.example.toml`. Both models support validated explicit
@@ -118,6 +119,12 @@ complete coverage, `predictions.jsonl`. Complete publication requires
 exact selected-ID coverage without failures/duplicates. Resume rejects different
 models/templates/config/data and never replays failed/uncertain samples. Submission
 rows retain the organizer schema exactly.
+
+Accepted `partial` samples count toward coverage; `manifest.report.partial` records
+their count separately from normal completion and clarification. Omitting the soft
+setting preserves the 26-second default; configurations with hard budgets <=26 must
+set a smaller soft budget explicitly. New configuration/code identities require a
+fresh output root; never resume or change artifacts belonging to a running old job.
 
 The attempt journal includes fsynced pre-dispatch reservations. Resume requires
 exclusive run ownership, confirmed prior-worker termination and a valid journal;

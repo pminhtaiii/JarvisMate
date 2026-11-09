@@ -94,6 +94,14 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("state_hash_match", summary["unavailable"])
         self.assertNotIn("score", summary)
 
+    def test_partial_is_accepted_but_counted_separately_from_completion(self):
+        cases = dict(CASES, s03=([SEARCH, SEND], 2, "partial", [SEARCH]))
+        result = report(self.run_root(cases=cases), self.references, self.catalog)
+        sample = next(r for r in result["samples"] if r["id"] == "s03")
+        self.assertEqual((sample["status"], sample["accepted"], sample["exact_calls"]), ("partial", True, False))
+        self.assertEqual(result["summary"]["accepted_statuses"], {"completed": 3, "needs_info": 2, "partial": 1})
+        self.assertEqual(result["summary"]["accepted"], 6)
+
     def test_benchmark_call_matching(self):
         fuzzy = {"sms.send": {"content"}}
         self.assertGreater(token_f1("Đến trễ nhé!", "đến trễ nhé"), 0.6)

@@ -28,6 +28,7 @@ class ConfigurationTests(unittest.TestCase):
         config = load_config(self.fx.write_config())
         self.assertEqual(config.planner.model_path, self.fx.planner.resolve())
         self.assertEqual(config.limits.timeout, 30)
+        self.assertEqual(config.soft_timeout_seconds, 26)
         self.assertEqual(config.fingerprint(), load_config(self.fx.write_config()).fingerprint())
         self.assertEqual(parse_config(config.record(), self.fx.root).record(), config.record())
 
@@ -50,6 +51,12 @@ class ConfigurationTests(unittest.TestCase):
             ("planner", {"protocol": "lifemate-react-v4"}), ("asr", {"backend": "wav2vec"}),
             ("execution", {"timeout_seconds": 30.5}), ("execution", {"timeout_seconds": 0}),
             ("execution", {"timeout_seconds": True}), ("execution", {"max_steps": 0}),
+            ("execution", {"soft_timeout_seconds": 0}), ("execution", {"soft_timeout_seconds": -1}),
+            ("execution", {"soft_timeout_seconds": 30}), ("execution", {"soft_timeout_seconds": 31}),
+            ("execution", {"soft_timeout_seconds": True}), ("execution", {"soft_timeout_seconds": "26"}),
+            ("execution", {"soft_timeout_seconds": float("nan")}),
+            ("execution", {"soft_timeout_seconds": float("inf")}),
+            ("execution", {"timeout_seconds": 25}),  # Omitted soft budget still defaults to 26.
             ("execution", {"recovery_attempts": 2}), ("execution", {"seed": -1}),
             ("execution", {"startup_timeout_seconds": 0}), ("data", {"split": "private_test"}),
             ("data", {"mode": "video"}), ("output", {"debug_payloads": "yes"}),
@@ -163,6 +170,11 @@ class PreflightTests(unittest.TestCase):
         self.fx.selection.write_text("train_9999\n", encoding="utf-8")
         self.assert_rejected_before_runtime(None, "INPUT_INVALID")
 
+    def test_invalid_soft_budget_fails_preflight_before_runtime(self):
+        values = self.fx.values()
+        values["execution"]["soft_timeout_seconds"] = 30
+        self.assert_rejected_before_runtime(values, "INPUT_INVALID")
+
     def test_model_change_changes_run_identity(self):
         first = self.check()
         (self.fx.planner / "model.safetensors").write_bytes(
@@ -198,6 +210,7 @@ class CommandTests(unittest.TestCase):
 
         values = self.fx.values()
         values["execution"]["timeout_seconds"] = 5
+        values["execution"]["soft_timeout_seconds"] = 4
         if output is not None:
             values["output"]["root"] = output
         argv = ["--config", str(self.fx.write_config(values)), *map(str, extra)]

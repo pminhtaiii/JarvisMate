@@ -43,8 +43,11 @@ treat arbitrary text as success.
 Permit only template-compatible outer whitespace. Reject multiple calls, prose,
 extra/duplicate JSON keys, nonfinite values, non-object arguments and unfinished
 blocks. Never extract the first plausible call or repair JSON. Inspect actual token
-termination before special-token removal. Timeout remains timeout; token exhaustion
-without EOS is output-limit failure, even if decoded text looks complete.
+termination before special-token removal. Hard timeout remains timeout; token
+exhaustion without EOS is output-limit failure, even if decoded text looks complete.
+The integration agent gives generation only the remaining soft budget. A cooperative
+generation `TIME_LIMIT` returning at the soft boundary, before hard expiry, can stop
+safely with an authoritative partial result.
 
 Reuse existing constrained-decoding dependency where compatible. Actual tokenizer
 checks must prove native delimiters, name/schema binding, EOS and no-tool branch.
@@ -63,6 +66,28 @@ Submit only `get_tool_calls()`/`get_state_hash()` results. Valid no-tool complet
 still creates the environment and obtains its empty log/actual hash. No error path
 manufactures a successful empty prediction.
 
+The optional `execution.soft_timeout_seconds` defaults to 26, with
+`0 < soft_timeout_seconds < timeout_seconds <= 30`. Both clocks start at the
+supervisor's monotonic dispatch time, which the worker receives explicitly; IPC,
+ASR and environment initialization do not reset either clock. Legacy `run` is unchanged.
+Check hard then soft time before/after every planner decision, immediately before
+dispatch and after every returned tool call. At soft expiry stop new decisions/calls,
+then collect only `env.get_tool_calls()` and `env.get_state_hash()` from the existing
+environment. Include schema-rejected calls that ToolEnv logged. Never execute a
+clarification just to stop. A valid returned clarification retains `needs_info` even
+when soft time has expired. Exceptions or uncertain in-flight execution cannot
+produce an accepted partial result.
+
+Attempt statuses are `completed` (planner finish), `needs_info` (valid executed
+clarification), `partial` (safe soft stop with unfinished work), `timeout` (hard
+expiry, no accepted row), and `failed` (execution/planner/storage failure). A valid
+initialized environment may supply an empty partial log with its actual hash.
+Soft stopping reserves the hard-minus-soft interval for collection, session exit,
+trace closure, serialization, durable staging, acknowledgement and acceptance.
+It is not a guarantee: model transfer, native/CUDA generation, environment calls,
+hash collection or storage may block until hard expiry. The supervisor terminates
+an unacknowledged worker; OS termination and blocked supervisor storage can overshoot.
+
 ## Supervisor / worker protocol
 
 Use spawned workers and bounded framed IPC validated on receipt. Load models once,
@@ -72,7 +97,7 @@ binding sample ID, attempt ID, worker generation and configuration identity. Dis
 nothing until reservation durability is confirmed; failure stops the run nonzero.
 Reservation persistence is scheduling bookkeeping, separately measured in run wall
 time, and must perform no sample input preparation, ASR or tool work. Start one
-monotonic clock immediately before dispatch and send the absolute deadline.
+monotonic clock immediately before dispatch and send its start and budget.
 The shared budget includes preparation, ASR, environment creation, every generation/
 tool call, collection, trace closure, serialization and durable per-sample staging.
 
@@ -109,11 +134,17 @@ state by opening another ToolEnv.
 
 ## Output and publication
 
-Durable per-sample staging is within sample latency; timely supervisor receipt is
-the success boundary. Acceptance-ledger persistence/final JSONL assembly is separately
-timed batch bookkeeping and performs no inference/tool work or content alteration.
+Durable per-sample staging, matching supervisor receipt, validation and the acceptance
+decision must all precede hard expiry. Before deciding acceptance, fsync a complete
+`accept_pending` journal candidate, then check the clock again. A slow read,
+validation or candidate fsync that reaches the deadline becomes timeout. A final
+`accept` record confirms the decision time (`accepted_monotonic` strictly less than
+the candidate deadline), preserving the candidate's exact prediction and status.
+Confirmation-ledger persistence/final JSONL assembly is batch bookkeeping and
+performs no inference/tool work or content alteration.
 An uncertain/lost acceptance acknowledgement fails closed; staged files alone cannot
-establish success after a parent crash.
+establish success after a parent crash. An `accept_pending` record alone never
+establishes acceptance; resume treats it as uncertain and quarantines its staging.
 Persist acceptance against the original durable reservation before dispatching the
 next sample. If that write fails or is lost, retain the reservation as uncertain;
 do not retry the sample or claim complete coverage. Batch finalization may retain
@@ -121,6 +152,10 @@ already durable acceptance only; it cannot promote unaccepted staging after a cr
 
 Publish only accepted configuration-compatible rows. Any failure, timeout or missing
 selected ID blocks complete publication and exits nonzero, retaining partial evidence.
+Valid `partial` attempts count toward accepted coverage and allow publication when
+all selected IDs are accepted. Manifest/report counts keep `completed`, `needs_info`
+and `partial` separate. Complete coverage and exit zero do not establish correctness;
+submission rows retain exactly `id`, `tool_calls`, `state_hash`.
 Failure-format and startup-accounting details remain organizer acceptance gates.
 
 ## Timing and evidence

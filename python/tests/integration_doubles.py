@@ -51,6 +51,8 @@ class Planner:
         details = {"prompt_tokens": 1, "generated_tokens": 1, "terminated": "eos"}
         if behavior == "block_planner":
             time.sleep(FOREVER)
+        if behavior == "soft_planner":
+            time.sleep(0.3)  # Test config sets soft=0.25, hard=2; return control safely.
         if behavior == "fail_planner":
             raise PipelineError("PLANNER_FORMAT", "Injected malformed completion", "planner")
         if behavior in {"lookup", "block_tool", "crash_tool"} and not observations:

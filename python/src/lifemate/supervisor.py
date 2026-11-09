@@ -295,7 +295,8 @@ class Supervisor:
         deadline = dispatched + self.timeout
         metrics: JSON = {"reservation_seconds": reservation_seconds, "generation": handle.generation}
         message = {"type": "dispatch", "generation": handle.generation, "attempt_id": identity.attempt_id,
-                   "sample_id": sample_id, "budget_seconds": self.timeout}
+                   "sample_id": sample_id, "budget_seconds": self.timeout,
+                   "started_monotonic": dispatched}
         lost = None
         received = None
         try:
@@ -305,11 +306,15 @@ class Supervisor:
         except WorkerLost as exc:
             lost = str(exc)
         receipt = self.clock()
-        metrics.update(attempt_seconds=receipt - dispatched, stale_messages=handle.stale_messages)
+        metrics.update(attempt_seconds=receipt - dispatched, stale_messages=handle.stale_messages,
+                       receipt_seconds=receipt - dispatched if received is not None else None)
         if received is not None and receipt < deadline:
             self._fault("received")
-            return self._accept(identity, received, metrics, dispatched)
+            accepted = self._accept(identity, received, metrics, dispatched, deadline)
+            if accepted is not None:
+                return accepted
         # Expiry, crash or protocol loss: terminal now, never retried.
+        metrics["attempt_seconds"] = self.clock() - dispatched
         self.worker = None
         stop = handle.terminate(self.clock)
         self.losses += 1
@@ -347,10 +352,15 @@ class Supervisor:
             if message.get("type") not in {"result_ready"}:
                 raise WorkerLost("unexpected message type")
 
-    def _accept(self, identity: AttemptIdentity, message: JSON, metrics: JSON, dispatched: float) -> AttemptResult:
+    def _accept(self, identity: AttemptIdentity, message: JSON, metrics: JSON, dispatched: float,
+                deadline: float) -> AttemptResult | None:
         try:
+            if self.clock() >= deadline:
+                return None
             outcome = self.journal.read_staged(identity.attempt_id, "outcome.json")
             if (not isinstance(outcome, dict) or outcome.get("attempt_id") != identity.attempt_id
+                    or outcome.get("sample_id") != identity.sample_id
+                    or outcome.get("generation") != identity.generation
                     or outcome.get("status") != message.get("status")):
                 raise PipelineError("WORKER_FAILED", "Staged outcome does not match the acknowledgement", "acceptance")
             metrics.update(worker=_bounded_metrics(outcome))
@@ -361,7 +371,9 @@ class Supervisor:
                 if prediction["id"] != identity.sample_id:
                     raise PipelineError("WORKER_FAILED", "Staged prediction identity mismatch", "acceptance")
                 began = self.clock()
-                self.journal.accept(identity, status, prediction, metrics)  # Durable before next dispatch.
+                if not self.journal.accept(identity, status, prediction, metrics,
+                                           deadline=deadline, started=dispatched, clock=self.clock):
+                    return None
                 metrics["acceptance_seconds"] = self.clock() - began
                 return AttemptResult(identity.sample_id, identity.attempt_id, status, None, metrics)
             error = outcome.get("error") if isinstance(outcome.get("error"), dict) else {"code": "WORKER_FAILED"}
@@ -370,6 +382,8 @@ class Supervisor:
             if exc.stage == "journal":
                 raise  # Acceptance durability failed: the reservation stays uncertain; stop.
             status, error = "failed", exc.record()
+        if self.clock() >= deadline:
+            return None
         self.journal.fail(identity, status, error, metrics)
         self._quarantine(identity.attempt_id)
         return AttemptResult(identity.sample_id, identity.attempt_id, status, error, metrics)

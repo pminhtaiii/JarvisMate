@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import (JSON, Limits, PipelineError, PreparedDataset, RunConfig,
-                        integration_deadline)
+                        integration_deadline, integration_soft_deadline)
 from .jsonio import digest, dumps, loads, safe_id
 
 SCHEMA_VERSION = 1
@@ -29,6 +29,7 @@ SCHEMA: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
                 "device": ((str,), True), "dtype": ((str,), True), "offload": ((bool,), False),
                 "context_tokens": ((int,), True), "max_new_tokens": ((int,), True)},
     "execution": {"timeout_seconds": ((int, float), True), "max_steps": ((int,), True),
+                  "soft_timeout_seconds": ((int, float), False),
                   "startup_timeout_seconds": ((int, float), True), "recovery_attempts": ((int,), True),
                   "seed": ((int,), True)},
     "data": {"root": ((str,), True), "split": ((str,), True), "mode": ((str,), True),
@@ -74,6 +75,7 @@ class IntegrationConfig:
     output_root: Path
     debug_payloads: bool
     source: Path | None = None
+    soft_timeout_seconds: float = 26.0
 
     @property
     def limits(self) -> Limits:
@@ -96,6 +98,7 @@ class IntegrationConfig:
             data["sample_ids_file"] = self.sample_ids_file.as_posix()
         value = {"schema_version": SCHEMA_VERSION, "planner": model(self.planner, True),
                  "execution": {"timeout_seconds": self.timeout_seconds, "max_steps": self.max_steps,
+                               "soft_timeout_seconds": self.soft_timeout_seconds,
                                "startup_timeout_seconds": self.startup_timeout_seconds,
                                "recovery_attempts": self.recovery_attempts, "seed": self.seed},
                  "data": data,
@@ -177,6 +180,7 @@ def parse_config(raw: Any, base: Path, *, source: Path | None = None) -> Integra
     _check_shape(raw)
     execution, data, output = raw["execution"], raw["data"], raw["output"]
     timeout = integration_deadline(execution["timeout_seconds"])
+    soft_timeout = integration_soft_deadline(execution.get("soft_timeout_seconds", 26.0), timeout)
     startup = execution["startup_timeout_seconds"]
     if not math.isfinite(startup) or not 0 < startup <= 3600:
         raise invalid("execution.startup_timeout_seconds must be in (0, 3600]")
@@ -213,7 +217,8 @@ def parse_config(raw: Any, base: Path, *, source: Path | None = None) -> Integra
         sample_ids_file=(_path(data["sample_ids_file"], base, "data.sample_ids_file")
                          if "sample_ids_file" in data else None),
         select_all=select_all, output_root=output_root,
-        debug_payloads=output.get("debug_payloads", False), source=source)
+        debug_payloads=output.get("debug_payloads", False), source=source,
+        soft_timeout_seconds=soft_timeout)
 
 
 def apply_overrides(raw: JSON, overrides: JSON) -> JSON:

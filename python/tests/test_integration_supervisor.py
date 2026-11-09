@@ -207,7 +207,8 @@ class SupervisorTests(unittest.TestCase):
 
     def config(self, output=None, **execution):
         values = self.fx.values()
-        values["execution"].update(timeout_seconds=TIMEOUT, startup_timeout_seconds=30)
+        values["execution"].update(timeout_seconds=TIMEOUT, soft_timeout_seconds=1.75,
+                                   startup_timeout_seconds=30)
         values["execution"].update(execution)
         values["output"]["root"] = output or self.fx.output
         return self.fx.write_config(values)
@@ -245,6 +246,19 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(len(manifest["timings"]["startup"]), 1)
         self.assertIsNotNone(manifest["timings"]["total_wall_seconds"])
         self.assertFalse(manifest["submission_ready"])
+
+    def test_partial_batch_publishes_and_manifest_counts_partial_separately(self):
+        code, summary = self.run_cli({"train_0001": "soft_planner"}, soft_timeout_seconds=0.25)
+        self.assertEqual((code, summary["status"]), (0, "completed"))
+        manifest = json.loads((self.fx.output / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual((manifest["report"]["completed"], manifest["report"]["partial"],
+                          manifest["report"]["accepted"]), (2, 1, 3))
+        self.assertIn("does not establish correctness", manifest["report"]["coverage_note"])
+        rows = [json.loads(l) for l in (self.fx.output / "predictions.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(set(r) == {"id", "tool_calls", "state_hash"} for r in rows))
+        self.assertEqual(self.terminal()["train_0001"]["status"], "partial")
+        self.assertEqual([self.opened(f"train_000{n}") for n in (1, 2, 3)], [1, 1, 1])
 
     def test_blocked_stages_time_out_and_a_later_sample_recovers(self):
         for stage in ("block_asr", "block_planner", "block_tool", "block_output"):

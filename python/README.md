@@ -184,6 +184,65 @@ Status: controlled checks only (see the
 The Docker image, GPU runs, real checkpoints and latency are pending on the GPU server
 via `scripts/integration/server-acceptance.sh`.
 
+Integration supports a soft stop (default 26 seconds) inside the supervisor's hard
+budget (at most 30 seconds), starting before dispatch and including ASR. Set
+`execution.soft_timeout_seconds` with `0 < soft_timeout_seconds < timeout_seconds <= 30`.
+Only safe boundaries with an initialized ToolEnv can return `partial`; output always
+comes from its official log/hash getters. `completed`, `needs_info`, `partial`,
+`timeout` and `failed` remain distinct in the journal and reports. Accepted partials
+permit complete coverage publication; `manifest.report.partial` counts them, and
+coverage does not imply correctness. See the [runtime contract](../specs/002-docker-integration/contracts/runtime.md)
+for acceptance ordering, generation/tool blocking and crash limitations.
+
+For a three-sample UIT smoke, use a separate checkout of the new branch and the
+existing inference interpreter. Set `PY` to that interpreter and `BASE_CONFIG` to
+the existing TOML (read only). This makes fresh config, selection and output paths,
+preserving all model/ASR/decoding settings. Run only when a GPU is available for this
+smoke; these commands do not schedule a Slurm job or modify a running job.
+
+```bash
+# From the new branch's separate checkout; replace these two deployment paths.
+PY=/absolute/existing-inference-env/bin/python
+BASE_CONFIG=/absolute/existing-config/integration.toml
+export PYTHONPATH="$PWD/python/src"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+SMOKE_ROOT=$(mktemp -d "$HOME/lifemate-smoke3.XXXXXXXX")
+"$PY" - "$BASE_CONFIG" "$SMOKE_ROOT" <<'PY'
+import itertools, json, sys
+from pathlib import Path
+from lifemate.configuration import load_config, selected_ids
+
+config = load_config(Path(sys.argv[1]))
+root = Path(sys.argv[2])
+assert config.mode == "audio", "Use the existing audio inference config"
+ids = list(selected_ids(config))[:3]
+if config.select_all:
+    visible = config.data_root / config.split / f"{config.split}.jsonl"
+    with visible.open(encoding="utf-8") as stream:
+        ids = [json.loads(line)["id"] for line in itertools.islice((s for s in stream if s.strip()), 3)]
+assert len(ids) == 3, "Need exactly three selected samples"
+(root / "selection.txt").write_text("\n".join(ids) + "\n", encoding="utf-8")
+value = config.record()  # Validated absolute paths retain the original inputs.
+value.pop("schema_version")
+value["execution"].update(timeout_seconds=30, soft_timeout_seconds=26)
+value["data"].update(select_all=False, sample_ids_file=str(root / "selection.txt"))
+value["output"]["root"] = str(root / "run")
+def toml(v):
+    return str(v).lower() if isinstance(v, bool) else json.dumps(v)
+text = "schema_version = 1\n" + "".join(
+    f"\n[{section}]\n" + "".join(f"{k} = {toml(v)}\n" for k, v in table.items())
+    for section, table in value.items())
+(root / "smoke3.toml").write_text(text, encoding="utf-8")
+print("Selected:", ids, "Artifacts:", root)
+PY
+"$PY" -m lifemate.integration --config "$SMOKE_ROOT/smoke3.toml" --check-config &&
+"$PY" -m lifemate.integration --config "$SMOKE_ROOT/smoke3.toml"
+```
+
+Inspect the manifest's status counts and each sample's trace/outcome. An ordinary
+three-sample model smoke may contain no partials; controlled tests establish soft
+boundary behavior. This command has not been run on UIT as part of this change.
+
 ## Outputs, errors and review
 
 ```text

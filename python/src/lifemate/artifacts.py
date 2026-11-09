@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import platform
 import re
@@ -320,7 +321,7 @@ class RunStore:
 # --- Integration run artifacts (ADR 011). RunStore above stays the legacy format. ---
 
 JOURNAL_TYPES = frozenset({"run", "resume", "worker_started", "worker_stopped",
-                           "reserve", "accept", "fail"})
+                           "reserve", "accept_pending", "accept", "fail"})
 STAGED_FILE_BYTES = 4 * 1024 * 1024
 
 
@@ -393,6 +394,7 @@ class JournalState:
         self.header: JSON | None = None
         self.reservations: dict[str, JSON] = {}   # attempt_id -> reserve record
         self.terminal: dict[str, JSON] = {}       # attempt_id -> accept/fail record
+        self.pending: dict[str, JSON] = {}        # durable candidate, never accepted on its own
         self.by_sample: dict[str, str] = {}       # sample_id -> attempt_id
         self.generations: dict[int, JSON] = {}    # generation -> worker_started record
         self.stopped: set[int] = set()
@@ -402,6 +404,7 @@ class JournalState:
         other.records, other.header = list(self.records), self.header
         other.reservations, other.terminal = dict(self.reservations), dict(self.terminal)
         other.by_sample, other.generations = dict(self.by_sample), dict(self.generations)
+        other.pending = dict(self.pending)
         other.stopped = set(self.stopped)
         return other
 
@@ -438,12 +441,12 @@ class JournalState:
                 raise bad("Sample/attempt reserved twice, unknown/stopped worker, or overlapping attempts")
             self.reservations[identity.attempt_id] = record
             self.by_sample[identity.sample_id] = identity.attempt_id
-        elif kind in {"accept", "fail"}:
+        elif kind in {"accept_pending", "accept", "fail"}:
             attempt = record.get("attempt_id")
             reserved = self.reservations.get(attempt)
             if reserved is None or attempt in self.terminal or reserved["sample_id"] != record.get("sample_id"):
                 raise bad("Terminal record without one matching reservation")
-            if kind == "accept":
+            if kind in {"accept_pending", "accept"}:
                 if record.get("status") not in ACCEPTED_STATES:
                     raise bad("Invalid accepted status")
                 try:
@@ -452,9 +455,24 @@ class JournalState:
                     raise bad("Invalid accepted prediction") from exc
                 if record["prediction"]["id"] != record["sample_id"]:
                     raise bad("Accepted prediction identity mismatch")
+                if kind == "accept_pending":
+                    ends = record.get("deadline_monotonic")
+                    if (attempt in self.pending or isinstance(ends, bool)
+                            or not isinstance(ends, (int, float)) or not math.isfinite(ends)):
+                        raise bad("Invalid pending acceptance")
+                    self.pending[attempt] = record
+                elif attempt in self.pending:
+                    candidate = self.pending[attempt]
+                    decided = record.get("accepted_monotonic")
+                    if (isinstance(decided, bool) or not isinstance(decided, (int, float))
+                            or not math.isfinite(decided) or decided >= candidate["deadline_monotonic"]
+                            or record["status"] != candidate["status"]
+                            or record["prediction"] != candidate["prediction"]):
+                        raise bad("Acceptance lacks a timely confirmation of the durable candidate")
             elif record.get("status") not in FAILED_STATES or not isinstance(record.get("error"), dict):
                 raise bad("Invalid failure record")
-            self.terminal[attempt] = record
+            if kind != "accept_pending":
+                self.terminal[attempt] = record
         self.records.append(record)
 
     def unresolved(self) -> list[JSON]:
@@ -586,9 +604,30 @@ class RunJournal:
     def reserve(self, identity) -> None:
         self.append("reserve", **identity.record())
 
-    def accept(self, identity, status: str, prediction: JSON, metrics: JSON) -> None:
-        self.append("accept", sample_id=identity.sample_id, attempt_id=identity.attempt_id,
-                    status=status, prediction=prediction, metrics=sanitize(metrics))
+    def accept(self, identity, status: str, prediction: JSON, metrics: JSON, *,
+               deadline: float | None = None, started: float | None = None,
+               clock=time.monotonic) -> bool:
+        fields = dict(sample_id=identity.sample_id, attempt_id=identity.attempt_id,
+                      status=status, prediction=prediction, metrics=sanitize(metrics))
+        if deadline is not None:
+            began = clock()
+            if began >= deadline:
+                return False
+            # Fsync the complete acceptance candidate inside the budget. A crash
+            # or expiry here leaves only a reservation, never recoverable success.
+            self.append("accept_pending", **fields, deadline_monotonic=deadline)
+            decided = clock()
+            if decided >= deadline:
+                return False
+            fields["accepted_monotonic"] = decided
+            metrics["acceptance_decision_seconds"] = decided - began
+            if started is not None:
+                metrics["attempt_seconds"] = decided - started
+            fields["metrics"] = sanitize(metrics)
+        # This confirmation records the timely decision after candidate durability.
+        # Ledger bookkeeping must complete before any next dispatch/publication.
+        self.append("accept", **fields)
+        return True
 
     def fail(self, identity_or_reservation, status: str, error: JSON, metrics: JSON | None = None) -> None:
         value = (identity_or_reservation.record() if hasattr(identity_or_reservation, "record")
