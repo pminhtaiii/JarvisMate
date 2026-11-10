@@ -202,6 +202,12 @@ retain timeout/failure handling. Metrics and traces carry the stop reason, and
 manifest/diagnostics reports separate counts under `partial_stop_reasons`.
 Explicit soft budgets (including 26 seconds) are respected; omitting the setting uses 28.
 
+Optional `execution.reuse_kv_cache = false` preserves full-prefill decisions by
+default. Setting it to `true` enables per-sample exact-token prefix reuse for the
+pinned Qwen3 stack. See [KV reuse and paired smoke16 benchmark](../docs/kv-cache.md)
+for cache safety, measured metrics, CPU evidence and UIT Slurm commands. H200 speed
+and output equivalence must be measured before promotion; no speedup is assumed.
+
 For a three-sample UIT smoke, use a separate checkout of the new branch and the
 existing inference interpreter. Set `PY` to that interpreter and `BASE_CONFIG` to
 the existing TOML (read only). This makes fresh config, selection and output paths,

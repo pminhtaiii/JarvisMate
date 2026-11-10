@@ -32,7 +32,7 @@ def build_components(config: IntegrationConfig) -> JSON:
     if config.mode == "audio":
         asr = LocalASR(config.asr.model_path, config.asr.device, config.limits, config.seed,
                        cpu_offload=config.asr.offload, dtype=config.asr.dtype)
-    planner = NativePlanner(config.planner, config.limits, config.seed)
+    planner = NativePlanner(config.planner, config.limits, config.seed, reuse_kv_cache=config.reuse_kv_cache)
     planner_count = planner.metadata["parameter_count"]
     total = planner_count + (asr.metadata["parameter_count"] if asr else 0)
     if planner_count >= 5_000_000_000 or total >= 6_000_000_000:

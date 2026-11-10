@@ -30,6 +30,7 @@ SCHEMA: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
                 "context_tokens": ((int,), True), "max_new_tokens": ((int,), True)},
     "execution": {"timeout_seconds": ((int, float), True), "max_steps": ((int,), True),
                   "soft_timeout_seconds": ((int, float), False),
+                  "reuse_kv_cache": ((bool,), False),
                   "startup_timeout_seconds": ((int, float), True), "recovery_attempts": ((int,), True),
                   "seed": ((int,), True)},
     "data": {"root": ((str,), True), "split": ((str,), True), "mode": ((str,), True),
@@ -76,6 +77,7 @@ class IntegrationConfig:
     debug_payloads: bool
     source: Path | None = None
     soft_timeout_seconds: float = 28.0
+    reuse_kv_cache: bool = False
 
     @property
     def limits(self) -> Limits:
@@ -99,6 +101,7 @@ class IntegrationConfig:
         value = {"schema_version": SCHEMA_VERSION, "planner": model(self.planner, True),
                  "execution": {"timeout_seconds": self.timeout_seconds, "max_steps": self.max_steps,
                                "soft_timeout_seconds": self.soft_timeout_seconds,
+                               "reuse_kv_cache": self.reuse_kv_cache,
                                "startup_timeout_seconds": self.startup_timeout_seconds,
                                "recovery_attempts": self.recovery_attempts, "seed": self.seed},
                  "data": data,
@@ -218,7 +221,7 @@ def parse_config(raw: Any, base: Path, *, source: Path | None = None) -> Integra
                          if "sample_ids_file" in data else None),
         select_all=select_all, output_root=output_root,
         debug_payloads=output.get("debug_payloads", False), source=source,
-        soft_timeout_seconds=soft_timeout)
+        soft_timeout_seconds=soft_timeout, reuse_kv_cache=execution.get("reuse_kv_cache", False))
 
 
 def apply_overrides(raw: JSON, overrides: JSON) -> JSON:

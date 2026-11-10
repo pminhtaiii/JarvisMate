@@ -29,6 +29,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config.planner.model_path, self.fx.planner.resolve())
         self.assertEqual(config.limits.timeout, 30)
         self.assertEqual(config.soft_timeout_seconds, 28)
+        self.assertFalse(config.reuse_kv_cache)
         self.assertEqual(config.fingerprint(), load_config(self.fx.write_config()).fingerprint())
         self.assertEqual(parse_config(config.record(), self.fx.root).record(), config.record())
 
@@ -41,6 +42,28 @@ class ConfigurationTests(unittest.TestCase):
         self.rejects(values)
         self.rejects(header="schema_version = 2")
         self.rejects(header="")
+
+    def test_kv_switch_is_strict_and_changes_effective_identity(self):
+        baseline = load_config(self.fx.write_config())
+        enabled = load_config(self.fx.write_config(self.changed("execution", reuse_kv_cache=True)))
+        self.assertTrue(enabled.reuse_kv_cache)
+        self.assertTrue(enabled.record()["execution"]["reuse_kv_cache"])
+        self.assertNotEqual(baseline.fingerprint(), enabled.fingerprint())
+        self.assertTrue(parse_config(enabled.record(), self.fx.root).reuse_kv_cache)
+        from unittest.mock import patch
+        from lifemate.integration import build_components
+
+        with patch("lifemate.adapters.asr.LocalASR") as asr, patch("lifemate.adapters.qwen_native.NativePlanner") as planner:
+            asr.return_value.metadata = {"parameter_count": 50}
+            planner.return_value.metadata = {"parameter_count": 100}
+            build_components(enabled)
+            self.assertIs(planner.call_args.kwargs["reuse_kv_cache"], True)
+        for value in (0, 1, "true", "false", None):
+            with self.subTest(value=value):
+                raw = baseline.record()
+                raw["execution"]["reuse_kv_cache"] = value
+                with self.assertRaises(PipelineError):
+                    parse_config(raw, self.fx.root)
 
     def test_invalid_devices_dtypes_types_and_limits_are_rejected(self):
         cases = [

@@ -219,6 +219,8 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
         return True
 
     try:
+        if hasattr(planner, "start_sample"):
+            planner.start_sample(sample.id)
         trace.emit("sample_started", input_mode=sample.mode, protocol="qwen-native-v1")
         started = clock()
         with inference_session(asr):
@@ -332,3 +334,8 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
             pass  # The supervisor ledger still records this failure; never mask the original error.
         return SampleOutcome(sample.id, "failed", deadline.elapsed(), steps, error.code,
                              error=error.record(), diagnostic=diagnostic, timings=timings, metrics=metrics)
+    finally:
+        if hasattr(planner, "end_sample"):
+            planner.end_sample()
+        if hasattr(planner, "sample_metrics"):
+            metrics["planner"] = planner.sample_metrics()

@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import time
+from contextlib import contextmanager
 
 from ..contracts import JSON, Limits, PipelineError
 from ..jsonio import dumps, loads
@@ -260,10 +261,12 @@ def validate_template(tokenizer) -> JSON:
 class NativePlanner(ModelResidency):
     """Local Qwen3 snapshot decoding one constrained native decision per call."""
 
-    def __init__(self, settings, limits: Limits, seed: int):
+    def __init__(self, settings, limits: Limits, seed: int, *, reuse_kv_cache: bool = False):
         from .common import dependencies, metadata, model_directory, parameter_count, resolve_device
         from .planner import sdpa_expanded_kv
 
+        if type(reuse_kv_cache) is not bool:
+            raise PipelineError("INPUT_INVALID", "reuse_kv_cache must be a boolean", "configuration")
         path = model_directory(settings.model_path)
         device = resolve_device(settings.device)
         torch, hf, _ = dependencies(device.split(":")[0], seed)
@@ -271,6 +274,9 @@ class NativePlanner(ModelResidency):
             raise PipelineError("MODEL_UNAVAILABLE", "Requested CUDA device is not visible", "model_load")
         self.torch, self.hf, self.device, self.limits = torch, hf, device, limits
         self.cpu_offload = settings.offload and device.startswith("cuda")
+        from .qwen_kv import SampleKVCache
+
+        self.kv = SampleKVCache(reuse_kv_cache, limits.context_tokens)
         dtype = getattr(torch, settings.dtype)
         attention = "sdpa" if device.startswith("cuda") else "eager"
         try:
@@ -295,7 +301,8 @@ class NativePlanner(ModelResidency):
                 "adapter": PROTOCOL, "protocol": PROTOCOL, "system_sha256": SYSTEM_SHA256,
                 "context_limit": limits.context_tokens, "max_new_tokens": limits.output_tokens,
                 "attention_implementation": attention, "cpu_offload": self.cpu_offload,
-                "template": self.template, "structured_output": self.constraint.metadata}
+                "template": self.template, "structured_output": self.constraint.metadata,
+                "reuse_kv_cache": reuse_kv_cache}
         except PipelineError:
             raise
         except Exception as exc:
@@ -304,25 +311,56 @@ class NativePlanner(ModelResidency):
     def render(self, prepared: JSON, observations: list[JSON]) -> str:
         return render_prompt(self.tokenizer, prepared, observations)
 
+    def start_sample(self, sample_id: str):
+        self.kv.start_sample(sample_id)
+        if self.device.startswith("cuda"):
+            self.torch.cuda.reset_peak_memory_stats(self.device)
+
+    def end_sample(self):
+        self.kv.end_sample()
+
+    def sample_metrics(self):
+        return self.kv.snapshot()
+
+    @contextmanager
+    def inference_session(self):
+        with super().inference_session():
+            try:
+                yield
+            finally:
+                # Release device tensors before ModelResidency moves the model.
+                if self.cpu_offload:
+                    self.kv.clear("cpu_offload")
+
     def decide(self, prepared: JSON, observations: list[JSON], remaining_seconds: float) -> tuple[JSON, JSON]:
         from .common import stopping_criteria
+        from .qwen_kv import ForwardMeasurement
 
         started = time.monotonic()
+        measurement = None
+        measured = None
         try:
             tokens = self.tokenizer(self.render(prepared, observations), return_tensors="pt", add_special_tokens=False)
             length = tokens["input_ids"].shape[-1]
             if length + self.limits.output_tokens > self.limits.context_tokens:
                 raise PipelineError("CONTEXT_LIMIT", "Prompt plus output reservation exceeds context", "planner")
+            # Keep full canonical IDs for generate's processors and LMFE. Only the
+            # model forward is sliced, using the validated cached-prefix positions.
+            canonical_ids = tokens["input_ids"][0].tolist() if self.kv.enabled else []
+            cache_args, reused = self.kv.prepare(canonical_ids, self.model, self.hf, self.torch)
+            measurement = ForwardMeasurement(self, reused)
             stop = stopping_criteria(self.hf, remaining_seconds - (time.monotonic() - started))
             prefix = self.constraint.prefix(prepared["available_tools"])
-            with self.torch.inference_mode():
+            with self.torch.inference_mode(), measurement.attach():
                 output = self.model.generate(
                     **{k: v.to(self.device) for k, v in tokens.items()}, do_sample=False, num_beams=1,
+                    **cache_args,
                     max_new_tokens=self.limits.output_tokens, prefix_allowed_tokens_fn=prefix,
                     stopping_criteria=stop, eos_token_id=sorted(self.eos_ids),
                     pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id)
             if self.device.startswith("cuda"):
-                self.torch.cuda.synchronize()
+                self.torch.cuda.synchronize(self.device)
+            measured = measurement.finish(canonical_ids)
             generated = [int(t) for t in output[0][length:]]
             elapsed = time.monotonic() - started
             body = completion_tokens(generated, self.eos_ids, self.limits.output_tokens,
@@ -335,8 +373,19 @@ class NativePlanner(ModelResidency):
             except NativeFormatError as exc:
                 raise PipelineError("PLANNER_FORMAT", str(exc), "planner") from exc
             return action, {"prompt_tokens": int(length), "generated_tokens": len(generated),
-                            "seconds": elapsed, "terminated": "eos"}
+                            "seconds": elapsed, "terminated": "eos", "generated_token_ids": generated,
+                            "canonical_action": copy.deepcopy(action),
+                            "kv_cache_enabled": self.kv.enabled, "kv_cache_reused_tokens": reused, **measured}
         except PipelineError:
+            self.kv.clear("planner_error")
             raise
         except Exception as exc:
+            self.kv.clear("generation_error")
             raise PipelineError("PLANNER_ERROR", "Local native planner generation failed", "planner") from exc
+        finally:
+            if measurement is not None and measurement.started is not None and measured is None:
+                # A failed forward/generation has no complete device measurement.
+                # Do not publish partial sums as a measured total or retry CUDA work.
+                self.kv.metrics["planner_prefill_seconds"] = None
+                self.kv.metrics["planner_decode_seconds"] = None
+            self.kv.metrics["planner_total_seconds"] += time.monotonic() - started

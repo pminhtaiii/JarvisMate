@@ -49,6 +49,7 @@ max_new_tokens = 512
 [execution]
 timeout_seconds = 30
 soft_timeout_seconds = 28                     # optional, defaults to 28
+reuse_kv_cache = false                        # optional boolean; opt in per sample
 max_steps = 16
 startup_timeout_seconds = 300
 recovery_attempts = 1
@@ -125,6 +126,10 @@ their count separately from normal completion and clarification. Omitting the so
 setting preserves the 28-second default; configurations with hard budgets <=28 must
 set a smaller soft budget explicitly. New configuration/code identities require a
 fresh output root; never resume or change artifacts belonging to a running old job.
+
+`execution.reuse_kv_cache` defaults to false and is included in effective config and
+its fingerprint. Worker component construction passes it to NativePlanner. OFF/ON
+runs need separate output roots. See [cache contract and benchmark](../../../docs/kv-cache.md).
 
 The attempt journal includes fsynced pre-dispatch reservations. Resume requires
 exclusive run ownership, confirmed prior-worker termination and a valid journal;
