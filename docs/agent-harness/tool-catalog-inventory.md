@@ -4,6 +4,8 @@ Ngày phân tích: 10/11/2026. Base: `e216ad5115229598149ca8c4e3f43554ce065268` 
 
 Train: **147 tool / 46 app**. Public Test: **122 tool / 36 app**. Giao: **88 tool**; chỉ Train: **59**; chỉ Public Test: **34**. Hợp: **181 tool / 57 app**.
 
+Review tài liệu từ `dfbaa0416a45c25e402c98594ea63f5c220f8042`; giữ nguyên 181 entry, schema, nguồn catalog và phép so sánh Train/Public Test.
+
 ## Nguồn và cách tái kiểm tra
 
 Dữ liệu gốc đã đọc tại workspace:
@@ -43,6 +45,8 @@ Cách tái kiểm tra: nạp JSON UTF-8 của bốn catalog, flatten `apps[].too
 - [executor.py](../../tools/test/executor.py) và [base.py](../../tools/test/apps/base.py): `ok:true` có thể đi với `done:false`; ID lạ, thiếu số dư, kết quả rỗng không phải thành công nhiệm vụ. Mọi call thực đều được ghi log, kể cả call lỗi schema.
 - `reminders` mô tả app nói theo thời điểm/vị trí nhưng create chỉ có content/time/repeat; không có location trigger. `ewallet` mô tả có “nạp” nhưng không có tool nạp tiền vào ví. Không suy khả năng từ tên app.
 - `loyalty.get_points`: catalog `returns=points[]`, mã trả `programs[]` chứa rewards. `contacts.get` được mã xác nhận trả `contacts[]`. Không tự chuẩn hoá output theo tên app/tool hoặc mô tả tóm tắt.
+
+Phân loại sau review: **180 tool nghiệp vụ trong D01–D16 + 1 tool hệ thống SC01 = 181**. SC01 không phải miền nghiệp vụ; schema và entry của sys.ask_missing_info giữ nguyên.
 
 ## Từng tool và schema đầy đủ
 
@@ -4647,7 +4651,7 @@ Cách tái kiểm tra: nạp JSON UTF-8 của bốn catalog, flatten `apps[].too
 
 ### `sys.ask_missing_info`
 
-- App: `sys`; miền chính: D17; kind: `meta`; split: train, public_test.
+- App: `sys`; năng lực hệ thống dùng chung: SC01 (trước đây D17); kind: `meta`; split: train, public_test.
 - Mô tả nguyên văn: Báo các tham số bắt buộc còn thiếu của một tool
 - Tham số: `tool_name`, `params`.
 - Bắt buộc trực tiếp: `tool_name`, `params`.

@@ -4,7 +4,9 @@ Ngày phân tích: 10/11/2026. Base: `e216ad5115229598149ca8c4e3f43554ce065268` 
 
 Train: **147 tool / 46 app**. Public Test: **122 tool / 36 app**. Giao: **88 tool**; chỉ Train: **59**; chỉ Public Test: **34**. Hợp: **181 tool / 57 app**.
 
-Có **17 miền chính**, phân theo hành vi thật thay vì coi mỗi namespace là một miền. Mỗi tool có đúng một miền chính; công cụ dùng chéo được ghi riêng, không nhân đôi tổng đếm. Metadata `group` gốc được giữ để tham khảo, không quyết định cách ghép skill.
+Review tài liệu từ `dfbaa0416a45c25e402c98594ea63f5c220f8042`; thay phân loại hệ thống, không thay tập tool.
+
+Có **16 miền nghiệp vụ D01–D16 + 1 năng lực hệ thống SC01**. 180 tool có đúng một miền nghiệp vụ chính; sys.ask_missing_info thuộc SC01, không tính thành miền thứ 17. Tổng coverage vẫn 181; công cụ dùng chéo không nhân đôi số đếm. Metadata `group` gốc được giữ để tham khảo, không quyết định cách ghép skill.
 
 | Miền | Mô tả | Số tool (hợp) | Tên tool |
 | --- | --- | --- | --- |
@@ -24,7 +26,6 @@ Có **17 miền chính**, phân theo hành vi thật thay vì coi mỗi namespac
 | D14 — Học tập và thư viện | Khoá học, tiến độ và giữ sách. | 6 | `learning.list_courses`, `learning.enroll`, `learning.schedule_lesson`, `learning.log_progress`, `library.search`, `library.reserve` |
 | D15 — Tiện ích tính toán và ngôn ngữ | Phép tính, đổi đơn vị và dịch văn bản. | 3 | `calculator.calculate`, `calculator.convert_unit`, `translator.translate` |
 | D16 — Chứng khoán mô phỏng | Báo giá, danh mục, lệnh và cảnh báo giá. | 4 | `stocks.get_quote`, `stocks.get_portfolio`, `stocks.place_order`, `stocks.set_price_alert` |
-| D17 — Điều phối thông tin thiếu | Cơ chế meta dùng chung cho mọi nghiệp vụ. | 1 | `sys.ask_missing_info` |
 
 ## D01 — Nhà ở, thiết bị và việc nhà
 
@@ -186,21 +187,25 @@ Báo giá, danh mục, lệnh và cảnh báo giá.
 - Phụ thuộc thường gặp: get_quote/portfolio → kiểm tra điều kiện → place_order hoặc set_price_alert; không mặc định cần đọc trước mọi lệnh.
 - Tool và chứng cứ: [`stocks.get_quote`](tool-catalog-inventory.md#tool-stocks-get_quote), [`stocks.get_portfolio`](tool-catalog-inventory.md#tool-stocks-get_portfolio), [`stocks.place_order`](tool-catalog-inventory.md#tool-stocks-place_order), [`stocks.set_price_alert`](tool-catalog-inventory.md#tool-stocks-set_price_alert).
 
-## D17 — Điều phối thông tin thiếu
+<a id="sc01"></a>
 
-Cơ chế meta dùng chung cho mọi nghiệp vụ.
+## SC01 — Điều phối thông tin thiếu (năng lực hệ thống dùng chung)
+
+Trước đây được ghi D17; nay là **SC01**, cơ chế meta dùng chung cho mọi nghiệp vụ, không phải business domain. W36 vẫn tồn tại và E, không cộng vào 24 skill hoặc 80 nhánh.
 
 - App: `sys`.
-- Số tool hợp: **1**; Train: 1; Public Test: 1.
+- Số tool hệ thống: **1**; Train: 1; Public Test: 1. Tổng 180 nghiệp vụ + 1 hệ thống = 181.
+- Hợp đồng: tool_name và params bắt buộc theo catalog; tên trong params phải thuộc tham số thật của tool đích. sys luôn eligible, nhưng không dùng để yêu cầu thực thi tool không eligible.
+- Tham chiếu: [W36](workflow-analysis.md#w36), [C02](candidate-skills.md#c02).
 - Ý định chính: Báo thiếu tham số cần thiết để tiếp tục.
 - Phụ thuộc thường gặp: Chỉ hỏi sau khi tận dụng dữ kiện sẵn có và các tool đọc phù hợp; không sinh thêm câu trả lời người dùng.
 - Tool và chứng cứ: [`sys.ask_missing_info`](tool-catalog-inventory.md#tool-sys-ask_missing_info).
 
 ## Công cụ dùng chung giữa nhiều miền
 
-| Tool | Miền chính → miền dùng lại | Vai trò / mức chứng cứ |
+| Tool | Miền/năng lực chính → miền dùng lại | Vai trò / mức chứng cứ |
 | --- | --- | --- |
-| sys.ask_missing_info | D17 → mọi miền | Meta luôn có; chỉ báo thiếu tham số của tool đích. E: README, executor và sys.py. |
+| sys.ask_missing_info | SC01 → mọi miền | Meta luôn có; chỉ báo thiếu tham số của tool đích. E: README, executor và sys.py. |
 | contacts.search, contacts.get | D04 → D05, D03 | Recipient cho ewallet là E qua x-ref; attendees/email từ contact là S, phải đúng cấu trúc đối số. |
 | food_delivery.list_restaurants | D10 → D05 | E: merchant_id cho ewallet.pay_qr được nêu trong catalog. |
 | ewallet.get_balance | D05 → D10, D11 (khi yêu cầu có điều kiện số dư) | Đọc có thể hỗ trợ quyết định; payment=ewallet của order không chứng minh tự trừ ví. Không thêm transfer/pay_qr mặc định. |

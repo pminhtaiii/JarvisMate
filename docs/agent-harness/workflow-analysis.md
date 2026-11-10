@@ -2,6 +2,8 @@
 
 Ngày phân tích: 10/11/2026. Base: `e216ad5115229598149ca8c4e3f43554ce065268` (nhánh `codex/009-cross-step-kv-cache`). Chỉ nghiên cứu tĩnh; không chạy tool trên mẫu, GPU, inference, retrieval hay skill thực thi.
 
+Review từ `dfbaa0416a45c25e402c98594ea63f5c220f8042`: giữ nguyên ID, công cụ, dependency và phân loại E/S/H của cả 37 workflow; chỉ tái phân loại W36 sang SC01. Thư viện nay có 24 nhóm skill / 80 nhánh, xem [candidate-skills.md](candidate-skills.md).
+
 Có **37 họ workflow** (một họ có thể có các nhánh loại trừ); không đếm mỗi chuỗi biến thể như một workflow độc lập.
 
 ## Mức chứng cứ và quy ước
@@ -49,7 +51,7 @@ Mức của họ là mức yếu nhất trong đường phối hợp chính; cá
 | W33 | Theo thời tiết rồi điều khiển nhà | D07, D01 | S |
 | W34 | Vé, thời gian di chuyển và nhắc/đặt xe | D09, D08, D03 | H |
 | W35 | Dịch nội dung rồi gửi | D15, D04 | S |
-| W36 | Dừng tại thông tin bắt buộc còn thiếu | D17 | E |
+| W36 | Dừng tại thông tin bắt buộc còn thiếu | SC01 (hệ thống) | E |
 | W37 | Đặt ngưỡng điện năng từ số liệu | D01 | S |
 
 <a id="w01"></a>
@@ -93,7 +95,7 @@ Mức của họ là mức yếu nhất trong đường phối hợp chính; cá
 - Thứ tự điển hình: Nhánh robot: get_status → start khi cần kiểm tra phòng/pin. Nhánh gia dụng: list → chọn appliance/cycle → start_cycle; stop chỉ khi cần theo yêu cầu.
 - Dữ liệu trung gian: Tên rooms; battery; appliance.id, cycles, state.status.
 - Điều kiện/quyết định: Robot cần pin ≥15%; thiết bị đang running/scheduled không khởi chạy chu trình khác. Đây là nhánh, không phải chuỗi dùng cả hai app.
-- Xử lý thiếu: Hỏi appliance_id/cycle nếu chưa xác định; robot.start không có required nên không tự đặt trường bắt buộc mới.
+- Xử lý thiếu: Hỏi appliance_id/cycle nếu chưa xác định; robot_vacuum.start không có required nên không tự đặt trường bắt buộc mới.
 - Điều kiện hoàn tất: Robot cleaning/current_job hoặc appliance running/scheduled đúng yêu cầu.
 - Chứng cứ catalog: [`robot_vacuum.get_status`](tool-catalog-inventory.md#tool-robot_vacuum-get_status), [`robot_vacuum.start`](tool-catalog-inventory.md#tool-robot_vacuum-start), [`robot_vacuum.stop`](tool-catalog-inventory.md#tool-robot_vacuum-stop), [`appliances.list`](tool-catalog-inventory.md#tool-appliances-list), [`appliances.start_cycle`](tool-catalog-inventory.md#tool-appliances-start_cycle), [`appliances.stop`](tool-catalog-inventory.md#tool-appliances-stop).
 - Chứng cứ mã, đúng split: [train/apps/robot_vacuum.py:17](../../tools/train/apps/robot_vacuum.py#L17); [train/apps/robot_vacuum.py:23](../../tools/train/apps/robot_vacuum.py#L23); [train/apps/robot_vacuum.py:42](../../tools/train/apps/robot_vacuum.py#L42); [train/apps/appliances.py:12](../../tools/train/apps/appliances.py#L12); [train/apps/appliances.py:16](../../tools/train/apps/appliances.py#L16); [train/apps/appliances.py:32](../../tools/train/apps/appliances.py#L32).
@@ -592,7 +594,7 @@ Mức của họ là mức yếu nhất trong đường phối hợp chính; cá
 
 ## W36 — Dừng tại thông tin bắt buộc còn thiếu
 
-- Miền: D17; mức: **E**.
+- Năng lực hệ thống: SC01 (trước đây D17, không phải miền nghiệp vụ); mức: **E**.
 - Ý định: Dừng tại thông tin bắt buộc còn thiếu.
 - Tool cần theo nhánh: `sys.ask_missing_info`.
 - Thứ tự điển hình: Xác định tool hợp lệ cần dùng → kiểm required/x-one-of với context/history và kết quả đọc có ích → ask_missing_info(tool_name,params) → dừng chờ.
@@ -711,10 +713,54 @@ Bảng sau trích mọi `x-ref` kể cả đường dẫn lồng nhau; đây là
 
 - **E, W13:** D10 cung cấp `merchant_id` cho D05 qua `food_delivery.list_restaurants` → `ewallet.pay_qr`. Chỉ áp dụng khi người dùng yêu cầu trả QR, không mặc định sau đặt món.
 - **E, W14:** `bill_payment.pay(source=ewallet)` thay đổi cả hoá đơn và ví (hai app trong D05); không gọi thêm `ewallet.transfer`. Đây là liên app có tác động chung, không đếm như liên miền riêng.
-- **S, W32:** D03 lịch → D04 thông báo: S21 lấy nội dung, S06 phân giải đích; gửi chỉ một kênh được yêu cầu.
-- **S, W33:** D07 thời tiết → D01 thiết bị: S22 đánh giá điều kiện, S01 thao tác thiết bị; điều kiện sai thì không ghi.
-- **H, W22:** D10 công thức/tủ bếp → D11 danh sách/giỏ: S15 tính thiếu, S16 mua chỉ khi đã xác minh đơn vị và quy cách; không tự trừ tồn tủ.
-- **H, W34:** D09 vé → D08 ETA/xe và D03 nhắc: S13 cung cấp booking, S23 tính giờ theo quy tắc rõ; chọn nhắc hoặc đặt xe theo ý định.
-- **S, W35:** D15 dịch → D04 gửi: S24 nhận translation và dùng S06 cho đích.
+- **S, W32:** D03 lịch → D04 thông báo: S21.B01 (SMS) hoặc S21.B02 (OTT) lấy nội dung và dùng C05 phân giải đích; không retrieve cả S06 hay gửi hai lần.
+- **S, W33:** D07 thời tiết → D01 thiết bị: S22.B01 đánh giá điều kiện và dùng phần phân giải thiết bị S01.B01; chỉ một chủ sở hữu setter, điều kiện sai thì không ghi.
+- **H, W22:** D10 công thức/tủ bếp → D11 danh sách/giỏ: S15.B01/B02 mô tả phần thiếu, C06/S16.B02 sở hữu giỏ; các nhánh S15 vẫn H, chưa retrieve runtime cho tới khi xác minh đơn vị/quy cách. Không tự trừ tồn tủ.
+- **H, W34:** D09 vé → D08 ETA/xe và D03 nhắc: S23.B01/B02 giữ H về booking/giờ/địa chỉ, chưa retrieve runtime; chọn nhắc hoặc xe theo ý định sau khi có bằng chứng, không dùng một nhánh E để bỏ qua gate H.
+- **S, W35:** D15 dịch → D04 gửi: S24.B01/B02/B03 chọn đúng một kênh, nhận translation và dùng C05 cho đích; không gọi thêm nhánh gửi của S06.
 
 Các khả năng cần tool cùng eligible trong mẫu; hợp catalog không chứng minh chúng cùng được cài. Điều phối theo mục tiêu và dữ kiện chưa giải quyết, không thực thi cả dãy tool từ các skill ghép lại.
+
+## Ánh xạ workflow sang nhánh nhiệm vụ sau review
+
+Bảng dưới chỉ là điều hướng. Không nối tất cả nhánh trong một hàng thành chuỗi, không nâng W22/W34 mức H thành confirmed. W05/W11/W16 không bắt buộc có skill riêng; dùng schema và hướng dẫn phân giải ID chung khi phù hợp.
+
+| Workflow giữ nguyên | Nhánh có tham chiếu |
+| --- | --- |
+| W01 | [S01.B01](candidate-skills.md#s01-b01) |
+| W02 | [S01.B02](candidate-skills.md#s01-b02) |
+| W03 | [S02.B01](candidate-skills.md#s02-b01), [S02.B02](candidate-skills.md#s02-b02), [S02.B03](candidate-skills.md#s02-b03) |
+| W04 | [S03.B01](candidate-skills.md#s03-b01), [S03.B02](candidate-skills.md#s03-b02) |
+| W05 | Không tạo nhánh riêng; workflow vẫn giữ nguyên |
+| W06 | [S04.B01](candidate-skills.md#s04-b01), [S04.B02](candidate-skills.md#s04-b02), [S04.B03](candidate-skills.md#s04-b03) |
+| W07 | [S05.B01](candidate-skills.md#s05-b01), [S05.B02](candidate-skills.md#s05-b02), [S05.B03](candidate-skills.md#s05-b03), [S05.B04](candidate-skills.md#s05-b04), [S05.B05](candidate-skills.md#s05-b05) |
+| W08 | [S06.B01](candidate-skills.md#s06-b01), [S06.B02](candidate-skills.md#s06-b02), [S06.B03](candidate-skills.md#s06-b03) |
+| W09 | [S06.B04](candidate-skills.md#s06-b04), [S06.B05](candidate-skills.md#s06-b05), [S06.B06](candidate-skills.md#s06-b06) |
+| W10 | [S07.B01](candidate-skills.md#s07-b01), [S07.B02](candidate-skills.md#s07-b02), [S07.B03](candidate-skills.md#s07-b03) |
+| W11 | Không tạo nhánh riêng; workflow vẫn giữ nguyên |
+| W12 | [S08.B01](candidate-skills.md#s08-b01), [S08.B02](candidate-skills.md#s08-b02) |
+| W13 | [S09.B01](candidate-skills.md#s09-b01), [S09.B02](candidate-skills.md#s09-b02), [S09.B03](candidate-skills.md#s09-b03) |
+| W14 | [S10.B01](candidate-skills.md#s10-b01) |
+| W15 | [S11.B01](candidate-skills.md#s11-b01), [S11.B02](candidate-skills.md#s11-b02) |
+| W16 | Không tạo nhánh riêng; workflow vẫn giữ nguyên |
+| W17 | [S12.B01](candidate-skills.md#s12-b01), [S12.B02](candidate-skills.md#s12-b02) |
+| W18 | [S12.B03](candidate-skills.md#s12-b03), [S12.B04](candidate-skills.md#s12-b04), [S12.B05](candidate-skills.md#s12-b05) |
+| W19 | [S12.B06](candidate-skills.md#s12-b06) |
+| W20 | [S13.B01](candidate-skills.md#s13-b01), [S13.B02](candidate-skills.md#s13-b02), [S13.B03](candidate-skills.md#s13-b03), [S13.B04](candidate-skills.md#s13-b04), [S13.B05](candidate-skills.md#s13-b05) |
+| W21 | [S14.B01](candidate-skills.md#s14-b01), [S14.B02](candidate-skills.md#s14-b02) |
+| W22 | [S15.B01](candidate-skills.md#s15-b01), [S15.B02](candidate-skills.md#s15-b02) |
+| W23 | [S16.B01](candidate-skills.md#s16-b01), [S16.B02](candidate-skills.md#s16-b02) |
+| W24 | [S17.B01](candidate-skills.md#s17-b01), [S17.B02](candidate-skills.md#s17-b02) |
+| W25 | [S17.B03](candidate-skills.md#s17-b03) |
+| W26 | [S18.B01](candidate-skills.md#s18-b01), [S18.B02](candidate-skills.md#s18-b02), [S18.B03](candidate-skills.md#s18-b03), [S18.B04](candidate-skills.md#s18-b04), [S18.B05](candidate-skills.md#s18-b05), [S18.B06](candidate-skills.md#s18-b06) |
+| W27 | [S18.B07](candidate-skills.md#s18-b07), [S18.B08](candidate-skills.md#s18-b08) |
+| W28 | [S18.B09](candidate-skills.md#s18-b09) |
+| W29 | [S19.B01](candidate-skills.md#s19-b01), [S19.B02](candidate-skills.md#s19-b02), [S19.B03](candidate-skills.md#s19-b03), [S19.B04](candidate-skills.md#s19-b04) |
+| W30 | [S19.B05](candidate-skills.md#s19-b05), [S19.B06](candidate-skills.md#s19-b06), [S19.B07](candidate-skills.md#s19-b07), [S19.B08](candidate-skills.md#s19-b08) |
+| W31 | [S20.B01](candidate-skills.md#s20-b01), [S20.B02](candidate-skills.md#s20-b02) |
+| W32 | [S21.B01](candidate-skills.md#s21-b01), [S21.B02](candidate-skills.md#s21-b02) |
+| W33 | [S22.B01](candidate-skills.md#s22-b01) |
+| W34 | [S23.B01](candidate-skills.md#s23-b01), [S23.B02](candidate-skills.md#s23-b02) |
+| W35 | [S24.B01](candidate-skills.md#s24-b01), [S24.B02](candidate-skills.md#s24-b02), [S24.B03](candidate-skills.md#s24-b03) |
+| W36 | SC01 / C02 — dùng chung, không phải nhánh được đếm |
+| W37 | [S22.B02](candidate-skills.md#s22-b02) |
