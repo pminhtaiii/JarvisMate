@@ -1295,7 +1295,11 @@ def run_agent(item, env, llm: LLM, catalog: dict, system_prompt: str, transcript
         if getattr(args, "think_budget", 0):
             # FunReason-MT reasons before every call; with an empty <think> it reasons in plain text instead (Kaggle v5:
             # 634/634 empty). Budget forcing: think up to N tokens, close the block ourselves, then decode the answer.
-            p_think = prompt[: -len(llm.render_suffix(False))] + llm.render_suffix(True)
+            if getattr(llm, "think_kw", False):
+                # Qwen3.5-style templates open "<think>\n" themselves when enable_thinking is on (suffix is empty here)
+                p_think = llm.render(messages, tools, True)
+            else:
+                p_think = prompt[: -len(llm.render_suffix(False))] + llm.render_suffix(True)
             thought = llm.generate(p_think, args.think_budget, stop_ids=llm.think_end_ids())
             closed = "</think>" in thought
             thought = thought.split("</think>")[0].rstrip()
