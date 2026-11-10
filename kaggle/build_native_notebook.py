@@ -69,11 +69,20 @@ fetch(ASR_FILES, "/tmp/asr_sft")
 man = json.load(open("/tmp/asr_sft/export-manifest.json"))["files"]
 h = hashlib.sha256(open("/tmp/asr_sft/model.safetensors", "rb").read()).hexdigest()
 print("ASR sha256 khớp manifest:", h == man["model.safetensors"])
-SRC = os.path.dirname(os.path.dirname(glob.glob("/kaggle/input/**/lifemate/adapters/qwen_native.py", recursive=True)[0]))
-print("lifemate src:", SRC, open(os.path.join(SRC, "lifemate", "COMMIT")).read().strip() if os.path.exists(os.path.join(SRC, "lifemate", "COMMIT")) else "")
-ZAIC = [d for d in (os.path.dirname(p) for p in glob.glob("/kaggle/input/**/preprocessor_config.json", recursive=True))
-        if "asr" in d.lower() or "zaic" in d.lower()][0]
+def walk(base, depth=7):
+    for d, subs, files in os.walk(base, followlinks=True):
+        if d[len(base):].count(os.sep) >= depth:
+            subs[:] = []
+        subs[:] = [s for s in subs if s != "audio" and not s.endswith("_environment")]
+        yield d, files
+ZAIC = None
+for d, files in walk("/kaggle/input"):
+    if "preprocessor_config.json" in files and "config.json" in files:
+        if json.load(open(os.path.join(d, "config.json"))).get("model_type") == "whisper":
+            ZAIC = d
+            break
 print("ASR cũ (zaic):", ZAIC)
+print("input:", sorted(os.listdir("/kaggle/input")))
 !nvidia-smi --query-gpu=name,memory.total --format=csv
 ''' % (json.dumps(LLM_FILES, indent=1), json.dumps(ASR_FILES, indent=1))
 
@@ -120,14 +129,18 @@ for it in tr:
     for t in it.get("history", []):
         if t.get("role") == "user":
             ref[t["audio"]] = t["audio_text"]
+import os
 for name in ("old", "new"):
+    if not os.path.exists(f"tr_{name}_train.json"):
+        print("thiếu", name); continue
     tx = json.load(open(f"tr_{name}_train.json", encoding="utf-8"))
     e = n = 0
     for a, r in ref.items():
         x, y = wer(r, tx.get(a, ""))
         e, n = e + x, n + y
     print(f"WER train200 {name}: {100 * e / n:.2f}%")
-po, pn = json.load(open("tr_old_public.json", encoding="utf-8")), json.load(open("tr_new_public.json", encoding="utf-8"))
+po = json.load(open("tr_old_public.json", encoding="utf-8")) if os.path.exists("tr_old_public.json") else {}
+pn = json.load(open("tr_new_public.json", encoding="utf-8"))
 diff = [a for a in pn if words(pn[a]) != words(po.get(a, ""))]
 print(f"public: {len(diff)}/{len(pn)} clip khác nhau giữa ASR cũ và mới")
 for a in diff[:40]:
@@ -200,12 +213,24 @@ b = {json.loads(l)["id"]: json.loads(l) for l in open("submission_oldasr.jsonl",
 print("public: ASR mới vs cũ khác state_hash ở", sum(a[i]["state_hash"] != b[i]["state_hash"] for i in a), "mẫu")
 '''
 
+# The team's lifemate package (stdlib only, ~100 KB) embedded so no extra dataset is needed.
+import base64, io, tarfile
+_buf = io.BytesIO()
+with tarfile.open(fileobj=_buf, mode="w:gz") as _tar:
+    _tar.add(HERE / "push_src" / "lifemate", arcname="lifemate",
+             filter=lambda t: None if "__pycache__" in t.name else t)
+SRC_CELL = ("# Source lifemate của nhóm (commit " + (HERE / "push_src" / "lifemate" / "COMMIT").read_text().strip()
+            + "), nhúng sẵn\nimport base64, io, tarfile\nSRC = '/tmp/lifemate_src'\n"
+            + "tarfile.open(fileobj=io.BytesIO(base64.b64decode('" + base64.b64encode(_buf.getvalue()).decode()
+            + "')), mode='r:gz').extractall(SRC)\nprint('lifemate src:', SRC)\n")
+
 cells = [
     md("# LifeMate: ASR + LLM fine-tune của nhóm\n\n"
        "- ASR: PhoWhisper-large + LoRA (merged fp16)\n- LLM: Qwen3-4B SFT, giao thức `qwen-native-v1` "
        "(prompt render bằng chính code `lifemate` của nhóm)\n\n"
        "Bản nộp: `submission.jsonl` (ASR mới + LLM mới). `submission_oldasr.jsonl` dùng ASR zaic cũ để tách tác dụng."),
     code(SETUP),
+    code(SRC_CELL),
     code("%%writefile lifemate_infer.py\n" + (HERE / "lifemate_infer.py").read_text(encoding="utf-8")),
     code("%%writefile native_infer.py\n" + (HERE / "native_infer.py").read_text(encoding="utf-8")),
     code(ASR_CMP),
@@ -222,8 +247,7 @@ json.dump(nb, open(out / "lifemate-native-sft.ipynb", "w", encoding="utf-8"), en
 meta = {"id": "hiunguyn1703/lifemate-native-sft", "title": "lifemate-native-sft",
         "code_file": "lifemate-native-sft.ipynb", "language": "python", "kernel_type": "notebook",
         "is_private": True, "enable_gpu": True, "enable_tpu": False, "enable_internet": True, "keywords": ["gpu"],
-        "dataset_sources": ["hiunguyn1703/lifemate-asr-zaic", "hiunguyn1703/lifemate-full-data",
-                            "hiunguyn1703/lifemate-team-src"],
+        "dataset_sources": ["hiunguyn1703/lifemate-asr-zaic", "hiunguyn1703/lifemate-full-data"],
         "kernel_sources": [], "competition_sources": [], "model_sources": []}
 json.dump(meta, open(out / "kernel-metadata.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 print("notebook ->", out)
