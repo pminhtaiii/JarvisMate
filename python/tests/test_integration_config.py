@@ -1,9 +1,13 @@
 """Strict integration configuration and metadata preflight (no models, no ToolEnv)."""
+import sys
 import unittest
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 from lifemate.configuration import (apply_overrides, check_parameter_budget, load_config,
                                     parse_config, preflight)
 from lifemate.contracts import PipelineError
+from lifemate.jsonio import digest, loads
 from lifemate.runtime import load_runtime
 from integration_support import IntegrationFixture, snapshot
 
@@ -62,6 +66,27 @@ class ConfigurationTests(unittest.TestCase):
             with self.subTest(value=value):
                 raw = baseline.record()
                 raw["execution"]["reuse_kv_cache"] = value
+                with self.assertRaises(PipelineError):
+                    parse_config(raw, self.fx.root)
+
+    def test_skill_retrieval_is_opt_in_and_false_keeps_the_legacy_record(self):
+        baseline = load_config(self.fx.write_config())
+        explicit_false = load_config(self.fx.write_config(self.changed("execution", enable_skill_retrieval=False)))
+        enabled = load_config(self.fx.write_config(self.changed("execution", enable_skill_retrieval=True)))
+
+        self.assertFalse(baseline.enable_skill_retrieval)
+        self.assertFalse(explicit_false.enable_skill_retrieval)
+        self.assertNotIn("enable_skill_retrieval", baseline.record()["execution"])
+        self.assertEqual(baseline.record(), explicit_false.record())
+        self.assertEqual(baseline.fingerprint(), explicit_false.fingerprint())
+        self.assertTrue(enabled.enable_skill_retrieval)
+        self.assertTrue(enabled.record()["execution"]["enable_skill_retrieval"])
+        self.assertNotEqual(baseline.fingerprint(), enabled.fingerprint())
+        self.assertTrue(parse_config(enabled.record(), self.fx.root).enable_skill_retrieval)
+        for value in (0, 1, "true", "false", None):
+            with self.subTest(value=value):
+                raw = baseline.record()
+                raw["execution"]["enable_skill_retrieval"] = value
                 with self.assertRaises(PipelineError):
                     parse_config(raw, self.fx.root)
 
@@ -124,6 +149,7 @@ class ConfigurationTests(unittest.TestCase):
                          ("qwen-native-v1", 30.0, 1))
         self.assertEqual(config.planner.device, "cuda:0")
         self.assertEqual(config.soft_timeout_seconds, 28)
+        self.assertFalse(config.enable_skill_retrieval)
 
     def test_explicit_soft_budget_overrides_default_and_round_trips(self):
         config = load_config(self.fx.write_config(self.changed("execution", soft_timeout_seconds=26)))
@@ -216,6 +242,47 @@ class PreflightTests(unittest.TestCase):
         (self.fx.planner / "model.safetensors").write_bytes(
             (self.fx.planner / "model.safetensors").read_bytes() + b"\0")
         self.assertNotEqual(first.run_sha256, self.check().run_sha256)
+
+    def test_enabled_run_identity_binds_skill_library_version_and_hash(self):
+        values = self.fx.values()
+        values["execution"]["enable_skill_retrieval"] = True
+        module = ModuleType("lifemate.skills")
+        catalog_path = self.fx.data / "train" / "train_tools_catalog.json"
+        catalog = loads(catalog_path.read_text(encoding="utf-8"))
+        fingerprints = {"train": {"schema_version": catalog["schema_version"], "sha256": digest(catalog_path)}}
+        module.load_library = lambda: SimpleNamespace(version="skills-v1", sha256="a" * 64,
+                                                       catalog_fingerprints=fingerprints)
+
+        with patch.dict(sys.modules, {"lifemate.skills": module}):
+            first = self.check(values)
+            self.assertEqual(first.identity["skill_library"], {"version": "skills-v1", "sha256": "a" * 64})
+            module.load_library = lambda: SimpleNamespace(version="skills-v1", sha256="b" * 64,
+                                                           catalog_fingerprints=fingerprints)
+            second = self.check(values)
+
+        self.assertNotEqual(first.run_sha256, second.run_sha256)
+        from lifemate.artifacts import RunJournal
+
+        root = self.fx.root / "skill-identity-run"
+        journal = RunJournal.create(root, {"run_sha256": first.run_sha256})
+        journal.close()
+        with self.assertRaises(PipelineError) as caught:
+            RunJournal.resume(root, {"run_sha256": second.run_sha256})
+        self.assertEqual(caught.exception.code, "INPUT_INVALID")
+        self.assertNotIn("skill_library", self.check(self.fx.values()).identity)
+
+    def test_skill_catalog_mismatch_fails_before_runtime_load(self):
+        values = self.fx.values()
+        values["execution"]["enable_skill_retrieval"] = True
+        module = ModuleType("lifemate.skills")
+        module.load_library = lambda: SimpleNamespace(
+            version="skills-v1", sha256="a" * 64,
+            catalog_fingerprints={"train": {"schema_version": 1, "sha256": "b" * 64}})
+        with patch.dict(sys.modules, {"lifemate.skills": module}):
+            with self.assertRaises(PipelineError) as caught:
+                self.check(values)
+        self.assertEqual(caught.exception.code, "CATALOG_INVALID")
+        self.assertEqual(self.loaded, [])
 
 
 

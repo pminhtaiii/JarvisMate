@@ -25,6 +25,7 @@ max_new_tokens = 512
 timeout_seconds = 30           # full attempt incl. ASR, tools and durable output; max 30
 soft_timeout_seconds = 28      # optional; stop new planning/tools, reserve finalization time
 reuse_kv_cache = false         # opt in to exact-token KV reuse within each sample
+enable_skill_retrieval = false # opt in to offline task guidance; disabled preserves the prior prompt
 max_steps = 16                 # planner decisions per sample, 1..64
 startup_timeout_seconds = 300  # model load and template smoke per worker start/recovery
 recovery_attempts = 1          # restarts per worker loss: 0 or 1; failed samples never rerun

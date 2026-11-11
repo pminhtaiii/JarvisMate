@@ -21,3 +21,6 @@ lifemate-integration = "lifemate.integration:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lifemate = ["skill_library.json"]

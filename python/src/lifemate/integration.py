@@ -22,11 +22,25 @@ def asr_identity(config: IntegrationConfig, metadata: JSON | None) -> str:
     return hashlib.sha256(dumps(value).encode("utf-8")).hexdigest()
 
 
-def build_components(config: IntegrationConfig) -> JSON:
+def build_components(config: IntegrationConfig, *, skill_library=None) -> JSON:
     """Load local models once per healthy worker. Imports model libraries lazily."""
     from .adapters.asr import LocalASR
     from .adapters.qwen_native import NativePlanner
     from .contracts import PipelineError
+
+    if config.enable_skill_retrieval:
+        if skill_library is None:
+            from .skills import load_library
+
+            try:
+                skill_library = load_library()
+            except ValueError as exc:
+                raise PipelineError("CATALOG_INVALID", "Skill library metadata is malformed or unavailable",
+                                    "worker") from exc
+        skill_identity = {"version": skill_library.version, "sha256": skill_library.sha256}
+    else:
+        skill_library = None
+        skill_identity = None
 
     asr = None
     if config.mode == "audio":
@@ -37,9 +51,12 @@ def build_components(config: IntegrationConfig) -> JSON:
     total = planner_count + (asr.metadata["parameter_count"] if asr else 0)
     if planner_count >= 5_000_000_000 or total >= 6_000_000_000:
         raise PipelineError("MODEL_UNAVAILABLE", "Deployed model parameter budget exceeded", "model_load")
+    metadata = {"asr": asr.metadata if asr else None, "planner": planner.metadata,
+                "total_parameters": total}
+    if skill_identity is not None:
+        metadata["skill_library"] = skill_identity
     return {"asr": asr, "planner": planner, "asr_identity": asr_identity(config, asr.metadata if asr else None),
-            "metadata": {"asr": asr.metadata if asr else None, "planner": planner.metadata,
-                         "total_parameters": total}}
+            "skill_library": skill_library, "skill_library_identity": skill_identity, "metadata": metadata}
 
 
 # --- CLI and batch coordination ----------------------------------------------

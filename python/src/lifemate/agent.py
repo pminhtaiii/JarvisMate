@@ -191,7 +191,8 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
                            environment_factory: EnvironmentFactory, trace: TraceSink,
                            limits: Limits, deadline: Deadline, *, split: str, data_root,
                            asr_identity: str = "", clock=time.monotonic,
-                           soft_timeout_seconds: float = 28.0) -> SampleOutcome:
+                           soft_timeout_seconds: float = 28.0,
+                           skill_library=None) -> SampleOutcome:
     """Native integration path (ADR 011): one prepared request, one ToolEnv, real feedback.
 
     ``planner.decide(prepared, observations, remaining)`` returns one canonical action
@@ -205,6 +206,10 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
     env, steps, stage = None, 0, "request"
     timings = {"request": 0.0, "environment": 0.0, "planner": 0.0, "tools": 0.0, "collection": 0.0}
     metrics: JSON = {"asr": None, "decisions": [], "tools": []}
+    skill_guidance = ()
+    if skill_library is not None:
+        metrics["skill_retrieval"] = {"enabled": True, "selected_branch_ids": [], "seconds": 0.0,
+                                      "budget_seconds": 0.0, "dropped_for_context": 0}
     metrics["deadline"] = {"soft_timeout_seconds": soft_timeout_seconds,
                            "soft_stop_point": None, "finalization_budget_seconds": None}
 
@@ -227,6 +232,35 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
             prepared, metrics["asr"] = prepare_request_once(sample, asr, deadline, asr_identity=asr_identity,
                                                             clock=clock)
         span("request", started)
+        if skill_library is not None:
+            from .skills import SkillRetrievalInputError, retrieve
+
+            started = clock()
+            try:
+                skill_guidance = tuple(retrieve(
+                    prepared["request"], prepared["history"],
+                    (tool["name"] for tool in prepared["available_tools"]), library=skill_library))
+            except SkillRetrievalInputError:
+                # The planner accepts larger valid sample context than retrieval indexes.
+                skill_guidance = ()
+                metrics["skill_retrieval"]["fallback_reason"] = "unsupported_input"
+            retrieval_seconds = clock() - started
+            deadline.remaining()
+            retrieved_count = len(skill_guidance)
+            fit_guidance = getattr(planner, "fit_skill_guidance", None)
+            budget_seconds = 0.0
+            if skill_guidance and callable(fit_guidance):
+                started = clock()
+                skill_guidance = tuple(fit_guidance(prepared, skill_guidance))
+                budget_seconds = clock() - started
+                deadline.remaining()
+            metrics["skill_retrieval"].update(
+                selected_branch_ids=[item.branch_id for item in skill_guidance], seconds=retrieval_seconds,
+                budget_seconds=budget_seconds, dropped_for_context=retrieved_count - len(skill_guidance))
+            trace.emit("skill_retrieval", enabled=True,
+                       selected_branch_ids=metrics["skill_retrieval"]["selected_branch_ids"],
+                       seconds=retrieval_seconds, budget_seconds=budget_seconds,
+                       dropped_for_context=retrieved_count - len(skill_guidance))
         trace.emit("request_prepared", payload={"request": prepared["request"], "history": prepared["history"]},
                    available_tools=[t["name"] for t in sample.tools],
                    asr={k: v for k, v in metrics["asr"].items() if k != "clips"})
@@ -254,7 +288,8 @@ def run_integration_sample(sample: SampleInput, planner, asr: ASR | None,
                 try:
                     action, details = planner.decide(
                         prepared, observations,
-                        min(deadline.remaining(), soft_timeout_seconds - deadline.elapsed()))
+                        min(deadline.remaining(), soft_timeout_seconds - deadline.elapsed()),
+                        **({"skill_guidance": skill_guidance} if skill_guidance else {}))
                 except PipelineError as exc:
                     # Native generation's cooperative stopping criterion reports TIME_LIMIT.
                     # Only its timely return at the soft boundary is a safe partial stop.

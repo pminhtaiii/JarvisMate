@@ -111,20 +111,42 @@ def load_factory(spec: str):
 class Worker:
     def __init__(self, run_root: Path, generation: int, factory, output, clock=time.monotonic):
         from .artifacts import FileLock
-        from .configuration import read_effective, run_config
-        from .dataset import preflight
-        from .runtime import load_runtime
 
         self.root, self.generation, self.output, self.clock = run_root, generation, output, clock
         self.lock = FileLock(run_root / "workers" / f"gen-{generation}.lock")
         if not self.lock.acquire():
             raise PipelineError("RUN_OWNERSHIP", "Worker generation lock is held", "worker")
+        try:
+            self._initialize(run_root, generation, factory, clock)
+        except BaseException:
+            self.lock.release()
+            raise
+
+    def _initialize(self, run_root: Path, generation: int, factory, clock) -> None:
+        from .configuration import read_effective, run_config, validate_skill_catalog
+        from .dataset import preflight
+        from .runtime import load_runtime
+
         started = clock()
         self.config = read_effective(run_root / "effective-config.json")
         legacy = run_config(self.config)
         self.dataset = preflight(legacy)
         self.samples = {sample.id: sample for sample in self.dataset.samples}
         self.components = factory(self.config)
+        if self.config.enable_skill_retrieval:
+            from .jsonio import loads
+
+            library = self.components.get("skill_library")
+            validate_skill_catalog(library, self.config.split, self.dataset.metadata)
+            try:
+                identity = loads((run_root / "manifest.json").read_text(encoding="utf-8")).get("identity", {})
+            except (OSError, ValueError, UnicodeError, AttributeError) as exc:
+                raise PipelineError("RUN_IDENTITY", "Cannot verify the skill library run identity", "worker") from exc
+            expected = identity.get("skill_library") if isinstance(identity, dict) else None
+            actual = self.components.get("skill_library_identity")
+            if (not isinstance(expected, dict) or expected != actual
+                    or self.components.get("skill_library") is None):
+                raise PipelineError("RUN_IDENTITY", "Skill library differs from the preflight run identity", "worker")
         self.environments = self.components.get("environment_factory") or load_runtime(legacy, self.dataset)
         self.ready = {"type": "ready", "generation": generation, "pid": os.getpid(),
                       "startup_seconds": clock() - started, "hardware": hardware(),
@@ -163,7 +185,8 @@ class Worker:
                 sample, self.components["planner"], self.components.get("asr"), self.environments, trace,
                 self.config.limits, deadline, split=self.config.split, data_root=self.config.data_root,
                 asr_identity=self.components.get("asr_identity", ""), clock=self.clock,
-                soft_timeout_seconds=self.config.soft_timeout_seconds)
+                soft_timeout_seconds=self.config.soft_timeout_seconds,
+                skill_library=self.components.get("skill_library"))
         finally:
             trace.close()
         status = (outcome.status if outcome.status != "failed"

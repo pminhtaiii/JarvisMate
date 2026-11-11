@@ -166,7 +166,7 @@ supervised persistent worker. `run` keeps its defaults for comparison.
 | Module | Responsibility |
 |---|---|
 | `configuration.py` | TOML v1 schema, CLI overrides, metadata-only snapshot/template/parameter/data preflight, run identity |
-| `adapters/qwen_native.py` | Native render/parse, EOS/limit classification, LMFE constraint, template check, local planner |
+| `adapters/qwen_native.py` | Native render/parse, optional structured skill guidance, EOS/limit classification, LMFE constraint, template check, local planner |
 | `worker.py` | Spawned worker: models loaded once, framed IPC, durable per-attempt staging |
 | `supervisor.py` | Reservation before dispatch, full-attempt deadline, termination/quarantine, bounded recovery |
 | `integration.py` | CLI, batch coordination, manifest/provenance, exact-coverage publication |
@@ -207,6 +207,35 @@ default. Setting it to `true` enables per-sample exact-token prefix reuse for th
 pinned Qwen3 stack. See [KV reuse and paired smoke16 benchmark](../docs/kv-cache.md)
 for cache safety, measured metrics, CPU evidence and UIT Slurm commands. H200 speed
 and output equivalence must be measured before promotion; no speedup is assumed.
+
+Setting optional `execution.enable_skill_retrieval = true` enables the offline,
+deterministic CPU Skill Library for the native integration path; the default is false.
+It retrieves once after ASR using
+the request, conversation history and this sample's eligible tool names. Matching
+guidance appears in a structured `skill_guidance` field; all native eligible tool
+schemas remain available and the planner still chooses each call. With the flag off,
+the effective config omits the false default, preserving the previous prompt and
+configuration fingerprint. Full run identity still includes current code provenance,
+so it changes with this source revision. Enabled runs also bind the library version
+and SHA-256 into run identity, so a resume with different skill metadata is rejected.
+Guidance is trimmed once, before
+planning, to fit the initial prompt plus output reservation, then stays fixed across
+planner steps. It reduces the context left for later tool observations, which can
+still reach the existing `CONTEXT_LIMIT`; context, step, soft-timeout and hard-timeout
+limits are not raised. The library currently exposes only E-evidence branches to
+runtime retrieval; S branches remain gated and H branches are never retrieved. This
+is controlled behavior, not an accuracy or latency result.
+
+For a branch with `required_data_missing` readers, each reader list is an OR choice;
+`optional_detail_missing` readers never gate the action path. If a required reader is
+unavailable, retrieval keeps the branch only when that reader's declared
+`input_alternatives`, the required action fields, or both have explicit concrete values
+in the request or relevant user history (for example `email_id=MAIL-123`,
+`subscription_id=SUB-123` or `booking_id: BK-123`), or `sys.ask_missing_info` is
+eligible. Bare numbers, guessed IDs and fuzzy matches do not count. When required
+action fields are explicit, guarded readers are omitted from guidance;
+always-before-action dependencies remain mandatory. The missing-info tool does not
+make an unavailable app action eligible.
 
 For a three-sample UIT smoke, use a separate checkout of the new branch and the
 existing inference interpreter. Set `PY` to that interpreter and `BASE_CONFIG` to

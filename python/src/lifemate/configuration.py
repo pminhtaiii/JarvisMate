@@ -9,6 +9,7 @@ import hashlib
 import math
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ SCHEMA: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "execution": {"timeout_seconds": ((int, float), True), "max_steps": ((int,), True),
                   "soft_timeout_seconds": ((int, float), False),
                   "reuse_kv_cache": ((bool,), False),
+                  "enable_skill_retrieval": ((bool,), False),
                   "startup_timeout_seconds": ((int, float), True), "recovery_attempts": ((int,), True),
                   "seed": ((int,), True)},
     "data": {"root": ((str,), True), "split": ((str,), True), "mode": ((str,), True),
@@ -78,6 +80,7 @@ class IntegrationConfig:
     source: Path | None = None
     soft_timeout_seconds: float = 28.0
     reuse_kv_cache: bool = False
+    enable_skill_retrieval: bool = False
 
     @property
     def limits(self) -> Limits:
@@ -98,12 +101,17 @@ class IntegrationConfig:
                 "runtime_dir": self.runtime_dir.as_posix(), "select_all": self.select_all}
         if self.sample_ids_file is not None:
             data["sample_ids_file"] = self.sample_ids_file.as_posix()
+        execution = {"timeout_seconds": self.timeout_seconds, "max_steps": self.max_steps,
+                     "soft_timeout_seconds": self.soft_timeout_seconds,
+                     "reuse_kv_cache": self.reuse_kv_cache,
+                     "startup_timeout_seconds": self.startup_timeout_seconds,
+                     "recovery_attempts": self.recovery_attempts, "seed": self.seed}
+        # Omit the false default so existing disabled-run fingerprints and effective
+        # configuration records stay byte-for-byte compatible with the old schema.
+        if self.enable_skill_retrieval:
+            execution["enable_skill_retrieval"] = True
         value = {"schema_version": SCHEMA_VERSION, "planner": model(self.planner, True),
-                 "execution": {"timeout_seconds": self.timeout_seconds, "max_steps": self.max_steps,
-                               "soft_timeout_seconds": self.soft_timeout_seconds,
-                               "reuse_kv_cache": self.reuse_kv_cache,
-                               "startup_timeout_seconds": self.startup_timeout_seconds,
-                               "recovery_attempts": self.recovery_attempts, "seed": self.seed},
+                 "execution": execution,
                  "data": data,
                  "output": {"root": self.output_root.as_posix(), "debug_payloads": self.debug_payloads}}
         if self.asr is not None:
@@ -221,7 +229,8 @@ def parse_config(raw: Any, base: Path, *, source: Path | None = None) -> Integra
                          if "sample_ids_file" in data else None),
         select_all=select_all, output_root=output_root,
         debug_payloads=output.get("debug_payloads", False), source=source,
-        soft_timeout_seconds=soft_timeout, reuse_kv_cache=execution.get("reuse_kv_cache", False))
+        soft_timeout_seconds=soft_timeout, reuse_kv_cache=execution.get("reuse_kv_cache", False),
+        enable_skill_retrieval=execution.get("enable_skill_retrieval", False))
 
 
 def apply_overrides(raw: JSON, overrides: JSON) -> JSON:
@@ -391,11 +400,39 @@ class Preflight:
     run_sha256: str
 
 
+def validate_skill_catalog(library, split: str, dataset_metadata: JSON) -> None:
+    """Reject skill metadata authored against another split catalog revision."""
+    try:
+        expected = library.catalog_fingerprints[split]
+        if callable(getattr(expected, "to_dict", None)):
+            expected = expected.to_dict()
+        if not isinstance(expected, Mapping):
+            raise TypeError("catalog fingerprint must be a mapping")
+        actual = {"schema_version": dataset_metadata["catalog_version"],
+                  "sha256": dataset_metadata["catalog_sha256"]}
+        if dict(expected) != actual:
+            raise invalid("Skill library catalog fingerprint does not match the selected split", "CATALOG_INVALID")
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise invalid("Skill library lacks a valid split catalog fingerprint", "CATALOG_INVALID") from exc
+
+
 def preflight(config: IntegrationConfig, *, runtime_loader=None, hash_models: bool = True) -> Preflight:
     """Validate everything knowable before workers, models or environments exist."""
     from .dataset import preflight as data_preflight
     from .provenance import code_identity, model_identity, package_versions
     from .runtime import load_runtime
+
+    skill_library = None
+    skill_library_identity = None
+    if config.enable_skill_retrieval:
+        # Loading validates the packaged metadata before any worker or ToolEnv exists.
+        from .skills import load_library
+
+        try:
+            skill_library = load_library()
+        except ValueError as exc:
+            raise invalid("Skill library metadata is malformed or unavailable", "CATALOG_INVALID") from exc
+        skill_library_identity = {"version": skill_library.version, "sha256": skill_library.sha256}
 
     audio = config.mode == "audio"
     planner = inspect_snapshot(config.planner, planner=True)
@@ -404,6 +441,8 @@ def preflight(config: IntegrationConfig, *, runtime_loader=None, hash_models: bo
     budget = check_parameter_budget(planner["parameter_count"], asr["parameter_count"] if audio else 0)
     legacy = run_config(config)
     dataset = data_preflight(legacy)
+    if skill_library is not None:
+        validate_skill_catalog(skill_library, config.split, dataset.metadata)
     runtime = (runtime_loader or load_runtime)(legacy, dataset)
     identity = {
         "config_sha256": config.fingerprint(), "protocol": PROTOCOL,
@@ -418,5 +457,7 @@ def preflight(config: IntegrationConfig, *, runtime_loader=None, hash_models: bo
     }
     if config.sample_ids_file is not None:
         identity["dataset"]["selection_sha256"] = digest(config.sample_ids_file)
+    if skill_library_identity is not None:
+        identity["skill_library"] = skill_library_identity
     run_sha = hashlib.sha256(dumps(identity).encode("utf-8")).hexdigest()
     return Preflight(config, dataset, runtime, identity, run_sha)

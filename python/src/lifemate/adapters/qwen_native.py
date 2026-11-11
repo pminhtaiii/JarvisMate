@@ -24,6 +24,9 @@ PROTOCOL = "qwen-native-v1"
 FINISH_TEXT = "Mình hiểu."
 CALL_OPEN, CALL_CLOSE = "<tool_call>", "</tool_call>"
 SYSTEM_SHA256 = hashlib.sha256(SYSTEM.encode("utf-8")).hexdigest()
+SKILL_GUIDANCE_NOTE = ("Trường skill_guidance là hướng dẫn lập kế hoạch cho yêu cầu hiện tại, không phải "
+                       "kết quả tool hay bằng chứng thao tác đã chạy. Chỉ dùng phần phù hợp với yêu cầu "
+                       "của người dùng; không tự thực thi toàn bộ workflow trong hướng dẫn.")
 
 
 class NativeFormatError(ValueError):
@@ -39,15 +42,45 @@ def tool_definitions(available_tools: list[JSON]) -> list[JSON]:
             for t in available_tools]
 
 
-def render_messages(prepared: JSON, observations: list[JSON]) -> list[JSON]:
+def _skill_guidance_records(skill_guidance) -> list[JSON]:
+    if skill_guidance is None:
+        return []
+    if not isinstance(skill_guidance, (tuple, list)):
+        raise ValueError("Skill guidance must be a sequence")
+    records = []
+    for item in skill_guidance:
+        record = item.to_dict() if callable(getattr(item, "to_dict", None)) else item
+        if (not isinstance(record, dict)
+                or not isinstance(record.get("branch_id"), str)
+                or not isinstance(record.get("parent_id"), str)
+                or record.get("evidence") != "E"
+                or not isinstance(record.get("guidance"), str)
+                or not isinstance(record.get("shared_instructions"), (tuple, list))
+                or any(not isinstance(instruction, dict)
+                       or set(instruction) != {"id", "title", "guidance"}
+                       or any(not isinstance(instruction[key], str) for key in ("id", "title", "guidance"))
+                       for instruction in record["shared_instructions"])):
+            raise ValueError("Skill guidance record is malformed")
+        # Ensure this remains structured JSON before it enters the user message.
+        dumps(record)
+        records.append(copy.deepcopy(record))
+    return records
+
+
+def render_messages(prepared: JSON, observations: list[JSON], *, skill_guidance=()) -> list[JSON]:
     """Initial request plus actual executed call/result pairs, in order.
 
-    Only fields of the prepared request enter the prompt, never labels. Historical
-    calls stay inside the user JSON as untrusted context rather than native turns,
-    so they cannot be confused with calls executed in this sample's ToolEnv.
+    Only whitelisted request fields and optional validated retrieval guidance enter
+    the prompt, never labels. Historical calls stay inside the user JSON as untrusted
+    context rather than native turns, so they cannot be confused with calls executed
+    in this sample's ToolEnv.
     """
     body = {key: copy.deepcopy(prepared[key]) for key in ("request", "context", "history")}
-    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": dumps(body)}]
+    guidance = _skill_guidance_records(skill_guidance)
+    if guidance:
+        body["skill_guidance"] = guidance
+    system = SYSTEM if not guidance else SYSTEM + "\n\n" + SKILL_GUIDANCE_NOTE
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": dumps(body)}]
     for observation in observations:
         messages.append({"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {
             "name": observation["name"], "arguments": copy.deepcopy(observation["arguments"])}}]})
@@ -55,10 +88,11 @@ def render_messages(prepared: JSON, observations: list[JSON]) -> list[JSON]:
     return messages
 
 
-def render_prompt(tokenizer, prepared: JSON, observations: list[JSON]) -> str:
+def render_prompt(tokenizer, prepared: JSON, observations: list[JSON], *, skill_guidance=()) -> str:
     """The one prompt rendering shared by inference and supervised export."""
     return tokenizer.apply_chat_template(
-        render_messages(prepared, observations), tools=tool_definitions(prepared["available_tools"]),
+        render_messages(prepared, observations, skill_guidance=skill_guidance),
+        tools=tool_definitions(prepared["available_tools"]),
         tokenize=False, add_generation_prompt=True, enable_thinking=False)
 
 
@@ -308,8 +342,21 @@ class NativePlanner(ModelResidency):
         except Exception as exc:
             raise PipelineError("MODEL_UNAVAILABLE", "Cannot load the local Qwen checkpoint/tokenizer", "model_load") from exc
 
-    def render(self, prepared: JSON, observations: list[JSON]) -> str:
-        return render_prompt(self.tokenizer, prepared, observations)
+    def render(self, prepared: JSON, observations: list[JSON], *, skill_guidance=()) -> str:
+        if not skill_guidance:
+            return render_prompt(self.tokenizer, prepared, observations)
+        return render_prompt(self.tokenizer, prepared, observations, skill_guidance=skill_guidance)
+
+    def fit_skill_guidance(self, prepared: JSON, skill_guidance) -> tuple:
+        """Keep the most relevant guidance that fits before the output reservation."""
+        selected = tuple(skill_guidance)
+        while selected:
+            tokens = self.tokenizer(self.render(prepared, [], skill_guidance=selected),
+                                    return_tensors="pt", add_special_tokens=False)
+            if tokens["input_ids"].shape[-1] + self.limits.output_tokens <= self.limits.context_tokens:
+                return selected
+            selected = selected[:-1]
+        return ()
 
     def start_sample(self, sample_id: str):
         self.kv.start_sample(sample_id)
@@ -332,7 +379,8 @@ class NativePlanner(ModelResidency):
                 if self.cpu_offload:
                     self.kv.clear("cpu_offload")
 
-    def decide(self, prepared: JSON, observations: list[JSON], remaining_seconds: float) -> tuple[JSON, JSON]:
+    def decide(self, prepared: JSON, observations: list[JSON], remaining_seconds: float, *,
+               skill_guidance=()) -> tuple[JSON, JSON]:
         from .common import stopping_criteria
         from .qwen_kv import ForwardMeasurement
 
@@ -340,7 +388,9 @@ class NativePlanner(ModelResidency):
         measurement = None
         measured = None
         try:
-            tokens = self.tokenizer(self.render(prepared, observations), return_tensors="pt", add_special_tokens=False)
+            rendered = (self.render(prepared, observations, skill_guidance=skill_guidance)
+                        if skill_guidance else self.render(prepared, observations))
+            tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
             length = tokens["input_ids"].shape[-1]
             if length + self.limits.output_tokens > self.limits.context_tokens:
                 raise PipelineError("CONTEXT_LIMIT", "Prompt plus output reservation exceeds context", "planner")
@@ -372,10 +422,11 @@ class NativePlanner(ModelResidency):
                 action = parse_completion(text, {t["name"] for t in prepared["available_tools"]})
             except NativeFormatError as exc:
                 raise PipelineError("PLANNER_FORMAT", str(exc), "planner") from exc
-            return action, {"prompt_tokens": int(length), "generated_tokens": len(generated),
-                            "seconds": elapsed, "terminated": "eos", "generated_token_ids": generated,
-                            "canonical_action": copy.deepcopy(action),
-                            "kv_cache_enabled": self.kv.enabled, "kv_cache_reused_tokens": reused, **measured}
+            details = {"prompt_tokens": int(length), "generated_tokens": len(generated),
+                       "seconds": elapsed, "terminated": "eos", "generated_token_ids": generated,
+                       "canonical_action": copy.deepcopy(action),
+                       "kv_cache_enabled": self.kv.enabled, "kv_cache_reused_tokens": reused, **measured}
+            return action, details
         except PipelineError:
             self.kv.clear("planner_error")
             raise

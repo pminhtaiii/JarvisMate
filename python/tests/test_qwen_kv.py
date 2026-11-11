@@ -9,7 +9,7 @@ from importlib.util import find_spec
 from unittest.mock import patch
 
 from lifemate.adapters.qwen_kv import ForwardMeasurement, SampleKVCache
-from lifemate.adapters.qwen_native import NativeConstraint, NativePlanner
+from lifemate.adapters.qwen_native import NativeConstraint, NativePlanner, render_messages
 from lifemate.contracts import Limits, PipelineError
 from lifemate.agent import run_integration_sample
 from lifemate.contracts import Deadline
@@ -18,6 +18,57 @@ from support import Fixture, MemoryTrace
 from test_integration_early_stop import Clock, Environment
 
 LIBRARIES = find_spec("torch") and find_spec("transformers")
+
+
+class FixedGuidancePrefixTests(unittest.TestCase):
+    def test_exact_user_guidance_prefix_remains_reusable_without_model_dependencies(self):
+        prepared = {"request": "Tìm liên hệ", "context": {}, "history": [], "available_tools": []}
+        guidance = ({"branch_id": "S01.B01", "parent_id": "S01", "evidence": "E",
+                     "guidance": "Chọn đúng thiết bị.", "shared_instructions": []},)
+        first_body = render_messages(prepared, [], skill_guidance=guidance)[1]["content"]
+        later_body = render_messages(prepared, [{"name": "contacts.list", "arguments": {},
+                                                 "result": {"ok": True}}],
+                                     skill_guidance=guidance)[1]["content"]
+        self.assertEqual(first_body, later_body)
+
+        class Layer:
+            def __init__(self, length):
+                self.length = length
+
+            def get_seq_length(self):
+                return self.length
+
+        class Cache:
+            def __init__(self, config=None, length=0):
+                self.length = length
+                self.layers = [Layer(length)]
+
+            def get_seq_length(self):
+                return self.length
+
+            def crop(self, length):
+                self.length = length
+                for layer in self.layers:
+                    layer.length = length
+
+        torch = types.SimpleNamespace(__version__="2.9.0", arange=lambda start, end, **kwargs: list(range(start, end)))
+        hf = types.SimpleNamespace(__version__="4.57.1", DynamicCache=Cache)
+        model = types.SimpleNamespace(
+            training=False, device="cpu", config=types.SimpleNamespace(
+                model_type="qwen3", rope_scaling=None, layer_types=["full_attention"], use_cache=True),
+            generation_config=types.SimpleNamespace(use_cache=True, cache_implementation=None))
+        cache = SampleKVCache(True, 10_000)
+        cache.start_sample("sample")
+        cache.compatible = lambda *_args: True
+        ids = [ord(char) for char in first_body]
+        cache.prepare(ids, model, hf, torch)
+        cache.cache = Cache(length=len(ids))
+        cache.tokens = ids
+
+        cache_args, reused = cache.prepare(ids + [999], model, hf, torch)
+
+        self.assertEqual(reused, len(ids))
+        self.assertEqual(cache_args["cache_position"], [len(ids)])
 
 
 @unittest.skipUnless(LIBRARIES, "Needs the pinned CPU inference libraries")
@@ -149,6 +200,19 @@ class NativeCacheTests(unittest.TestCase):
         self.assertTrue(on.kv.tokens)
         on.end_sample()
         self.assertIsNone(on.kv.cache)
+
+    def test_fixed_skill_guidance_keeps_an_exact_reusable_prefix(self):
+        planner = self.planner(True)
+        guidance = ({"branch_id": "S01.B01", "parent_id": "S01", "title": "Device",
+                     "evidence": "E", "action_groups": [["contacts.list"]],
+                     "conditional_dependencies": [], "conditional_actions": [], "constraints": [],
+                     "completion_criteria": "Done", "missing_information": "Ask if needed",
+                     "common_refs": [], "shared_instructions": [], "guidance": "Use the listed device."},)
+        planner.decide(self.prepared, [], 28, skill_guidance=guidance)
+        observation = {"name": "contacts.list", "arguments": {}, "result": {"ok": True, "page": 1}}
+        _, second = planner.decide(self.prepared, [observation], 28, skill_guidance=guidance)
+        self.assertGreater(second["kv_cache_reused_tokens"], 0)
+        planner.end_sample()
 
     def test_context_and_generation_errors_clear_cache_and_propagate(self):
         planner = self.planner(True)

@@ -8,6 +8,7 @@ import json
 import os
 import types
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -45,6 +46,55 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(messages[4]["tool_calls"][0]["function"]["arguments"]["contact_id"], "c7")
         # Historical calls stay inside the user JSON, never as native executed turns.
         self.assertEqual(sum("tool_calls" in m for m in messages), 2)
+
+    def test_empty_guidance_preserves_the_disabled_prompt_shape(self):
+        self.assertEqual(render_messages(PREPARED, []), render_messages(PREPARED, [], skill_guidance=()))
+        self.assertEqual(json.loads(render_messages(PREPARED, [])[1]["content"]),
+                         {"request": PREPARED["request"], "context": PREPARED["context"],
+                          "history": PREPARED["history"]})
+
+    def test_skill_guidance_is_a_structured_field_and_keeps_all_native_tools(self):
+        record = {"branch_id": "S06.B02", "parent_id": "S06", "evidence": "E",
+                  "guidance": "Chọn đúng người nhận trước khi gửi.",
+                  "shared_instructions": [{"id": "C05", "title": "Recipient",
+                                           "guidance": "Chọn đúng người nhận."}]}
+        tokenizer = MagicMock()
+        tokenizer.apply_chat_template.return_value = "PROMPT"
+
+        messages = render_messages(PREPARED, [], skill_guidance=(record,))
+        self.assertEqual(json.loads(messages[1]["content"])["skill_guidance"], [record])
+        self.assertNotIn("skill_guidance", json.loads(render_messages(PREPARED, [])[1]["content"]))
+        self.assertIn("không phải kết quả tool", messages[0]["content"])
+        render_prompt(tokenizer, PREPARED, [], skill_guidance=(record,))
+        call = tokenizer.apply_chat_template.call_args
+        self.assertEqual(call.kwargs["tools"], tool_definitions(PREPARED["available_tools"]))
+        self.assertEqual(len(call.kwargs["tools"]), len(PREPARED["available_tools"]))
+        for evidence in ("S", "H"):
+            with self.subTest(evidence=evidence), self.assertRaises(ValueError):
+                render_messages(PREPARED, [], skill_guidance=(record | {"evidence": evidence},))
+        observation = {"name": "contacts.search", "arguments": {"query": "Lan"}, "result": {"ok": True}}
+        later = render_messages(PREPARED, [observation], skill_guidance=(record,))
+        self.assertEqual(messages[1], later[1], "The initial guidance stays an exact stable prompt prefix")
+
+    def test_skill_guidance_budget_drops_lower_priority_items_before_baseline_would_overflow(self):
+        planner = NativePlanner.__new__(NativePlanner)
+        planner.limits = Limits(context_tokens=40, output_tokens=4)
+
+        class CountingTokenizer:
+            def __call__(self, text, **kwargs):
+                return {"input_ids": SimpleNamespace(shape=(1, len(text)))}
+
+        planner.tokenizer = CountingTokenizer()
+        high = SimpleNamespace(branch_id="S01.B01")
+        low = SimpleNamespace(branch_id="S01.B02")
+        planner.render = lambda prepared, observations, *, skill_guidance=(): (
+            "b" * 30 if not skill_guidance else "g" * (25 if len(skill_guidance) == 1 else 50))
+
+        selected = planner.fit_skill_guidance(PREPARED, (high, low))
+
+        self.assertLessEqual(len(planner.render(PREPARED, [])) + planner.limits.output_tokens,
+                             planner.limits.context_tokens)
+        self.assertEqual(selected, (high,))
 
     def test_tool_definitions_expose_only_given_tools(self):
         definitions = tool_definitions(TOOLS[:1])

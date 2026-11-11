@@ -2,6 +2,7 @@
 import copy
 import unittest
 from collections import deque
+from unittest.mock import patch
 
 from lifemate.agent import run_integration_sample
 from lifemate.contracts import Deadline, Limits, PipelineError
@@ -21,10 +22,11 @@ class NativeDoubles:
     metadata = {"parameter_count": 100, "controlled_test_only": True}
 
     def __init__(self, decisions):
-        self.decisions, self.inputs = deque(decisions), []
+        self.decisions, self.inputs, self.guidance_refs = deque(decisions), [], []
 
-    def decide(self, prepared, observations, remaining_seconds):
+    def decide(self, prepared, observations, remaining_seconds, *, skill_guidance=()):
         self.inputs.append((copy.deepcopy(prepared), copy.deepcopy(observations)))
+        self.guidance_refs.append(skill_guidance)
         decision = self.decisions.popleft()
         if isinstance(decision, Exception):
             raise decision
@@ -44,7 +46,7 @@ class PipelineTests(unittest.TestCase):
                            "tool_results": [{"ok": True}]}]
         self.fx.write()
 
-    def execute(self, decisions, *, mode="audio", env=None, limits=None, deadline=None):
+    def execute(self, decisions, *, mode="audio", env=None, limits=None, deadline=None, skill_library=None):
         sample = preflight(self.fx.config(input_mode=mode)).samples[0]
         self.env, self.trace, self.asr = env or ControlledEnvironment(), MemoryTrace(), ControlledASR()
         self.opened, self.planner = [], NativeDoubles(decisions)
@@ -54,7 +56,57 @@ class PipelineTests(unittest.TestCase):
             return self.env
 
         return run_integration_sample(sample, self.planner, self.asr, factory, self.trace, limits or Limits(),
-                                      deadline or Deadline(30), split="train", data_root=self.fx.data)
+                                      deadline or Deadline(30), split="train", data_root=self.fx.data,
+                                      skill_library=skill_library)
+
+    def test_skill_retrieval_runs_once_after_asr_and_never_executes_a_workflow(self):
+        from types import SimpleNamespace
+
+        guidance = (SimpleNamespace(branch_id="S06.B02"), SimpleNamespace(branch_id="S24.B03"))
+        library = object()
+        calls = []
+
+        def retrieve(request, history, eligible_tools, *, library):
+            calls.append((request, history, tuple(eligible_tools), library))
+            self.assertEqual(len(self.asr.paths), 1, "Retrieval starts after request/history ASR")
+            return guidance
+
+        with patch("lifemate.skills.retrieve", side_effect=retrieve):
+            outcome = self.execute([call("sms.send", contact_id="observed_77", content="Đến trễ"), FINISH],
+                                   skill_library=library)
+
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0][3], library)
+        self.assertEqual(set(calls[0][2]), {"contacts.search", "sms.send", "sys.ask_missing_info"})
+        self.assertNotIn("GOLD_MUST_NOT_ENTER_PROMPT", repr(calls))
+        self.assertEqual([[item.branch_id for item in ref] for ref in self.planner.guidance_refs],
+                         [["S06.B02", "S24.B03"], ["S06.B02", "S24.B03"]])
+        self.assertIs(self.planner.guidance_refs[0], self.planner.guidance_refs[1])
+        self.assertEqual([entry["name"] for entry in outcome.result["tool_calls"]], ["sms.send"])
+        self.assertEqual(outcome.metrics["skill_retrieval"]["selected_branch_ids"], ["S06.B02", "S24.B03"])
+        self.assertGreaterEqual(outcome.metrics["skill_retrieval"]["seconds"], 0)
+
+    def test_no_skill_match_falls_back_to_the_original_prompt_path(self):
+        with patch("lifemate.skills.retrieve", return_value=()):
+            outcome = self.execute([FINISH], skill_library=object())
+
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(self.planner.guidance_refs, [()])
+        self.assertEqual(outcome.result["tool_calls"], [])
+        self.assertEqual(outcome.metrics["skill_retrieval"]["selected_branch_ids"], [])
+
+    def test_unsupported_retrieval_input_falls_back_to_the_original_prompt_path(self):
+        from lifemate.skills import SkillRetrievalInputError
+
+        with patch("lifemate.skills.retrieve", side_effect=SkillRetrievalInputError("bounded input")):
+            outcome = self.execute([FINISH], skill_library=object())
+
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(self.planner.guidance_refs, [()])
+        self.assertEqual(outcome.result["tool_calls"], [])
+        self.assertEqual(outcome.metrics["skill_retrieval"]["selected_branch_ids"], [])
+        self.assertEqual(outcome.metrics["skill_retrieval"]["fallback_reason"], "unsupported_input")
 
     def test_lookup_dependent_second_call_uses_actual_result_and_one_transcription(self):
         def send(prepared, observations):
