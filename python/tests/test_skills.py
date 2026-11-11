@@ -222,6 +222,88 @@ class SkillRetrievalTests(unittest.TestCase):
             set(),
         )
 
+    def test_savings_requires_a_current_savings_action(self):
+        for request in ("Chuyển khoản ngân hàng cho An",
+                        "Thanh toán hóa đơn bằng ngân hàng",
+                        "Xem sổ tiết kiệm rồi mở playlist",
+                        "Không gửi tiết kiệm, mở playlist"):
+            with self.subTest(request=request):
+                self.assertNotIn("S08.B02", self.ids(request))
+        for request in ("Gửi tiết kiệm", "Mở sổ tiết kiệm", "gui tiet kiem"):
+            with self.subTest(request=request):
+                self.assertIn("S08.B02", self.ids(request))
+
+    def test_transfer_channel_and_bill_payment_are_distinct(self):
+        cases = {
+            "Chuyển tiền qua ví cho An": {"S09.B01"},
+            "Chuyển ví cho An": {"S09.B01"},
+            "Chuyển khoản qua ví cho An": {"S09.B01"},
+            "Chuyển khoản ngân hàng cho An": {"S08.B01"},
+            "Chuyển tiền từ ngân hàng vào ví": set(),  # Cross-app semantics are unestablished.
+            "Chuyển tiền từ ví sang ngân hàng": set(),
+            "Thanh toán hóa đơn bằng ví": set(),
+            "Thanh toán hóa đơn qua ngân hàng": set(),
+            "Nạp ví": set(),
+            "Chuyển tiền": set(),  # No channel evidence: keep the planner fallback.
+            "chuyen tien qua vi cho An": {"S09.B01"},
+        }
+        for request, expected in cases.items():
+            with self.subTest(request=request):
+                actual = self.ids(request) & {"S08.B01", "S08.B02", "S09.B01"}
+                self.assertEqual(actual, expected)
+
+    def test_existing_alarm_change_is_not_new_alarm_creation(self):
+        for request in ("Tạo báo thức mới", "Đặt thêm báo thức",
+                        "Đặt báo thức nhắc sửa xe", "Tạo báo thức nhắc chuyển tiền"):
+            with self.subTest(request=request):
+                self.assertNotIn("S05.B01", self.ids(request))
+        for request in ("Đổi báo thức", "Đổi giờ báo thức", "Xóa báo thức cũ",
+                        "Tắt báo thức", "doi bao thuc"):
+            with self.subTest(request=request):
+                self.assertIn("S05.B01", self.ids(request))
+
+    def test_append_requires_a_continuation_or_existing_note_target(self):
+        for request in ("Thêm ghi chú mới", "Tạo note mới", "Thêm một ghi chú mua sắm",
+                        "Thêm nội dung vào ghi chú mới", "Tạo ghi chú rồi thêm bài vào playlist"):
+            with self.subTest(request=request):
+                self.assertNotIn("S05.B04", self.ids(request))
+        for request in ("Ghi tiếp vào ghi chú", "Thêm sữa vào ghi chú cũ",
+                        "Viết tiếp note", "them noi dung vao note", "append note"):
+            with self.subTest(request=request):
+                self.assertIn("S05.B04", self.ids(request))
+
+    def test_multi_intent_keeps_scoped_matches_without_borrowing_other_clauses(self):
+        cases = {
+            "Thanh toán hóa đơn qua ví rồi hủy gói xem phim và mở playlist":
+                {"S10.B01", "S11.B02", "S18.B01"},
+            "Xem ví rồi chuyển khoản ngân hàng cho An và mở playlist":
+                {"S08.B01", "S18.B01"},
+            "Chuyển khoản ngân hàng cho An rồi chuyển tiền qua ví cho Bình":
+                {"S08.B01", "S09.B01"},
+            "Thêm ghi chú mới rồi đổi báo thức": {"S05.B01"},
+            "Thêm nội dung vào ghi chú cũ rồi tạo báo thức mới": {"S05.B04"},
+        }
+        for request, expected in cases.items():
+            with self.subTest(request=request):
+                self.assertEqual(self.ids(request), expected)
+
+    def test_history_does_not_supply_an_unreferenced_workflow_or_action(self):
+        history = ({"role": "user", "text": "Chuyển tiền qua ví rồi gửi tiết kiệm"},)
+        self.assertEqual(self.ids("Thanh toán hóa đơn ngân hàng rồi mở playlist", history=history),
+                         {"S10.B01", "S18.B01"})
+        self.assertNotIn("S09.B01", self.ids("Xem ví đó rồi chuyển khoản ngân hàng cho An",
+                                           history=history))
+        alarm_history = ({"role": "user", "text": "Báo thức sáng mai"},)
+        self.assertEqual(self.ids("Đổi cái đó", history=alarm_history), {"S05.B01"})
+
+    def test_shared_scope_instruction_preserves_goals_without_a_matching_skill(self):
+        selected = retrieve("Gửi tiết kiệm rồi tạo báo thức mới", (), self.all_tools, self.library)
+        self.assertEqual({item.branch_id for item in selected}, {"S08.B02"})
+        scope = [instruction.guidance for item in selected for instruction in item.shared_instructions
+                 if instruction.instruction_id == "C01"]
+        self.assertEqual(len(scope), 1)
+        self.assertIn("kể cả khi không có skill khớp", scope[0])
+
     def test_asr_insertions_deletions_repetitions_substitutions_and_code_switching(self):
         cases = {
             "huy huy goi xem phim": {"S11.B02"},  # repeated verb

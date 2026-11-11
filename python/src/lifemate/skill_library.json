@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "2026-11-11.11",
+  "version": "2026-11-11.12",
   "parents": [
     {
       "skill_id": "S01",
@@ -103,7 +103,7 @@
     {
       "id": "C01",
       "title": "Eligibility và hợp đồng tool",
-      "guidance": "Nguồn tool là catalog đúng split ∩ danh sách tên trong context.installed_apps[app].tools, cộng sys.ask_missing_info. Giữ toàn bộ eligible schemas trong native tool calling. Dùng đúng tên/kiểu/enum/x-one-of/x-ref; không tự chuyển ID giữa app. Không đọc state ẩn, label, prediction; không thêm call thử hoặc retry thao tác chưa rõ kết quả."
+      "guidance": "Nguồn tool là catalog đúng split ∩ danh sách tên trong context.installed_apps[app].tools, cộng sys.ask_missing_info. Giữ toàn bộ eligible schemas trong native tool calling. Dùng đúng tên/kiểu/enum/x-one-of/x-ref; không tự chuyển ID giữa app. Không đọc state ẩn, label, prediction; không thêm call thử hoặc retry thao tác chưa rõ kết quả. Mỗi nhánh chỉ hướng dẫn mục tiêu khớp trong request hiện tại. Tiếp tục xử lý các mục tiêu độc lập khác, kể cả khi không có skill khớp; chỉ hoàn tất request khi mọi mục tiêu đã được xử lý hoặc xác định còn thiếu dữ kiện."
     },
     {
       "id": "C02",
@@ -2571,8 +2571,7 @@
       "conditional_actions": [],
       "required_object_cues": [
         "tiết kiệm",
-        "sổ tiết kiệm",
-        "ngân hàng"
+        "sổ tiết kiệm"
       ],
       "suppressor_branch_ids": [],
       "required_cue_groups": []

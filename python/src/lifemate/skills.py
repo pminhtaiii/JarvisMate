@@ -690,7 +690,7 @@ _ACTION_CATEGORIES: Mapping[str, frozenset[str]] = MappingProxyType({
                            "phat", "nghe", "hut", "tune", "turn"}),
     "deactivate": frozenset({"tat", "dung", "ngung", "stop", "off"}),
     "modify": frozenset({"chinh", "sua", "doi", "capnhat", "update", "move",
-                         "reschedule", "edit", "set", "chuyen", "dichoi", "them"}),
+                         "reschedule", "edit", "set", "chuyen", "dichoi", "them", "append"}),
     "cancel": frozenset({"huy", "xoa", "delete", "remove", "cancel", "bo"}),
     "send": frozenset({"gui", "nhan", "send", "text", "message", "nhan_tin"}),
     "call": frozenset({"goi", "call", "dial"}),
@@ -973,6 +973,77 @@ def _request_clauses(text: str) -> tuple[tuple[str, ...], ...]:
     return tuple(tokens for part in parts if (tokens := _tokens(part)))
 
 
+def _active_phrase(tokens: tuple[str, ...], phrases: tuple[str, ...]) -> bool:
+    """Require a current action, retaining the existing negation/completion policy."""
+    for phrase in phrases:
+        words = _tokens(phrase)
+        for start in range(len(tokens) - len(words) + 1):
+            if (all(_token_matches(tokens[start + offset], word)
+                    for offset, word in enumerate(words))
+                    and not _is_negated_at(tokens, start)
+                    and not _is_completed_at(tokens, start)):
+                return True
+    return False
+
+
+def _workflow_clauses(branch: SkillBranch, clauses: tuple[tuple[str, ...], ...],
+                      context_tokens: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    """Narrow ambiguous write workflows before the generic action-category match.
+
+    A shared category such as create/modify is insufficient for these workflows.
+    Keep action, object and payment channel in the same clause; history supplies
+    an object only for an explicit reference in that clause. Other branches keep
+    their existing composite matching and eligibility/evidence gates.
+    """
+    key = branch.branch_key
+    if key not in {"bank-transfer", "bank-savings", "wallet-transfer",
+                   "alarm-change", "note-append"}:
+        return clauses
+    result = []
+    for clause in clauses:
+        target = (*clause, *context_tokens) if _has_reference(" ".join(clause)) else clause
+        has = lambda phrases: any(_phrase_present(phrase, target) for phrase in phrases)
+        active = lambda phrases: _active_phrase(clause, phrases)
+        if not has(branch.required_object_cues):
+            continue
+        if key == "bank-savings":
+            # Mentioning a bank, or looking up savings, is not an opening intent.
+            matched = active(("gửi tiết kiệm", "mở tiết kiệm", "mở sổ tiết kiệm",
+                              "mở tài khoản tiết kiệm", "tạo khoản tiết kiệm",
+                              "open savings", "create savings"))
+        elif key in {"bank-transfer", "wallet-transfer"}:
+            if not active(("chuyển", "transfer", "gửi tiền", "send money")):
+                continue
+            if has(("hóa đơn", "bill", "qr")):
+                continue  # A payment is not a transfer to a beneficiary/contact.
+            bank = has(("ngân hàng", "tài khoản ngân hàng", "bank", "banking"))
+            wallet = has(("ví", "ewallet", "wallet"))
+            # Both channels in one clause may describe a cross-app operation that
+            # neither branch establishes. Leave that ambiguity to the planner.
+            if key == "wallet-transfer":
+                matched = wallet and not bank
+            else:
+                matched = (bank or has(("chuyển khoản",))) and not wallet
+        elif key == "alarm-change":
+            # A new alarm may contain words such as "sửa xe" or "chuyển tiền".
+            # Require an actual alarm-change phrase, not any modify action nearby.
+            verbs = (
+                "đổi", "dời", "sửa", "chỉnh", "cập nhật", "tắt", "xóa", "hủy",
+                "update", "edit", "delete", "cancel", "reschedule")
+            matched = (active(tuple(f"{verb} {obj}" for verb in verbs
+                                    for obj in ("báo thức", "giờ báo thức", "alarm")))
+                       or (_has_reference(" ".join(clause)) and active(verbs)))
+        else:  # note-append
+            matched = (not has(("ghi chú mới", "note mới", "new note"))
+                       and (active(("ghi tiếp", "viết tiếp", "bổ sung", "append"))
+                            or (active(("thêm", "add"))
+                                and has(("vào ghi chú", "vào note", "ghi chú đã có",
+                                         "note đã có", "ghi chú cũ", "existing note")))))
+        if matched:
+            result.append(clause)
+    return tuple(result)
+
+
 def _branch_request_candidate(
     branch: SkillBranch,
     clauses: tuple[tuple[str, ...], ...],
@@ -1062,6 +1133,14 @@ def _phrase_present(phrase: str, tokens: tuple[str, ...]) -> bool:
 
 
 def _branch_action_requirements(branch: SkillBranch) -> tuple[frozenset[str], ...]:
+    # The scoped gates above establish the business action. Accept its actual
+    # surface verbs (e.g. "mở sổ", "chuyển ví", "tắt báo thức") as well as create.
+    if branch.branch_key == "bank-savings":
+        return (frozenset({"create", "activate", "send"}),)
+    if branch.branch_key in {"bank-transfer", "wallet-transfer"}:
+        return (frozenset({"create", "modify", "send"}),)
+    if branch.branch_key == "alarm-change":
+        return (frozenset({"modify", "cancel", "deactivate"}),)
     return _action_requirements(branch.action_groups)
 
 
@@ -1300,8 +1379,9 @@ def retrieve(
             continue
         requirements = _branch_action_requirements(branch)
         ignore_completed = not _is_logging_branch(branch)
+        branch_clauses = _workflow_clauses(branch, clauses, context_tokens)
         if not _branch_request_candidate(
-            branch, clauses, context_tokens,
+            branch, branch_clauses, context_tokens,
             ignore_completed_actions=ignore_completed,
         ):
             continue
@@ -1319,7 +1399,7 @@ def retrieve(
         best = 0.0
         for trigger in branch.intent_triggers:
             matched, score = _trigger_match(
-                clauses, context_tokens, trigger, requirements,
+                branch_clauses, context_tokens, trigger, requirements,
                 branch.required_object_cues,
                 branch.required_cue_groups,
                 composite=len(branch.domain_ids) > 1 or len(branch.action_groups) > 1,

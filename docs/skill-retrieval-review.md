@@ -122,3 +122,58 @@ provenance, as intended.
   tokenization adds CPU work; measure the complete 30-second path on the target GPU.
 - Large baseline requests or growing tool observations can still exhaust the context.
   The context and generation limits remain unchanged.
+
+## Intent gating follow-up
+
+Based on the 009/011 root-cause review, this patch adds conservative clause gates
+in `skills.py` for savings, bank/wallet transfers, existing alarms and note append.
+The review establishes loose matching predicates; missing Public Test request and
+result payloads prevent treating its prediction differences as Gold intent labels.
+The regression requests below are synthetic, independent of Public Test labels.
+
+- S08.B02 removes the generic “ngân hàng” object cue and requires a current savings
+  opening/deposit phrase. A bank transfer or savings lookup cannot borrow “mở” from
+  an unrelated playlist clause.
+- S09.B01 requires a transfer action and wallet cue in the same clause; bill/QR
+  payment and top-up do not qualify. S08.B01 receives the corresponding bank gate.
+  Naming both bank and wallet in one clause falls back to ordinary planning;
+  neither branch establishes cross-app transfer semantics. Separate bank and wallet
+  transfer clauses can still retrieve both branches.
+- S05.B01 requires an alarm-change phrase, including an explicit reference to an
+  alarm in user history. Creating an alarm whose reminder text contains “sửa xe” or
+  “chuyển tiền” does not qualify. S05.B04 requires continuation/addition to an
+  existing note and rejects an explicit new-note target.
+- Shared C01 tells the planner to retain independent goals, including goals without
+  matching skills. It is still emitted once across branches. Filtering removes
+  irrelevant guidance; no top-one selection or new priority scheme is added.
+
+Library version is `2026-11-11.12`; the inventory remains 24 parents, 80 branches
+(63 E / 13 S / 4 H), with unchanged tools, parameters and evidence eligibility.
+Planner, ASR, Agent, KV cache, ToolEnv, model and execution limits are unchanged.
+The Experiment 1 harness is unchanged and still pins source `047879e`; these fixes
+are not silently included in that frozen ablation.
+
+CPU verification from the separate `codex/011-skill-retrieval` worktree:
+
+```powershell
+$env:PYTHONPATH = 'python/src;python/tests'
+$env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:LIFEMATE_SKILL_DATA_ROOT = '../train+public_test/train+public_test'
+& ../.python/python.exe -B -m unittest test_skills test_integration_config test_worker_skill_identity test_integration_pipeline test_asr_once -v
+```
+
+The command uses local Python 3.13.9. It checks synthetic retrieval cases,
+catalog/eligibility and E/S/H invariants, enabled/disabled integration with doubles,
+worker library identity, and transcript/ASR boundaries. The actual-catalog test
+inspects visible metadata; it does not execute ToolEnv or load models. Seven new
+test methods cover false positives, valid intents, accentless text, multi-intent,
+history isolation and the shared scope instruction. The same new tests fail on the
+unmodified `047879e` source/library snapshot: seven methods produced 25 failure
+records (including subtests). On the final patch, the command above passed all
+**80 tests**, with **no skips**, in **8.552 s**. `git diff --check` also passed.
+
+This is a lexical precision patch. Unsupported paraphrases or ambiguous clauses can
+lose guidance and use the original planner path. A scope instruction does not prove
+that the model completes every goal. No model inference, training, quality benchmark
+or Slurm job establishes a score/latency improvement for this patch.
