@@ -1,0 +1,3 @@
+local-checks/
+__pycache__/
+*.pyc

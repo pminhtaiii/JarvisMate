@@ -1,0 +1,70 @@
+[
+  {
+    "argv": [
+      "C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe",
+      "-B",
+      "analysis\\experiment-1\\harness\\prepare.py",
+      "prepare",
+      "--experiment",
+      "analysis\\experiment-1\\local-checks\\train-cpu-release",
+      "--source-repo",
+      "JarvisMate",
+      "--data-root",
+      "train+public_test/train+public_test",
+      "--planner-model",
+      "analysis\\experiment-1\\no-local-checkpoint",
+      "--local",
+      "--skip-model-check",
+      "--protect-file",
+      "submission_009_kv.jsonl",
+      "--protect-file",
+      "submission_011_skills.jsonl"
+    ],
+    "returncode": 0,
+    "stdout": "{\"gpu_execution_allowed\":false,\"main_samples\":1545,\"model_checked\":false,\"root\":\"C:\\\\Users\\\\Windows\\\\Downloads\\\\Zalo\\\\analysis\\\\experiment-1\\\\local-checks\\\\train-cpu-release\",\"smoke_samples\":16,\"status\":\"prepared\"}\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe",
+      "-B",
+      "analysis\\experiment-1\\local-checks\\train-cpu-release\\harness\\gold_oracle.py",
+      "--experiment",
+      "analysis\\experiment-1\\local-checks\\train-cpu-release",
+      "--phase",
+      "smoke",
+      "--cpu-check"
+    ],
+    "returncode": 0,
+    "stdout": "{\"catalog_sha256\":\"a994984bb580d7e0d60166641858901d428549682ba3614dbf9269037a33cce0\",\"cpu_check_only\":true,\"dataset_sha256\":\"24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8\",\"errors\":[],\"expected\":16,\"experiment_sha256\":\"02f87fe9e002fba971cb768924ee7602e08e39235fd930ad01196295ddb2cfc9\",\"factory\":\"pinned_Train_runtime\",\"phase\":\"smoke\",\"reference_hashes_sha256\":\"a2e221ae2e3db9212531d91cb8185fdd3fe529225acc99ec0b56213efc2ca585\",\"reference_kind\":\"local_gold_toolenv_replay_not_organizer_hash\",\"reference_results_sha256\":\"8a13f5f3523e7c6751acd8bde90bf8bb8cc9d5998e31016420ab4d7acc666dd8\",\"schema_version\":1,\"source_sha\":\"047879eb0931e5fa85930d640fb4c0b71d9268bc\",\"valid\":16}\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe",
+      "-B",
+      "analysis\\experiment-1\\local-checks\\train-cpu-release\\harness\\gold_oracle.py",
+      "--experiment",
+      "analysis\\experiment-1\\local-checks\\train-cpu-release",
+      "--phase",
+      "main",
+      "--cpu-check"
+    ],
+    "returncode": 0,
+    "stdout": "{\"catalog_sha256\":\"a994984bb580d7e0d60166641858901d428549682ba3614dbf9269037a33cce0\",\"cpu_check_only\":true,\"dataset_sha256\":\"24c42c79fbe8db932fe9817d041c0d0ca422ac8177b413cc1be0cda1fd8941a8\",\"errors\":[],\"expected\":1545,\"experiment_sha256\":\"02f87fe9e002fba971cb768924ee7602e08e39235fd930ad01196295ddb2cfc9\",\"factory\":\"pinned_Train_runtime\",\"phase\":\"main\",\"reference_hashes_sha256\":\"2eb27d9a03a71766999cdd1f177385347f82de1d9cf66784e9bf47ffbc5cab75\",\"reference_kind\":\"local_gold_toolenv_replay_not_organizer_hash\",\"reference_results_sha256\":\"3facfdba6c184e29806a81cb350a44bb03a7c7df851e02f1dc1bb24fdadbaa33\",\"schema_version\":1,\"source_sha\":\"047879eb0931e5fa85930d640fb4c0b71d9268bc\",\"valid\":1545}\n",
+    "stderr": ""
+  },
+  {
+    "argv": [
+      "C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe",
+      "-B",
+      "analysis\\experiment-1\\local-checks\\train-cpu-release\\harness\\prepare.py",
+      "verify",
+      "--experiment",
+      "analysis\\experiment-1\\local-checks\\train-cpu-release"
+    ],
+    "returncode": 0,
+    "stdout": "{\"checked_inputs\":57,\"ok\":true}\n",
+    "stderr": ""
+  }
+]

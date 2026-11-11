@@ -1,0 +1,22 @@
+[
+  {
+    "pattern": "test_integration_config.py",
+    "returncode": 0,
+    "tests": 25
+  },
+  {
+    "pattern": "test_asr_once.py",
+    "returncode": 0,
+    "tests": 6
+  },
+  {
+    "pattern": "test_integration_pipeline.py",
+    "returncode": 0,
+    "tests": 15
+  },
+  {
+    "pattern": "test_integration_diagnostics.py",
+    "returncode": 0,
+    "tests": 8
+  }
+]

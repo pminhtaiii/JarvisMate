@@ -1,0 +1,81 @@
+COMMAND ['C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe', '-B', '-m', 'unittest', 'discover', '-s', 'C:\\Users\\Windows\\Downloads\\Zalo\\analysis\\experiment-1\\local-checks\\train-cpu-final\\src\\python\\tests', '-p', 'test_integration_config.py', '-v']
+test_check_config_validates_without_run_artifacts_or_workers (test_integration_config.CommandTests.test_check_config_validates_without_run_artifacts_or_workers) ... ok
+test_compatible_checkpoint_switch_needs_no_code_change_and_changes_identity (test_integration_config.CommandTests.test_compatible_checkpoint_switch_needs_no_code_change_and_changes_identity) ... ok
+test_invalid_override_fails_before_any_run_directory (test_integration_config.CommandTests.test_invalid_override_fails_before_any_run_directory) ... ok
+test_resume_with_switched_model_is_rejected (test_integration_config.CommandTests.test_resume_with_switched_model_is_rejected) ... ok
+test_cli_overrides_only_known_fields_and_take_precedence (test_integration_config.ConfigurationTests.test_cli_overrides_only_known_fields_and_take_precedence) ... ok
+test_documented_example_matches_the_strict_schema (test_integration_config.ConfigurationTests.test_documented_example_matches_the_strict_schema) ... ok
+test_explicit_soft_budget_overrides_default_and_round_trips (test_integration_config.ConfigurationTests.test_explicit_soft_budget_overrides_default_and_round_trips) ... ok
+test_integration_dataclass_default_is_28 (test_integration_config.ConfigurationTests.test_integration_dataclass_default_is_28) ... ok
+test_invalid_devices_dtypes_types_and_limits_are_rejected (test_integration_config.ConfigurationTests.test_invalid_devices_dtypes_types_and_limits_are_rejected) ... ok
+test_kv_switch_is_strict_and_changes_effective_identity (test_integration_config.ConfigurationTests.test_kv_switch_is_strict_and_changes_effective_identity) ... ok
+test_output_inside_inputs_is_rejected (test_integration_config.ConfigurationTests.test_output_inside_inputs_is_rejected) ... ok
+test_parameter_budget (test_integration_config.ConfigurationTests.test_parameter_budget) ... ok
+test_selection_and_mode_contradictions_are_rejected (test_integration_config.ConfigurationTests.test_selection_and_mode_contradictions_are_rejected) ... ok
+test_skill_retrieval_is_opt_in_and_false_keeps_the_legacy_record (test_integration_config.ConfigurationTests.test_skill_retrieval_is_opt_in_and_false_keeps_the_legacy_record) ... ok
+test_unknown_sections_keys_and_wrong_schema_version_are_rejected (test_integration_config.ConfigurationTests.test_unknown_sections_keys_and_wrong_schema_version_are_rejected) ... ok
+test_valid_config_resolves_paths_and_has_stable_fingerprint (test_integration_config.ConfigurationTests.test_valid_config_resolves_paths_and_has_stable_fingerprint) ... ok
+test_absent_snapshot_incompatible_template_and_wrong_family (test_integration_config.PreflightTests.test_absent_snapshot_incompatible_template_and_wrong_family) ... ok
+test_context_and_parameter_limits (test_integration_config.PreflightTests.test_context_and_parameter_limits) ... ok
+test_enabled_run_identity_binds_skill_library_version_and_hash (test_integration_config.PreflightTests.test_enabled_run_identity_binds_skill_library_version_and_hash) ... ok
+test_equivalent_catalog_bytes_keep_validation_but_change_run_provenance (test_integration_config.PreflightTests.test_equivalent_catalog_bytes_keep_validation_but_change_run_provenance) ... ok
+test_invalid_selection_fails_before_runtime (test_integration_config.PreflightTests.test_invalid_selection_fails_before_runtime) ... ok
+test_invalid_soft_budget_fails_preflight_before_runtime (test_integration_config.PreflightTests.test_invalid_soft_budget_fails_preflight_before_runtime) ... ok
+test_model_change_changes_run_identity (test_integration_config.PreflightTests.test_model_change_changes_run_identity) ... ok
+test_skill_catalog_mismatch_fails_before_runtime_load (test_integration_config.PreflightTests.test_skill_catalog_mismatch_fails_before_runtime_load) ... ok
+test_valid_preflight_records_identity_without_environment (test_integration_config.PreflightTests.test_valid_preflight_records_identity_without_environment) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 1.638s
+
+OK
+
+COMMAND ['C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe', '-B', '-m', 'unittest', 'discover', '-s', 'C:\\Users\\Windows\\Downloads\\Zalo\\analysis\\experiment-1\\local-checks\\train-cpu-final\\src\\python\\tests', '-p', 'test_asr_once.py', '-v']
+test_audio_removed_after_preflight_fails_at_asr_stage (test_asr_once.TranscribeOnceTests.test_audio_removed_after_preflight_fails_at_asr_stage) ... ok
+test_empty_transcript_fails_visibly (test_asr_once.TranscribeOnceTests.test_empty_transcript_fails_visibly) ... ok
+test_history_order_and_supplied_calls_are_preserved_not_executed (test_asr_once.TranscribeOnceTests.test_history_order_and_supplied_calls_are_preserved_not_executed) ... ok
+test_missing_asr_and_expired_deadline (test_asr_once.TranscribeOnceTests.test_missing_asr_and_expired_deadline) ... ok
+test_repeated_and_identical_clips_reuse_one_transcript (test_asr_once.TranscribeOnceTests.test_repeated_and_identical_clips_reuse_one_transcript) ... ok
+test_transcript_mode_uses_supplied_text_without_asr (test_asr_once.TranscribeOnceTests.test_transcript_mode_uses_supplied_text_without_asr) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.089s
+
+OK
+
+COMMAND ['C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe', '-B', '-m', 'unittest', 'discover', '-s', 'C:\\Users\\Windows\\Downloads\\Zalo\\analysis\\experiment-1\\local-checks\\train-cpu-final\\src\\python\\tests', '-p', 'test_integration_pipeline.py', '-v']
+test_clarification_after_partial_execution_stops_without_another_turn (test_integration_pipeline.PipelineTests.test_clarification_after_partial_execution_stops_without_another_turn) ... ok
+test_deadline_checked_on_tool_return_rejects_late_success (test_integration_pipeline.PipelineTests.test_deadline_checked_on_tool_return_rejects_late_success) ... ok
+test_disabled_mode_never_loads_or_retrieves_skills (test_integration_pipeline.PipelineTests.test_disabled_mode_never_loads_or_retrieves_skills) ... ok
+test_history_calls_are_context_never_replayed (test_integration_pipeline.PipelineTests.test_history_calls_are_context_never_replayed) ... ok
+test_ineligible_or_failed_decisions_never_dispatch (test_integration_pipeline.PipelineTests.test_ineligible_or_failed_decisions_never_dispatch) ... ok
+test_lookup_dependent_second_call_uses_actual_result_and_one_transcription (test_integration_pipeline.PipelineTests.test_lookup_dependent_second_call_uses_actual_result_and_one_transcription) ... ok
+test_no_skill_match_falls_back_to_the_original_prompt_path (test_integration_pipeline.PipelineTests.test_no_skill_match_falls_back_to_the_original_prompt_path) ... ok
+test_schema_rejected_call_stays_in_authoritative_log (test_integration_pipeline.PipelineTests.test_schema_rejected_call_stays_in_authoritative_log) ... ok
+test_skill_retrieval_runs_once_after_asr_and_never_executes_a_workflow (test_integration_pipeline.PipelineTests.test_skill_retrieval_runs_once_after_asr_and_never_executes_a_workflow) ... ok
+test_spans_cover_clips_decisions_tools_and_collection (test_integration_pipeline.PipelineTests.test_spans_cover_clips_decisions_tools_and_collection) ... ok
+test_step_limit (test_integration_pipeline.PipelineTests.test_step_limit) ... ok
+test_uncertain_execution_is_not_retried_or_reopened (test_integration_pipeline.PipelineTests.test_uncertain_execution_is_not_retried_or_reopened) ... ok
+test_unsuccessful_clarification_returns_to_the_planner (test_integration_pipeline.PipelineTests.test_unsuccessful_clarification_returns_to_the_planner) ... ok
+test_unsupported_retrieval_input_falls_back_to_the_original_prompt_path (test_integration_pipeline.PipelineTests.test_unsupported_retrieval_input_falls_back_to_the_original_prompt_path) ... ok
+test_valid_empty_completion_still_uses_environment_log_and_hash (test_integration_pipeline.PipelineTests.test_valid_empty_completion_still_uses_environment_log_and_hash) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.168s
+
+OK
+
+COMMAND ['C:\\Users\\Windows\\Downloads\\Zalo\\.python\\python.exe', '-B', '-m', 'unittest', 'discover', '-s', 'C:\\Users\\Windows\\Downloads\\Zalo\\analysis\\experiment-1\\local-checks\\train-cpu-final\\src\\python\\tests', '-p', 'test_integration_diagnostics.py', '-v']
+test_benchmark_call_matching (test_integration_diagnostics.DiagnosticsTests.test_benchmark_call_matching) ... ok
+test_clarification_presence_intended_tool_params_and_unnecessary (test_integration_diagnostics.DiagnosticsTests.test_clarification_presence_intended_tool_params_and_unnecessary) ... ok
+test_empty_and_failure_denominators (test_integration_diagnostics.DiagnosticsTests.test_empty_and_failure_denominators) ... ok
+test_inference_modules_never_import_diagnostics_or_labels (test_integration_diagnostics.DiagnosticsTests.test_inference_modules_never_import_diagnostics_or_labels) ... ok
+test_overlapping_groups_keep_their_own_denominators (test_integration_diagnostics.DiagnosticsTests.test_overlapping_groups_keep_their_own_denominators) ... ok
+test_paired_transcript_audio_attribution (test_integration_diagnostics.DiagnosticsTests.test_paired_transcript_audio_attribution) ... ok
+test_partial_is_accepted_but_counted_separately_from_completion (test_integration_diagnostics.DiagnosticsTests.test_partial_is_accepted_but_counted_separately_from_completion) ... ok
+test_unavailable_metrics_are_explicit (test_integration_diagnostics.DiagnosticsTests.test_unavailable_metrics_are_explicit) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.151s
+
+OK

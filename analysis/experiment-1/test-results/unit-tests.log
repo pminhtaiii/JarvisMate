@@ -1,0 +1,40 @@
+test_empty_gold_still_uses_environment_hash (test_preparation_oracle.OracleTests.test_empty_gold_still_uses_environment_hash) ... ok
+test_invalid_toolenv_hash_never_valid_reference (test_preparation_oracle.OracleTests.test_invalid_toolenv_hash_never_valid_reference) ... ok
+test_public_api_replay_and_results_validation (test_preparation_oracle.OracleTests.test_public_api_replay_and_results_validation) ... ok
+test_public_private_ids_rejected_before_factory (test_preparation_oracle.OracleTests.test_public_private_ids_rejected_before_factory) ... ok
+test_typed_result_equality (test_preparation_oracle.OracleTests.test_typed_result_equality) ... ok
+test_current_gold_test_row_rejected_before_snapshot (test_preparation_oracle.PreparationTests.test_current_gold_test_row_rejected_before_snapshot) ... ok
+test_fixed_history_not_gold_future_and_no_asr (test_preparation_oracle.PreparationTests.test_fixed_history_not_gold_future_and_no_asr) ... ok
+test_fixed_text_whitelist_and_paired_toml (test_preparation_oracle.PreparationTests.test_fixed_text_whitelist_and_paired_toml) ... ok
+test_gold_oracle_post_inference_guard_and_cpu_separation (test_preparation_oracle.PreparationTests.test_gold_oracle_post_inference_guard_and_cpu_separation) ... ok
+test_group_not_split_and_jsonl_order_retained (test_preparation_oracle.PreparationTests.test_group_not_split_and_jsonl_order_retained) ... ok
+test_manifest_edit_and_helper_edit_detected (test_preparation_oracle.PreparationTests.test_manifest_edit_and_helper_edit_detected) ... ok
+test_model_reference_digests_are_required_to_match (test_preparation_oracle.PreparationTests.test_model_reference_digests_are_required_to_match) ... ok
+test_modified_frozen_helper_detected (test_preparation_oracle.PreparationTests.test_modified_frozen_helper_detected) ... ok
+test_modified_inputs_or_manifest_rejected (test_preparation_oracle.PreparationTests.test_modified_inputs_or_manifest_rejected) ... ok
+test_server_paths_and_skip_model_guard (test_preparation_oracle.PreparationTests.test_server_paths_and_skip_model_guard) ... ok
+test_full_cpu_artifact_flow_and_oracle_source_tag (test_runner.RunnerTests.test_full_cpu_artifact_flow_and_oracle_source_tag) ... ok
+test_isolated_child_environment (test_runner.RunnerTests.test_isolated_child_environment) ... ok
+test_local_profile_never_launches_real_inference (test_runner.RunnerTests.test_local_profile_never_launches_real_inference) ... ok
+test_main_requires_smoke_evidence (test_runner.RunnerTests.test_main_requires_smoke_evidence) ... ok
+test_metadata_preflight_does_not_consume_phase (test_runner.RunnerTests.test_metadata_preflight_does_not_consume_phase) ... ok
+test_nonempty_tool_results_preserved_and_trace_truncation_blocks_evidence (test_runner.RunnerTests.test_nonempty_tool_results_preserved_and_trace_truncation_blocks_evidence) ... ok
+test_out_of_budget_acceptance_never_receives_credit (test_runner.RunnerTests.test_out_of_budget_acceptance_never_receives_credit) ... ok
+test_partner_runs_after_nonzero_and_phase_cannot_retry (test_runner.RunnerTests.test_partner_runs_after_nonzero_and_phase_cannot_retry) ... ok
+test_missing_runs_produce_full_denominator_report_without_faking_empty (test_score.IncompleteReportTests.test_missing_runs_produce_full_denominator_report_without_faking_empty) ... ok
+test_duplicates_schema_rejections_and_typed_values (test_score.MatchingTests.test_duplicates_schema_rejections_and_typed_values) ... ok
+test_maximum_matching_beats_greedy_and_is_order_independent (test_score.MatchingTests.test_maximum_matching_beats_greedy_and_is_order_independent) ... ok
+test_threshold_is_strict_and_diacritics_not_removed (test_score.MatchingTests.test_threshold_is_strict_and_diacritics_not_removed) ... ok
+test_empty_gold_special_case (test_score.SampleScoringTests.test_empty_gold_special_case) ... ok
+test_failed_denominators_and_negative_latency_delta (test_score.SampleScoringTests.test_failed_denominators_and_negative_latency_delta) ... ok
+test_hash_mismatch_zeroes_perfect_calls (test_score.SampleScoringTests.test_hash_mismatch_zeroes_perfect_calls) ... ok
+test_missing_prediction_not_empty_or_hash_mismatch (test_score.SampleScoringTests.test_missing_prediction_not_empty_or_hash_mismatch) ... ok
+test_oracle_error_separate_from_inference_failure (test_score.SampleScoringTests.test_oracle_error_separate_from_inference_failure) ... ok
+test_partial_accepted_can_score (test_score.SampleScoringTests.test_partial_accepted_can_score) ... ok
+test_quantile_linear_and_missing_times_not_zero (test_score.SampleScoringTests.test_quantile_linear_and_missing_times_not_zero) ... ok
+test_transition_directions (test_score.SampleScoringTests.test_transition_directions) ... ok
+
+----------------------------------------------------------------------
+Ran 35 tests in 23.691s
+
+OK

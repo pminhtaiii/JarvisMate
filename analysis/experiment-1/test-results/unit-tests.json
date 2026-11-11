@@ -1,0 +1,6 @@
+{
+  "returncode": 0,
+  "python": "3.13.9 (tags/v3.13.9:8183fa5, Oct 14 2025, 14:09:13) [MSC v.1944 64 bit (AMD64)]",
+  "command": "python -B -m unittest discover -s analysis/experiment-1/harness/tests -p test_*.py -v",
+  "kind": "CPU unit tests; model/environment doubles only"
+}

@@ -1,0 +1,30 @@
+{
+  "smoke": {
+    "expected": 16,
+    "valid": 16,
+    "gold_calls": 27,
+    "reference_results_sha256": "8a13f5f3523e7c6751acd8bde90bf8bb8cc9d5998e31016420ab4d7acc666dd8",
+    "cpu_check_only": true
+  },
+  "main": {
+    "expected": 1545,
+    "valid": 1545,
+    "gold_calls": 3541,
+    "reference_results_sha256": "3facfdba6c184e29806a81cb350a44bb03a7c7df851e02f1dc1bb24fdadbaa33",
+    "cpu_check_only": true
+  },
+  "local_gpu_guard": {
+    "expected_exit": 2,
+    "actual_exit": 2,
+    "stderr": "{\"error_type\":\"HarnessError\",\"message\":\"GPU runner refuses CPU-local/unverified model profile\",\"status\":\"error\"}",
+    "no_run_directory_created": true
+  },
+  "source_sha": "047879eb0931e5fa85930d640fb4c0b71d9268bc",
+  "experiment_sha256": "02f87fe9e002fba971cb768924ee7602e08e39235fd930ad01196295ddb2cfc9",
+  "base_input_rows": 1545,
+  "main_blocks": 7,
+  "slurm_bash_n": {
+    "status": "unavailable_on_local_windows",
+    "reason": "bash.exe could not be accessed by the system; must run bash -n on UIT"
+  }
+}
