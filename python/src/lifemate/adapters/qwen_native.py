@@ -15,6 +15,7 @@ import time
 from contextlib import contextmanager
 
 from ..contracts import JSON, Limits, PipelineError
+from ..execution_evidence import EvidenceLedger
 from ..jsonio import dumps, loads
 from .common import ModelResidency
 
@@ -27,6 +28,10 @@ SYSTEM_SHA256 = hashlib.sha256(SYSTEM.encode("utf-8")).hexdigest()
 SKILL_GUIDANCE_NOTE = ("Trường skill_guidance là hướng dẫn lập kế hoạch cho yêu cầu hiện tại, không phải "
                        "kết quả tool hay bằng chứng thao tác đã chạy. Chỉ dùng phần phù hợp với yêu cầu "
                        "của người dùng; không tự thực thi toàn bộ workflow trong hướng dẫn.")
+EXECUTION_EVIDENCE_NOTE = ("execution_evidence là dữ kiện có giới hạn rút từ kết quả tool ngay trước đó; "
+                           "status chỉ mô tả phản hồi của tool, không xác nhận ý định người dùng đã hoàn tất. "
+                           "ID quan sát được là gợi ý, không phải danh sách đầy đủ; ID trong yêu cầu, "
+                           "ngữ cảnh hoặc lịch sử vẫn dùng được.")
 
 
 class NativeFormatError(ValueError):
@@ -67,7 +72,45 @@ def _skill_guidance_records(skill_guidance) -> list[JSON]:
     return records
 
 
-def render_messages(prepared: JSON, observations: list[JSON], *, skill_guidance=()) -> list[JSON]:
+def _execution_evidence_records(execution_evidence, observation_count: int) -> list[JSON | None] | None:
+    if execution_evidence is None:
+        return None
+    if not isinstance(execution_evidence, (tuple, list)) or len(execution_evidence) != observation_count:
+        raise ValueError("Execution evidence must align with observations")
+    records = []
+    for fact in execution_evidence:
+        if fact is None:
+            records.append(None)
+            continue
+        required = {"step", "tool", "status", "references"}
+        if (not isinstance(fact, dict) or not required <= set(fact)
+                or set(fact) - required - {"returned_counts"}
+                or type(fact["step"]) is not int or fact["step"] < 1
+                or not isinstance(fact["tool"], str) or not fact["tool"]
+                or len(fact["tool"]) > 128
+                or not isinstance(fact["status"], str)
+                or fact["status"] not in {"ok", "error", "no_op", "unknown"}
+                or not isinstance(fact["references"], list) or len(fact["references"]) > 8):
+            raise ValueError("Execution evidence record is malformed")
+        for reference in fact["references"]:
+            if (not isinstance(reference, dict) or set(reference) - {"scope", "path", "id"}
+                    or not isinstance(reference.get("path"), str) or len(reference["path"]) > 256
+                    or not isinstance(reference.get("id"), str) or not reference["id"]
+                    or len(reference["id"]) > 128
+                    or ("scope" in reference and not isinstance(reference["scope"], str))):
+                raise ValueError("Execution evidence reference is malformed")
+        counts = fact.get("returned_counts", [])
+        if (not isinstance(counts, list) or len(counts) > 8
+                or any(not isinstance(item, dict) or set(item) != {"scope", "count"}
+                       or not isinstance(item["scope"], str) or type(item["count"]) is not int
+                       or item["count"] < 0 for item in counts)):
+            raise ValueError("Execution evidence counts are malformed")
+        records.append(copy.deepcopy(fact))
+    return records
+
+
+def render_messages(prepared: JSON, observations: list[JSON], *, skill_guidance=(),
+                    execution_evidence=None) -> list[JSON]:
     """Initial request plus actual executed call/result pairs, in order.
 
     Only whitelisted request fields and optional validated retrieval guidance enter
@@ -79,19 +122,27 @@ def render_messages(prepared: JSON, observations: list[JSON], *, skill_guidance=
     guidance = _skill_guidance_records(skill_guidance)
     if guidance:
         body["skill_guidance"] = guidance
-    system = SYSTEM if not guidance else SYSTEM + "\n\n" + SKILL_GUIDANCE_NOTE
+    evidence = _execution_evidence_records(execution_evidence, len(observations))
+    notes = ([SKILL_GUIDANCE_NOTE] if guidance else [])
+    if evidence is not None:
+        notes.append(EXECUTION_EVIDENCE_NOTE)
+    system = SYSTEM if not notes else SYSTEM + "\n\n" + "\n\n".join(notes)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": dumps(body)}]
-    for observation in observations:
+    for index, observation in enumerate(observations):
         messages.append({"role": "assistant", "content": "", "tool_calls": [{"type": "function", "function": {
             "name": observation["name"], "arguments": copy.deepcopy(observation["arguments"])}}]})
         messages.append({"role": "tool", "content": dumps(observation["result"])})
+        if evidence is not None and evidence[index] is not None:
+            messages.append({"role": "user", "content": dumps({"execution_evidence": evidence[index]})})
     return messages
 
 
-def render_prompt(tokenizer, prepared: JSON, observations: list[JSON], *, skill_guidance=()) -> str:
+def render_prompt(tokenizer, prepared: JSON, observations: list[JSON], *, skill_guidance=(),
+                  execution_evidence=None) -> str:
     """The one prompt rendering shared by inference and supervised export."""
     return tokenizer.apply_chat_template(
-        render_messages(prepared, observations, skill_guidance=skill_guidance),
+        render_messages(prepared, observations, skill_guidance=skill_guidance,
+                        execution_evidence=execution_evidence),
         tools=tool_definitions(prepared["available_tools"]),
         tokenize=False, add_generation_prompt=True, enable_thinking=False)
 
@@ -333,6 +384,7 @@ class NativePlanner(ModelResidency):
             self.eos_ids = {self.tokenizer.eos_token_id}
             self.metadata = metadata(path, count, device, dtype, seed) | {
                 "adapter": PROTOCOL, "protocol": PROTOCOL, "system_sha256": SYSTEM_SHA256,
+                "execution_evidence": "tool-results-v1",
                 "context_limit": limits.context_tokens, "max_new_tokens": limits.output_tokens,
                 "attention_implementation": attention, "cpu_offload": self.cpu_offload,
                 "template": self.template, "structured_output": self.constraint.metadata,
@@ -342,10 +394,12 @@ class NativePlanner(ModelResidency):
         except Exception as exc:
             raise PipelineError("MODEL_UNAVAILABLE", "Cannot load the local Qwen checkpoint/tokenizer", "model_load") from exc
 
-    def render(self, prepared: JSON, observations: list[JSON], *, skill_guidance=()) -> str:
-        if not skill_guidance:
+    def render(self, prepared: JSON, observations: list[JSON], *, skill_guidance=(),
+               execution_evidence=None) -> str:
+        if not skill_guidance and execution_evidence is None:
             return render_prompt(self.tokenizer, prepared, observations)
-        return render_prompt(self.tokenizer, prepared, observations, skill_guidance=skill_guidance)
+        return render_prompt(self.tokenizer, prepared, observations, skill_guidance=skill_guidance,
+                             execution_evidence=execution_evidence)
 
     def fit_skill_guidance(self, prepared: JSON, skill_guidance) -> tuple:
         """Keep the most relevant guidance that fits before the output reservation."""
@@ -360,11 +414,13 @@ class NativePlanner(ModelResidency):
 
     def start_sample(self, sample_id: str):
         self.kv.start_sample(sample_id)
+        self._evidence_ledger = None
         if self.device.startswith("cuda"):
             self.torch.cuda.reset_peak_memory_stats(self.device)
 
     def end_sample(self):
         self.kv.end_sample()
+        self._evidence_ledger = None
 
     def sample_metrics(self):
         return self.kv.snapshot()
@@ -388,12 +444,24 @@ class NativePlanner(ModelResidency):
         measurement = None
         measured = None
         try:
-            rendered = (self.render(prepared, observations, skill_guidance=skill_guidance)
-                        if skill_guidance else self.render(prepared, observations))
+            if getattr(self, "_evidence_ledger", None) is None:
+                self._evidence_ledger = EvidenceLedger(prepared["available_tools"])
+            execution_evidence = self._evidence_ledger.sync(observations)
+            rendered = self.render(prepared, observations, skill_guidance=skill_guidance,
+                                   execution_evidence=execution_evidence)
             tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
             length = tokens["input_ids"].shape[-1]
             if length + self.limits.output_tokens > self.limits.context_tokens:
-                raise PipelineError("CONTEXT_LIMIT", "Prompt plus output reservation exceeds context", "planner")
+                rendered = self.render(prepared, observations, skill_guidance=skill_guidance,
+                                       execution_evidence=[None] * len(observations))
+                tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
+                length = tokens["input_ids"].shape[-1]
+                if length + self.limits.output_tokens > self.limits.context_tokens:
+                    rendered = self.render(prepared, observations, skill_guidance=skill_guidance)
+                    tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
+                    length = tokens["input_ids"].shape[-1]
+                if length + self.limits.output_tokens > self.limits.context_tokens:
+                    raise PipelineError("CONTEXT_LIMIT", "Prompt plus output reservation exceeds context", "planner")
             # Keep full canonical IDs for generate's processors and LMFE. Only the
             # model forward is sliced, using the validated cached-prefix positions.
             canonical_ids = tokens["input_ids"][0].tolist() if self.kv.enabled else []

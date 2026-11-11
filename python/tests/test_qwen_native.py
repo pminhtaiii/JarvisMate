@@ -17,6 +17,7 @@ from lifemate.adapters.qwen_native import (CALL_CLOSE, CALL_OPEN, FINISH_TEXT, N
                                            render_messages, render_prompt, tool_definitions, validate_template)
 from lifemate.configuration import ModelSettings
 from lifemate.contracts import Limits, PipelineError
+from lifemate.execution_evidence import EvidenceLedger
 from support import CATALOG
 
 TOOLS = [tool for app in CATALOG["apps"] for tool in app["tools"]]
@@ -25,6 +26,19 @@ PREPARED = {"request": "Nhắn Lan tôi đến trễ", "context": {"timezone": "
             "history": [{"role": "user", "text": "Chào"},
                         {"role": "assistant", "text": "Dạ", "tool_calls": [{"name": "sms.send", "arguments": {}}]}],
             "available_tools": TOOLS}
+EVIDENCE_TOOLS = [
+    {"name": "contacts.search", "app": "contacts", "returns": "contacts[]", "description": "Tìm",
+     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}},
+    {"name": "sms.send", "app": "sms", "returns": "", "description": "Gửi",
+     "parameters": {"type": "object", "properties": {
+         "contact_id": {"type": "string", "x-ref": "contacts.contacts"},
+         "content": {"type": "string"}}}},
+]
+EVIDENCE_PREPARED = PREPARED | {
+    "context": {"timezone": "Asia/Ho_Chi_Minh", "contact_id": "from-context"},
+    "history": [{"role": "user", "text": "Use contact_id=from-history"}],
+    "available_tools": EVIDENCE_TOOLS,
+}
 
 
 def call_text(name, arguments, spacing="\n"):
@@ -49,9 +63,33 @@ class ProtocolTests(unittest.TestCase):
 
     def test_empty_guidance_preserves_the_disabled_prompt_shape(self):
         self.assertEqual(render_messages(PREPARED, []), render_messages(PREPARED, [], skill_guidance=()))
+        self.assertEqual(render_messages(PREPARED, []),
+                         render_messages(PREPARED, [], execution_evidence=None))
         self.assertEqual(json.loads(render_messages(PREPARED, [])[1]["content"]),
                          {"request": PREPARED["request"], "context": PREPARED["context"],
                           "history": PREPARED["history"]})
+
+    def test_execution_facts_follow_unchanged_results_and_keep_history_ids_usable(self):
+        guidance = {"branch_id": "S06.B02", "parent_id": "S06", "evidence": "E",
+                    "guidance": "Chọn đúng người nhận trước khi gửi.", "shared_instructions": []}
+        first = {"name": "contacts.search", "arguments": {"query": "Lan"},
+                 "result": {"ok": True, "contacts": [{"id": "observed-contact", "name": "Lan"}]}}
+        second = {"name": "contacts.search", "arguments": {"query": "Lân"},
+                  "result": {"ok": True, "contacts": [{"id": "another-contact", "name": "Lân"}]}}
+        ledger = EvidenceLedger(EVIDENCE_TOOLS)
+        first_messages = render_messages(EVIDENCE_PREPARED, [first], skill_guidance=(guidance,),
+                                         execution_evidence=ledger.sync([first]))
+        later_messages = render_messages(EVIDENCE_PREPARED, [first, second], skill_guidance=(guidance,),
+                                         execution_evidence=ledger.sync([first, second]))
+
+        self.assertEqual(later_messages[:len(first_messages)], first_messages)
+        self.assertEqual(json.loads(first_messages[3]["content"]), first["result"])
+        self.assertEqual(json.loads(later_messages[1]["content"])["context"], EVIDENCE_PREPARED["context"])
+        self.assertEqual(json.loads(later_messages[1]["content"])["history"], EVIDENCE_PREPARED["history"])
+        # The parser accepts a request/history ID even while the evidence note names other candidates.
+        supplied_id_action = {"action": "call", "name": "sms.send",
+                              "arguments": {"contact_id": "from-history", "content": "Trễ"}}
+        self.assertEqual(parse_completion(completion_text(supplied_id_action), {"sms.send"}), supplied_id_action)
 
     def test_skill_guidance_is_a_structured_field_and_keeps_all_native_tools(self):
         record = {"branch_id": "S06.B02", "parent_id": "S06", "evidence": "E",
@@ -215,6 +253,76 @@ class AdapterTests(unittest.TestCase):
             planner.decide(PREPARED, [], 30)
         self.assertEqual(caught.exception.code, "CONTEXT_LIMIT")
         self.model.generate.assert_not_called()
+
+    def test_native_planner_syncs_new_observations_and_clears_evidence_between_samples(self):
+        planner = self.planner()
+        rendered_messages = []
+
+        def render(messages, **_):
+            rendered_messages.append(json.loads(json.dumps(messages, ensure_ascii=False)))
+            return "rendered"
+
+        planner.tokenizer.apply_chat_template.side_effect = render
+        planner.model.generate.return_value = [list(range(10)) + [5, 9]]
+        planner.tokenizer.decode.return_value = FINISH_TEXT
+        guidance = ({"branch_id": "S06.B02", "parent_id": "S06", "evidence": "E",
+                     "guidance": "Chọn đúng người nhận trước khi gửi.", "shared_instructions": []},)
+        observation = {"name": "contacts.search", "arguments": {"query": "Lan"},
+                       "result": {"ok": True, "contacts": [{"id": "sample-one-contact"}]}}
+
+        planner.start_sample("sample-one")
+        planner.decide(EVIDENCE_PREPARED, [], 30, skill_guidance=guidance)
+        initial = rendered_messages[-1]
+        planner.decide(EVIDENCE_PREPARED, [observation], 30, skill_guidance=guidance)
+        after_observation = rendered_messages[-1]
+        self.assertEqual(after_observation[:len(initial)], initial)
+        self.assertEqual(json.loads(after_observation[3]["content"]), observation["result"])
+        self.assertIn("sample-one-contact", after_observation[-1]["content"])
+
+        planner.end_sample()
+        planner.start_sample("sample-two")
+        planner.decide(EVIDENCE_PREPARED, [], 30, skill_guidance=guidance)
+        next_sample = rendered_messages[-1]
+        self.assertNotIn("sample-one-contact", json.dumps(next_sample, ensure_ascii=False))
+        self.assertEqual(planner.model.generate.call_count, 3)
+        planner.end_sample()
+
+    def test_optional_evidence_is_dropped_before_it_causes_a_context_failure(self):
+        planner = self.planner(max_new=4)
+        planner.start_sample("near-context-limit")
+        rendered_messages = []
+
+        def render(messages, **_):
+            rendered_messages.append(json.loads(json.dumps(messages, ensure_ascii=False)))
+            return json.dumps(messages, ensure_ascii=False)
+
+        def encode(rendered, **_):
+            # The evidence ID makes the first prompt exceed the 64-token reservation;
+            # the unchanged request/result prompt still fits after optional facts drop.
+            messages = json.loads(rendered)
+            has_optional_fact = any(message["role"] == "user"
+                                    and "execution_evidence" in message["content"]
+                                    for message in messages)
+            length = 65 if has_optional_fact else 60
+            return {"input_ids": Tensor(length), "attention_mask": Tensor(length)}
+
+        planner.tokenizer.apply_chat_template.side_effect = render
+        planner.tokenizer.side_effect = encode
+        planner.model.generate.side_effect = lambda **kwargs: [
+            list(range(kwargs["input_ids"].shape[-1])) + [5, 9]
+        ]
+        planner.tokenizer.decode.return_value = FINISH_TEXT
+        observation = {"name": "contacts.search", "arguments": {"query": "Lan"},
+                       "result": {"ok": True, "contacts": [{"id": "near-context-contact"}]}}
+
+        action, _ = planner.decide(EVIDENCE_PREPARED, [observation], 30)
+
+        self.assertEqual(action, {"action": "finish"})
+        self.assertEqual(len(rendered_messages), 2, "The fallback changes rendering without another model decision")
+        self.assertEqual(rendered_messages[-1][-1]["role"], "tool")
+        self.assertEqual(json.loads(rendered_messages[-1][-1]["content"]), observation["result"])
+        self.assertEqual(planner.model.generate.call_count, 1)
+        planner.end_sample()
 
 
 class SupervisedTargetTests(unittest.TestCase):

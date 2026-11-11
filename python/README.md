@@ -208,6 +208,16 @@ pinned Qwen3 stack. See [KV reuse and paired smoke16 benchmark](../docs/kv-cache
 for cache safety, measured metrics, CPU evidence and UIT Slurm commands. H200 speed
 and output equivalence must be measured before promotion; no speedup is assumed.
 
+The native planner also maintains bounded, per-sample execution evidence from
+actual tool results. It appends source-tagged facts after the unchanged result:
+explicit operation status and supported record references from the catalog.
+These references are advisory candidates, never an exhaustive ID allowlist or a
+selection on the user's behalf. Initial skills stay fixed; evidence adds no model
+pass, lookup or execution retry. Optional evidence is omitted if it would overflow
+the context reservation. The legacy runner and default shared SFT renderer keep
+their existing behavior. See [execution evidence](../docs/agent-harness/execution-evidence.md)
+for scope, verification and remaining target-GPU measurements.
+
 Setting optional `execution.enable_skill_retrieval = true` enables the offline,
 deterministic CPU Skill Library for the native integration path; the default is false.
 It retrieves once after ASR using
