@@ -145,7 +145,7 @@ class Worker:
             expected = identity.get("skill_library") if isinstance(identity, dict) else None
             actual = self.components.get("skill_library_identity")
             if (not isinstance(expected, dict) or expected != actual
-                    or self.components.get("skill_library") is None):
+                    or actual != {"version": library.version, "sha256": library.sha256}):
                 raise PipelineError("RUN_IDENTITY", "Skill library differs from the preflight run identity", "worker")
         self.environments = self.components.get("environment_factory") or load_runtime(legacy, self.dataset)
         self.ready = {"type": "ready", "generation": generation, "pid": os.getpid(),
@@ -186,7 +186,8 @@ class Worker:
                 self.config.limits, deadline, split=self.config.split, data_root=self.config.data_root,
                 asr_identity=self.components.get("asr_identity", ""), clock=self.clock,
                 soft_timeout_seconds=self.config.soft_timeout_seconds,
-                skill_library=self.components.get("skill_library"))
+                skill_library=(self.components.get("skill_library")
+                               if self.config.enable_skill_retrieval else None))
         finally:
             trace.close()
         status = (outcome.status if outcome.status != "failed"

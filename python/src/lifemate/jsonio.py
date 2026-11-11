@@ -15,6 +15,15 @@ def dumps(value: Any) -> str:
                       sort_keys=True, separators=(",", ":"))
 
 
+def canonical_sha256(value: Any) -> str:
+    """Hash strict JSON as sorted keys, compact separators and UTF-8 Unicode.
+
+    Object order, whitespace and Unicode escapes are representation details;
+    array order and every parsed value remain significant.
+    """
+    return hashlib.sha256(dumps(value).encode("utf-8")).hexdigest()
+
+
 def loads(text: str) -> Any:
     def pairs(items):
         result = {}

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from lifemate.configuration import load_config
 from lifemate.contracts import PipelineError
-from lifemate.jsonio import digest, loads
+from lifemate.jsonio import canonical_sha256, digest, loads
 from lifemate.worker import Worker
 from integration_support import IntegrationFixture
 
@@ -29,7 +29,8 @@ class WorkerSkillIdentityTests(unittest.TestCase):
         library = SimpleNamespace(
             catalog_fingerprints={"train": {
                 "schema_version": catalog["schema_version"],
-                "sha256": catalog_hash if catalog_hash is not None else digest(catalog_path)}},
+                "sha256": digest(catalog_path),
+                "canonical_sha256": catalog_hash if catalog_hash is not None else canonical_sha256(catalog)}},
             version="skills-v1", sha256=actual_hash)
         environments = object()
 
@@ -52,6 +53,35 @@ class WorkerSkillIdentityTests(unittest.TestCase):
         with self.assertRaises(PipelineError) as caught:
             Worker(root, 1, factory, None)
         self.assertEqual(caught.exception.code, "RUN_IDENTITY")
+
+    def test_factory_cannot_report_an_identity_different_from_its_actual_library(self):
+        root, factory = self.setup_run()
+        components = factory(None)
+        components["skill_library"].sha256 = "b" * 64
+        with self.assertRaises(PipelineError) as caught:
+            Worker(root, 1, lambda _: components, None)
+        self.assertEqual(caught.exception.code, "RUN_IDENTITY")
+
+    def test_disabled_worker_does_not_inject_a_factory_supplied_library(self):
+        from unittest.mock import patch
+        from lifemate.contracts import SampleOutcome
+
+        root, factory = self.setup_run()
+        values = json.loads((root / "effective-config.json").read_text())
+        values["execution"].pop("enable_skill_retrieval")
+        (root / "effective-config.json").write_text(json.dumps(values), encoding="utf-8")
+        worker = Worker(root, 1, factory, None)
+        self.addCleanup(worker.lock.release)
+        (root / "staging").mkdir()
+        sample_id = next(iter(worker.samples))
+        with patch("lifemate.agent.run_integration_sample", return_value=SampleOutcome(
+                sample_id, "completed", 0, 0, "finish", result={"id": sample_id, "tool_calls": [],
+                                                              "state_hash": "a" * 64})) as run:
+            import time
+            worker.attempt({"sample_id": sample_id, "attempt_id": "request", "generation": 1,
+                            "budget_seconds": worker.config.timeout_seconds,
+                            "started_monotonic": time.monotonic()})
+        self.assertIsNone(run.call_args.kwargs["skill_library"])
 
     def test_changed_catalog_is_rejected_before_environment_setup(self):
         root, factory = self.setup_run(catalog_hash="b" * 64)

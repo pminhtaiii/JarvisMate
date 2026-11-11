@@ -62,7 +62,9 @@ class ProtocolTests(unittest.TestCase):
         tokenizer.apply_chat_template.return_value = "PROMPT"
 
         messages = render_messages(PREPARED, [], skill_guidance=(record,))
-        self.assertEqual(json.loads(messages[1]["content"])["skill_guidance"], [record])
+        self.assertEqual(json.loads(messages[1]["content"])["skill_guidance"], [{
+            "guidance": record["guidance"],
+            "shared_instructions": [record["shared_instructions"][0]["guidance"]]}])
         self.assertNotIn("skill_guidance", json.loads(render_messages(PREPARED, [])[1]["content"]))
         self.assertIn("không phải kết quả tool", messages[0]["content"])
         render_prompt(tokenizer, PREPARED, [], skill_guidance=(record,))
@@ -88,13 +90,27 @@ class ProtocolTests(unittest.TestCase):
         high = SimpleNamespace(branch_id="S01.B01")
         low = SimpleNamespace(branch_id="S01.B02")
         planner.render = lambda prepared, observations, *, skill_guidance=(): (
-            "b" * 30 if not skill_guidance else "g" * (25 if len(skill_guidance) == 1 else 50))
+            "b" * 12 if not skill_guidance else "g" * (25 if len(skill_guidance) == 1 else 50))
 
         selected = planner.fit_skill_guidance(PREPARED, (high, low))
 
         self.assertLessEqual(len(planner.render(PREPARED, [])) + planner.limits.output_tokens,
                              planner.limits.context_tokens)
         self.assertEqual(selected, (high,))
+
+    def test_guidance_token_cap_applies_even_with_plenty_of_context(self):
+        planner = NativePlanner.__new__(NativePlanner)
+        planner.limits = Limits(context_tokens=8192, output_tokens=512)
+
+        class CountingTokenizer:
+            def __call__(self, text, **kwargs):
+                return {"input_ids": SimpleNamespace(shape=(1, len(text)))}
+
+        planner.tokenizer = CountingTokenizer()
+        high, low = object(), object()
+        planner.render = lambda prepared, observations, *, skill_guidance=(): (
+            "x" * (100 + 1100 * len(skill_guidance)))
+        self.assertEqual(planner.fit_skill_guidance(PREPARED, (high, low)), (high,))
 
     def test_tool_definitions_expose_only_given_tools(self):
         definitions = tool_definitions(TOOLS[:1])
@@ -262,6 +278,51 @@ class ActualTokenizerTests(unittest.TestCase):
                                              "phone_number": {"type": "string"}, "content": {"type": "string"}},
                                              "required": ["content"],
                                              "x-one-of": [["contact_id"], ["phone_number"]]}}]
+
+    def test_real_guidance_budget_preserves_operational_fields_and_growing_observations(self):
+        from lifemate.skills import load_library, retrieve
+        from lifemate.adapters.qwen_native import SKILL_GUIDANCE_TOKEN_BUDGET
+
+        catalog = json.loads((Path(__file__).resolve().parents[2] /
+                              "tools/train_tools_catalog.json").read_text(encoding="utf-8"))
+        tools = [tool for app in catalog["apps"] if app["id"] in {"subscriptions", "music", "sys"}
+                 for tool in app["tools"]]
+        prepared = PREPARED | {"request": "Huy goi xem phim roi mo playlist", "available_tools": tools}
+        guidance = retrieve(prepared["request"], (), [t["name"] for t in tools], load_library())
+        self.assertEqual(len(guidance), 2)
+        planner = NativePlanner.__new__(NativePlanner)
+        planner.tokenizer = self.tokenizer
+        planner.limits = Limits(context_tokens=8000, output_tokens=256)
+        count = lambda obs, chosen: len(self.tokenizer.encode(
+            planner.render(prepared, obs, skill_guidance=chosen), add_special_tokens=False))
+        chosen = planner.fit_skill_guidance(prepared, guidance)
+        self.assertTrue(chosen)
+        self.assertLessEqual(count([], chosen) - count([], ()), SKILL_GUIDANCE_TOKEN_BUDGET)
+        self.assertLessEqual(count([], chosen) + planner.limits.output_tokens + 2048, 8000)
+        body = json.loads(render_messages(prepared, [], skill_guidance=chosen)[1]["content"])
+        for record, source in zip(body["skill_guidance"], chosen):
+            for field in ("dependency_flow", "constraints", "completion_criteria", "conditional_dependencies",
+                          "conditional_actions", "missing_information", "action_groups"):
+                self.assertEqual(record[field], source.to_dict()[field])
+            self.assertTrue({"branch_id", "parent_id", "evidence", "title", "common_refs", "eligibility"}
+                            .isdisjoint(record))
+        observations, retained_counts = [], []
+        for step in range(1, 10):
+            observations.append({"name": "music.list_tracks", "arguments": {},
+                                 "result": {"ok": True, "page": step, "items": " x" * 650}})
+            baseline = count(observations, ())
+            fitted = planner.fit_skill_guidance(prepared, chosen, observations)
+            if baseline + planner.limits.output_tokens > planner.limits.context_tokens:
+                self.assertEqual(fitted, ())
+                break
+            retained_counts.append(len(fitted))
+            self.assertLessEqual(count(observations, fitted) + planner.limits.output_tokens, 8000)
+            self.assertLessEqual(count(observations, fitted) - baseline, SKILL_GUIDANCE_TOKEN_BUDGET)
+            # Actual tool observations survive fitting verbatim.
+            self.assertEqual(json.loads(render_messages(prepared, observations,
+                             skill_guidance=fitted)[-1]["content"]), observations[-1]["result"])
+        self.assertGreaterEqual(len(retained_counts), 3)
+        self.assertLess(min(retained_counts), len(chosen))
 
     def prompt_ids(self, observations=()):
         rendered = self.tokenizer.apply_chat_template(

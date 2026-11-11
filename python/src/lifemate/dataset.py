@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from .contracts import ASR, Deadline, JSON, PipelineError, PreparedDataset, RunConfig, SampleInput
-from .jsonio import contained, digest, loads, read_json, safe_id, visible_path
+from .jsonio import canonical_sha256, contained, digest, loads, read_json, safe_id, visible_path
 
 
 def require(condition: bool, message: str, code: str = "INPUT_INVALID") -> None:
@@ -199,6 +199,7 @@ def preflight(config: RunConfig) -> PreparedDataset:
         "selected_ids": [s.id for s in samples], "selected_count": len(samples),
         "total_dataset_ids": len(index), "coverage_scope": "full_split" if len(samples) == len(index) else "subset",
         "dataset_sha256": digest(jsonl), "catalog_sha256": digest(catalog_path),
+        "catalog_canonical_sha256": canonical_sha256(catalog),
         "catalog_version": catalog["schema_version"],
     })
 

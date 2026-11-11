@@ -77,9 +77,11 @@ class SharedInstruction:
 class CatalogFingerprint:
     schema_version: str
     sha256: str
+    canonical_sha256: str
 
     def to_dict(self) -> dict[str, str]:
-        return {"schema_version": self.schema_version, "sha256": self.sha256}
+        return {"schema_version": self.schema_version, "sha256": self.sha256,
+                "canonical_sha256": self.canonical_sha256}
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +187,7 @@ class SkillGuidance:
     common_refs: tuple[str, ...]
     shared_instructions: tuple[SharedInstruction, ...]
     guidance: str
+    dependency_flow: str
 
     def to_dict(self) -> dict[str, Any]:
         """Return a fresh JSON-compatible view without exposing mutable library state."""
@@ -203,6 +206,7 @@ class SkillGuidance:
             "common_refs": list(self.common_refs),
             "shared_instructions": [item.to_dict() for item in self.shared_instructions],
             "guidance": self.guidance,
+            "dependency_flow": self.dependency_flow,
         }
 
 
@@ -307,12 +311,16 @@ def _parse_library(raw: bytes) -> SkillLibrary:
         raise SkillLibraryError("Catalog fingerprints must cover train and public_test")
     fingerprints: dict[str, CatalogFingerprint] = {}
     for split, value in raw_fingerprints.items():
-        value = _exact_keys(value, {"schema_version", "sha256"}, f"catalog_fingerprints.{split}")
+        value = _exact_keys(value, {"schema_version", "sha256", "canonical_sha256"},
+                            f"catalog_fingerprints.{split}")
         schema_version = _text(value["schema_version"], f"{split}.schema_version", max_length=32)
         sha256 = _text(value["sha256"], f"{split}.sha256", max_length=64).lower()
         if not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise SkillLibraryError(f"Invalid {split} catalog fingerprint")
-        fingerprints[split] = CatalogFingerprint(schema_version, sha256)
+        canonical = _text(value["canonical_sha256"], f"{split}.canonical_sha256", max_length=64)
+        if not re.fullmatch(r"[0-9a-f]{64}", canonical):
+            raise SkillLibraryError(f"Invalid {split} canonical catalog fingerprint")
+        fingerprints[split] = CatalogFingerprint(schema_version, sha256, canonical)
 
     raw_contracts = root["tool_contracts"]
     if not isinstance(raw_contracts, dict) or set(raw_contracts) != {"train", "public_test"}:
@@ -851,6 +859,11 @@ def _action_signals(tokens: tuple[str, ...]) -> tuple[tuple[int, int, frozenset[
         if (folded == "uong" and index >= 1
                 and _fold(tokens[index - 1]) == "nhac"):
             categories = frozenset()
+        if (folded == "nghe" and index >= 1
+                and _fold(tokens[index - 1]) == "cong"):
+            # "công nghệ" is a noun phrase, including accentless ASR text;
+            # it must not turn directional "den" into an instruction for đèn.
+            categories = frozenset()
         if categories:
             signals.append((index, index + 1, categories))
     for phrase, categories in _ACTION_PHRASES.items():
@@ -1221,6 +1234,7 @@ def _guidance_for(branch: SkillBranch, eligible: frozenset[str],
         common_refs=shared_refs,
         shared_instructions=shared,
         guidance=branch.guidance,
+        dependency_flow=branch.dependency_flow,
     )
 
 

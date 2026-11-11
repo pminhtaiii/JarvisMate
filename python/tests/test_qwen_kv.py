@@ -214,6 +214,30 @@ class NativeCacheTests(unittest.TestCase):
         self.assertGreater(second["kv_cache_reused_tokens"], 0)
         planner.end_sample()
 
+    def test_guidance_removal_with_growing_results_matches_fresh_cpu_prefill(self):
+        off, on = self.planner(False), self.planner(True)
+        guidance = ({"branch_id": "S01.B01", "parent_id": "S01", "evidence": "E",
+                     "guidance": "Use observed IDs. " * 50, "shared_instructions": []},)
+        observations = []
+        for step in range(3):
+            if step:
+                observations.append({"name": "contacts.list", "arguments": {},
+                                     "result": {"ok": True, "contacts": " item" * (40 * step)}})
+            if step == 2:
+                baseline = len(self.tokenizer.encode(on.render(self.prepared, observations),
+                                                    add_special_tokens=False))
+                off.limits = on.limits = Limits(context_tokens=baseline + 513, output_tokens=512)
+            left, lm = off.decide(self.prepared, observations, 28, skill_guidance=guidance)
+            right, rm = on.decide(self.prepared, observations, 28, skill_guidance=guidance)
+            self.assertEqual(left, right)
+            self.assertEqual(lm["generated_token_ids"], rm["generated_token_ids"])
+            self.assertLessEqual(rm["prompt_tokens"] + on.limits.output_tokens, on.limits.context_tokens)
+            self.assertEqual(rm["skill_guidance_count"], 0 if step == 2 else 1)
+            if step:
+                self.assertGreater(rm["kv_cache_reused_tokens"], 0)
+        off.end_sample()
+        on.end_sample()
+
     def test_context_and_generation_errors_clear_cache_and_propagate(self):
         planner = self.planner(True)
         planner.decide(self.prepared, [], 28)

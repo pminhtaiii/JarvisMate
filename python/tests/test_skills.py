@@ -1,10 +1,15 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 import unittest
+from unittest.mock import patch
 
 from lifemate import skills
+from lifemate.configuration import validate_skill_catalog
+from lifemate.contracts import PipelineError
+from lifemate.jsonio import canonical_sha256, loads
 from lifemate.skills import (
     SkillLibraryError,
     load_library,
@@ -24,6 +29,31 @@ def _catalog(split):
         for tool in app["tools"]
     }
     return path, value, tools
+
+
+@unittest.skipUnless(os.environ.get("LIFEMATE_SKILL_DATA_ROOT"), "Needs actual dataset metadata")
+class ActualCatalogPreflightTests(unittest.TestCase):
+    def test_actual_train_public_catalogs_are_equivalent_without_models_or_environment_reads(self):
+        from lifemate.skill_preflight import check
+
+        original_open = Path.open
+
+        def visible_only(path, *args, **kwargs):
+            if any(part.endswith("_environment") for part in path.parts):
+                self.fail("Metadata preflight attempted a hidden environment read")
+            return original_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", visible_only), \
+                patch("lifemate.runtime.load_runtime", side_effect=AssertionError("No runtime")), \
+                patch("lifemate.integration.build_components", side_effect=AssertionError("No model")):
+            report = check(Path(os.environ["LIFEMATE_SKILL_DATA_ROOT"]), ROOT / "tools")
+        self.assertFalse(report["models_loaded"])
+        self.assertEqual(report["environments_created"], 0)
+        self.assertEqual({r["split"] for r in report["splits"]}, {"train", "public_test"})
+        for result in report["splits"]:
+            self.assertGreater(result["selected_count"], 0)
+            self.assertNotEqual(result["dataset_catalog_raw_sha256"], result["repository_catalog_raw_sha256"])
+            self.assertEqual(result["status"], "passed")
 
 
 class SkillLibraryTests(unittest.TestCase):
@@ -59,6 +89,7 @@ class SkillLibraryTests(unittest.TestCase):
             fingerprint = self.library.catalog_fingerprints[split]
             self.assertEqual(fingerprint.schema_version, catalog["schema_version"])
             self.assertEqual(fingerprint.sha256, hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertEqual(fingerprint.canonical_sha256, canonical_sha256(catalog))
             for branch in self.library.branches:
                 for name, splits in branch.catalog_splits.items():
                     if split not in splits:
@@ -75,6 +106,33 @@ class SkillLibraryTests(unittest.TestCase):
                     )
                     self.assertTrue(set(parameter.optional) <=
                                     set(schema["properties"]) - set(schema.get("required", [])))
+
+    def test_catalog_representations_share_canonical_hash_but_retain_raw_provenance(self):
+        for split in ("train", "public_test"):
+            path, catalog, _ = _catalog(split)
+            # Original dataset uses ASCII escapes; the repo uses literal Unicode.
+            alternate = json.dumps(catalog, ensure_ascii=True, sort_keys=True, indent=4).encode()
+            self.assertNotEqual(hashlib.sha256(alternate).hexdigest(),
+                                self.library.catalog_fingerprints[split].sha256)
+            for raw in (path.read_bytes(), alternate):
+                metadata = {"catalog_version": catalog["schema_version"],
+                            "catalog_sha256": hashlib.sha256(raw).hexdigest(),
+                            "catalog_canonical_sha256": canonical_sha256(loads(raw.decode()))}
+                validate_skill_catalog(self.library, split, metadata)
+            catalog["apps"][0]["tools"][0]["description"] += " changed"
+            metadata["catalog_canonical_sha256"] = canonical_sha256(catalog)
+            with self.assertRaises(PipelineError):
+                validate_skill_catalog(self.library, split, metadata)
+            del metadata["catalog_canonical_sha256"]
+            with self.assertRaises(PipelineError):
+                validate_skill_catalog(self.library, split, metadata)
+
+    def test_canonical_hash_keeps_array_order_and_rejects_nonfinite_json(self):
+        self.assertEqual(canonical_sha256({"b": "\u1ed9", "a": 1}),
+                         canonical_sha256(loads('{"a":1,"b":"\\u1ed9"}')))
+        self.assertNotEqual(canonical_sha256([1, 2]), canonical_sha256([2, 1]))
+        with self.assertRaises(ValueError):
+            canonical_sha256({"x": float("nan")})
 
     def test_library_schema_rejects_unknown_action_and_argument(self):
         raw = skills.resources.files("lifemate").joinpath("skill_library.json").read_bytes()
@@ -163,6 +221,41 @@ class SkillRetrievalTests(unittest.TestCase):
             self.ids("Nếu trời mưa thì bật đèn"),
             set(),
         )
+
+    def test_asr_insertions_deletions_repetitions_substitutions_and_code_switching(self):
+        cases = {
+            "huy huy goi xem phim": {"S11.B02"},  # repeated verb
+            "huy um goi xem phim": {"S11.B02"},  # filler insertion
+            "huy goi phim": {"S11.B02"},  # deleted word
+            "huy goi xem fim": {"S11.B02"},  # object recognition error, gói survives
+            "cancel goi xem phim": {"S11.B02"},
+            "mo mo nhac": {"S18.B01"},
+            "play nhac": {"S18.B01"},
+            "huy, um goi xem phim": set(),  # punctuation destroys action/object clause
+            "mo nhat": set(),  # key object lost, do not guess
+            "mo play list": set(),  # unsupported ASR segmentation falls back
+            "gui et met et cho me": set(),  # SMS channel lost
+            "khong khong huy goi xem phim": set(),
+            "dung um gui SMS cho me": set(),
+            "dat xe cong nghe den san bay": set(),  # S stays gated, no spurious light action
+            "dich roi gui vao nhom": set(),  # S composite stays gated
+        }
+        for request, expected in cases.items():
+            with self.subTest(request=request):
+                self.assertEqual(self.ids(request), expected)
+
+    def test_every_returned_tool_is_eligible_across_branch_triggers_and_reduced_catalogs(self):
+        for branch in self.library.branches:
+            for eligible in (self.train_tools, self.public_tools,
+                             frozenset(tool for group in branch.action_groups for tool in group)):
+                for trigger in branch.intent_triggers:
+                    for item in retrieve(trigger, (), eligible, self.library):
+                        self.assertEqual(item.evidence, "E")
+                        named = {t for g in item.action_groups for t in g}
+                        named.update(t for g in item.conditional_dependencies for t in g.tools)
+                        named.update(a.tool for a in item.conditional_actions)
+                        named.update(t for g in item.eligibility.always_dependencies for t in g)
+                        self.assertTrue(named <= eligible, item.branch_id)
 
     def test_history_resolves_objects_without_replaying_old_actions(self):
         history = (

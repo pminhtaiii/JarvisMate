@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "2026-11-11.10",
+  "version": "2026-11-11.11",
   "parents": [
     {
       "skill_id": "S01",
@@ -7507,11 +7507,13 @@
   "catalog_fingerprints": {
     "train": {
       "schema_version": "2.7.0",
-      "sha256": "3895a315a24e1ed04ad063ccc71ee4d70afa0a80fee9552f71dbf0d3e05f9a2f"
+      "sha256": "3895a315a24e1ed04ad063ccc71ee4d70afa0a80fee9552f71dbf0d3e05f9a2f",
+      "canonical_sha256": "68629fab8a38b23ce8946081663fb6efad842a5e06f179072feffc6daccd4d4d"
     },
     "public_test": {
       "schema_version": "2.7.0",
-      "sha256": "42a3d0f0e69fdf30da78652292ee85ef7295c666600a06221827bb4fae5eea36"
+      "sha256": "42a3d0f0e69fdf30da78652292ee85ef7295c666600a06221827bb4fae5eea36",
+      "canonical_sha256": "313a0b74c4c2b9246189234c92f2339a8aa304d68c985e0f7ad84144ede7c87e"
     }
   },
   "runtime_evidence_policy": "E",

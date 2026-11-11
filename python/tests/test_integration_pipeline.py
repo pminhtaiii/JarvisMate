@@ -96,6 +96,14 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(outcome.result["tool_calls"], [])
         self.assertEqual(outcome.metrics["skill_retrieval"]["selected_branch_ids"], [])
 
+    def test_disabled_mode_never_loads_or_retrieves_skills(self):
+        with patch("lifemate.skills.load_library") as load, patch("lifemate.skills.retrieve") as retrieve:
+            outcome = self.execute([FINISH])
+        load.assert_not_called()
+        retrieve.assert_not_called()
+        self.assertNotIn("skill_retrieval", outcome.metrics)
+        self.assertEqual(self.planner.guidance_refs, [()])
+
     def test_unsupported_retrieval_input_falls_back_to_the_original_prompt_path(self):
         from lifemate.skills import SkillRetrievalInputError
 

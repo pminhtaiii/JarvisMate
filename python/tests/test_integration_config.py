@@ -7,7 +7,7 @@ from unittest.mock import patch
 from lifemate.configuration import (apply_overrides, check_parameter_budget, load_config,
                                     parse_config, preflight)
 from lifemate.contracts import PipelineError
-from lifemate.jsonio import digest, loads
+from lifemate.jsonio import canonical_sha256, digest, loads
 from lifemate.runtime import load_runtime
 from integration_support import IntegrationFixture, snapshot
 
@@ -249,7 +249,9 @@ class PreflightTests(unittest.TestCase):
         module = ModuleType("lifemate.skills")
         catalog_path = self.fx.data / "train" / "train_tools_catalog.json"
         catalog = loads(catalog_path.read_text(encoding="utf-8"))
-        fingerprints = {"train": {"schema_version": catalog["schema_version"], "sha256": digest(catalog_path)}}
+        fingerprints = {"train": {"schema_version": catalog["schema_version"],
+                                  "sha256": digest(catalog_path),
+                                  "canonical_sha256": canonical_sha256(catalog)}}
         module.load_library = lambda: SimpleNamespace(version="skills-v1", sha256="a" * 64,
                                                        catalog_fingerprints=fingerprints)
 
@@ -283,6 +285,28 @@ class PreflightTests(unittest.TestCase):
                 self.check(values)
         self.assertEqual(caught.exception.code, "CATALOG_INVALID")
         self.assertEqual(self.loaded, [])
+
+    def test_equivalent_catalog_bytes_keep_validation_but_change_run_provenance(self):
+        import json
+
+        values = self.fx.values()
+        values["execution"]["enable_skill_retrieval"] = True
+        catalog_path = self.fx.data / "train" / "train_tools_catalog.json"
+        catalog = loads(catalog_path.read_text(encoding="utf-8"))
+        module = ModuleType("lifemate.skills")
+        module.load_library = lambda: SimpleNamespace(
+            version="skills-v1", sha256="a" * 64, catalog_fingerprints={"train": {
+                "schema_version": catalog["schema_version"], "sha256": digest(catalog_path),
+                "canonical_sha256": canonical_sha256(catalog)}})
+        with patch.dict(sys.modules, {"lifemate.skills": module}):
+            first = self.check(values)
+            catalog_path.write_text(json.dumps(catalog, ensure_ascii=True, indent=4), encoding="utf-8")
+            second = self.check(values)
+        self.assertEqual(first.identity["dataset"]["catalog_canonical_sha256"],
+                         second.identity["dataset"]["catalog_canonical_sha256"])
+        self.assertNotEqual(first.identity["dataset"]["catalog_sha256"],
+                            second.identity["dataset"]["catalog_sha256"])
+        self.assertNotEqual(first.run_sha256, second.run_sha256)
 
 
 

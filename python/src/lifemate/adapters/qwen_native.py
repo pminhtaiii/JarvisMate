@@ -24,6 +24,9 @@ PROTOCOL = "qwen-native-v1"
 FINISH_TEXT = "Mình hiểu."
 CALL_OPEN, CALL_CLOSE = "<tool_call>", "</tool_call>"
 SYSTEM_SHA256 = hashlib.sha256(SYSTEM.encode("utf-8")).hexdigest()
+# Total added prompt tokens, including the guidance note and JSON scaffolding.
+SKILL_GUIDANCE_TOKEN_BUDGET = 1536
+SKILL_OBSERVATION_RESERVE = 2048
 SKILL_GUIDANCE_NOTE = ("Trường skill_guidance là hướng dẫn lập kế hoạch cho yêu cầu hiện tại, không phải "
                        "kết quả tool hay bằng chứng thao tác đã chạy. Chỉ dùng phần phù hợp với yêu cầu "
                        "của người dùng; không tự thực thi toàn bộ workflow trong hướng dẫn.")
@@ -61,9 +64,19 @@ def _skill_guidance_records(skill_guidance) -> list[JSON]:
                        or any(not isinstance(instruction[key], str) for key in ("id", "title", "guidance"))
                        for instruction in record["shared_instructions"])):
             raise ValueError("Skill guidance record is malformed")
-        # Ensure this remains structured JSON before it enters the user message.
-        dumps(record)
-        records.append(copy.deepcopy(record))
+        # Retrieval IDs, evidence, titles and eligibility policy are diagnostics,
+        # not planning instructions. Keep complete operational fields; never clip
+        # a dependency/constraint or completion condition to meet a token limit.
+        operational = {key: copy.deepcopy(record[key]) for key in (
+            "action_groups", "conditional_dependencies", "conditional_actions",
+            "dependency_flow", "constraints", "completion_criteria", "missing_information", "guidance"
+        ) if key in record}
+        always = record.get("eligibility", {}).get("always_dependencies", [])
+        if always:
+            operational["always_dependencies"] = copy.deepcopy(always)
+        operational["shared_instructions"] = [item["guidance"] for item in record["shared_instructions"]]
+        dumps(operational)
+        records.append(operational)
     return records
 
 
@@ -347,13 +360,23 @@ class NativePlanner(ModelResidency):
             return render_prompt(self.tokenizer, prepared, observations)
         return render_prompt(self.tokenizer, prepared, observations, skill_guidance=skill_guidance)
 
-    def fit_skill_guidance(self, prepared: JSON, skill_guidance) -> tuple:
-        """Keep the most relevant guidance that fits before the output reservation."""
+    def fit_skill_guidance(self, prepared: JSON, skill_guidance, observations=()) -> tuple:
+        """Bound added tokens and leave initial room for tool observations.
+
+        Later steps recheck the full growing prompt. Remove whole low-priority
+        branches before guidance can make an otherwise valid baseline overflow.
+        Native KV reuse already validates the exact common token prefix.
+        """
         selected = tuple(skill_guidance)
+        baseline = self.tokenizer(self.render(prepared, observations),
+                                  return_tensors="pt", add_special_tokens=False)["input_ids"].shape[-1]
+        reserve = min(SKILL_OBSERVATION_RESERVE, self.limits.context_tokens // 4) if not observations else 0
         while selected:
-            tokens = self.tokenizer(self.render(prepared, [], skill_guidance=selected),
+            tokens = self.tokenizer(self.render(prepared, observations, skill_guidance=selected),
                                     return_tensors="pt", add_special_tokens=False)
-            if tokens["input_ids"].shape[-1] + self.limits.output_tokens <= self.limits.context_tokens:
+            length = tokens["input_ids"].shape[-1]
+            if (length - baseline <= SKILL_GUIDANCE_TOKEN_BUDGET
+                    and length + self.limits.output_tokens + reserve <= self.limits.context_tokens):
                 return selected
             selected = selected[:-1]
         return ()
@@ -388,6 +411,9 @@ class NativePlanner(ModelResidency):
         measurement = None
         measured = None
         try:
+            supplied_guidance_count = len(skill_guidance)
+            if skill_guidance:
+                skill_guidance = self.fit_skill_guidance(prepared, skill_guidance, observations)
             rendered = (self.render(prepared, observations, skill_guidance=skill_guidance)
                         if skill_guidance else self.render(prepared, observations))
             tokens = self.tokenizer(rendered, return_tensors="pt", add_special_tokens=False)
@@ -426,6 +452,9 @@ class NativePlanner(ModelResidency):
                        "seconds": elapsed, "terminated": "eos", "generated_token_ids": generated,
                        "canonical_action": copy.deepcopy(action),
                        "kv_cache_enabled": self.kv.enabled, "kv_cache_reused_tokens": reused, **measured}
+            if supplied_guidance_count:
+                details["skill_guidance_count"] = len(skill_guidance)
+                details["skill_guidance_dropped"] = supplied_guidance_count - len(skill_guidance)
             return action, details
         except PipelineError:
             self.kv.clear("planner_error")

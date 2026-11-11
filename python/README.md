@@ -218,13 +218,39 @@ the effective config omits the false default, preserving the previous prompt and
 configuration fingerprint. Full run identity still includes current code provenance,
 so it changes with this source revision. Enabled runs also bind the library version
 and SHA-256 into run identity, so a resume with different skill metadata is rejected.
-Guidance is trimmed once, before
-planning, to fit the initial prompt plus output reservation, then stays fixed across
-planner steps. It reduces the context left for later tool observations, which can
-still reach the existing `CONTEXT_LIMIT`; context, step, soft-timeout and hard-timeout
-limits are not raised. The library currently exposes only E-evidence branches to
+Retrieval IDs, titles, evidence and eligibility metadata stay outside the LLM prompt.
+Operational dependency flow, conditional/mandatory dependencies, constraints, missing
+information and completion conditions remain intact. Added prompt overhead (including
+the system note and JSON scaffolding) is capped at 1,536 actual tokenizer tokens.
+Initial fitting reserves up to 2,048 observation tokens (at most one quarter of the
+context). Each decision rechecks the growing prompt and drops whole low-priority
+guidance branches as needed. Unchanged guidance retains its reusable KV prefix;
+removal safely recomputes from the exact common prefix. Actual observations, tool
+schemas and output reservation are never truncated. The baseline itself can still
+reach `CONTEXT_LIMIT`; context, step, soft-timeout and hard-timeout limits are not
+raised. The library currently exposes only E-evidence branches to
 runtime retrieval; S branches remain gated and H branches are never retrieved. This
 is controlled behavior, not an accuracy or latency result.
+
+Catalog compatibility uses SHA-256 over strict parsed JSON serialized with sorted
+object keys, compact separators, UTF-8 and literal Unicode (`jsonio.dumps`). Whitespace,
+object order and Unicode escapes do not affect it; array order and parsed values do.
+The library's `sha256` catalog fields retain repository source-byte hashes; dataset
+metadata/run identity retain the actual source-byte `catalog_sha256`. Enabled runs
+add `catalog_canonical_sha256`, so equivalent formatting validates while source
+provenance still distinguishes runs. Missing canonical fingerprints fail closed.
+
+From the repository root, check both actual dataset splits and repository catalogs
+without loading weights, transcribing audio, importing the simulator or creating
+ToolEnv (visible records/assets are validated; environment paths get existence checks):
+
+```powershell
+$env:PYTHONPATH = 'python/src'
+python -m lifemate.skill_preflight --data-root 'D:\JarvisMate_Harness\DATA_JarvisMate\train+public_test' --repository-catalogs tools
+```
+
+See [skill retrieval review evidence](../docs/skill-retrieval-review.md) for CPU
+coverage, catalog fingerprints and remaining qualification limits.
 
 For a branch with `required_data_missing` readers, each reader list is an OR choice;
 `optional_detail_missing` readers never gate the action path. If a required reader is

@@ -408,9 +408,8 @@ def validate_skill_catalog(library, split: str, dataset_metadata: JSON) -> None:
             expected = expected.to_dict()
         if not isinstance(expected, Mapping):
             raise TypeError("catalog fingerprint must be a mapping")
-        actual = {"schema_version": dataset_metadata["catalog_version"],
-                  "sha256": dataset_metadata["catalog_sha256"]}
-        if dict(expected) != actual:
+        if (expected["schema_version"] != dataset_metadata["catalog_version"]
+                or expected["canonical_sha256"] != dataset_metadata["catalog_canonical_sha256"]):
             raise invalid("Skill library catalog fingerprint does not match the selected split", "CATALOG_INVALID")
     except (AttributeError, KeyError, TypeError) as exc:
         raise invalid("Skill library lacks a valid split catalog fingerprint", "CATALOG_INVALID") from exc
@@ -459,5 +458,6 @@ def preflight(config: IntegrationConfig, *, runtime_loader=None, hash_models: bo
         identity["dataset"]["selection_sha256"] = digest(config.sample_ids_file)
     if skill_library_identity is not None:
         identity["skill_library"] = skill_library_identity
+        identity["dataset"]["catalog_canonical_sha256"] = dataset.metadata["catalog_canonical_sha256"]
     run_sha = hashlib.sha256(dumps(identity).encode("utf-8")).hexdigest()
     return Preflight(config, dataset, runtime, identity, run_sha)
